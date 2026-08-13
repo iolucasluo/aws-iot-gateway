@@ -63,3 +63,32 @@ func TestCreateActivationRequiresInternalUserAndReturnsTheCodeOnlyOnce(t *testin
 		t.Fatalf("GET response must not repeat activation_code: %s", getResponse.Body.String())
 	}
 }
+
+func TestListDevicesRequiresTheOwningInternalUser(t *testing.T) {
+	handler := New(
+		activation.NewService(),
+		StaticTokenAuthenticator{"owner-token": "user-42"},
+	)
+	request := httptest.NewRequest(http.MethodGet, "/v1/devices", nil)
+	request.Header.Set("Authorization", "Bearer owner-token")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /v1/devices status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var payload []map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode device list: %v", err)
+	}
+	if len(payload) != 0 {
+		t.Fatalf("GET /v1/devices = %#v, want no devices before activation", payload)
+	}
+
+	unauthenticated := httptest.NewRequest(http.MethodGet, "/v1/devices", nil)
+	denied := httptest.NewRecorder()
+	handler.ServeHTTP(denied, unauthenticated)
+	if denied.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /v1/devices without token status = %d, want %d", denied.Code, http.StatusUnauthorized)
+	}
+}

@@ -86,6 +86,14 @@ type Installation struct {
 	ProofNonce    string
 }
 
+// Device is the user-visible projection of an active operational identity.
+// It deliberately excludes certificate material, activation codes and proof data.
+type Device struct {
+	ID           string
+	ActivationID string
+	Endpoint     string
+}
+
 type Provisioner interface {
 	Provision(context.Context, string, string) (PreparedIdentity, error)
 }
@@ -317,6 +325,31 @@ func (s *Service) GetForUser(_ context.Context, userSubject, activationID string
 	activation := record.activation
 	activation.Code = ""
 	return activation, nil
+}
+
+func (s *Service) ListDevicesForUser(_ context.Context, userSubject string) ([]Device, error) {
+	if userSubject == "" {
+		return nil, ErrInvalidInput
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	devices := make([]Device, 0)
+	for _, record := range s.records {
+		if record.activation.User != userSubject || record.activation.Status != StatusActive ||
+			record.installation.DeviceID == "" {
+			continue
+		}
+		devices = append(devices, Device{
+			ID:           record.installation.DeviceID,
+			ActivationID: record.activation.ID,
+			Endpoint:     record.installation.Endpoint,
+		})
+	}
+	sort.Slice(devices, func(i, j int) bool {
+		return devices[i].ID < devices[j].ID
+	})
+	return devices, nil
 }
 
 func (s *Service) authorizeLocked(activationID, code string) (record, error) {

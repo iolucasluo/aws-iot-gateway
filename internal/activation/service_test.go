@@ -189,6 +189,62 @@ func TestConfirmRequiresProofFromTheOperationalPrivateKey(t *testing.T) {
 	}
 }
 
+func TestListDevicesForUserShowsOnlyActivatedInstallations(t *testing.T) {
+	service := NewServiceWith(fakeProvisioner{})
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, privateKey)
+	if err != nil {
+		t.Fatalf("CreateCertificateRequest() error = %v", err)
+	}
+	csrPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}))
+	created, err := service.Create(context.Background(), CreateInput{
+		UserSubject: "user-42",
+		Method:      MethodQR,
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	installation, err := service.Prepare(context.Background(), PrepareInput{
+		ActivationID: created.ID,
+		Code:         created.Code,
+		CSRPEM:       csrPEM,
+	})
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	digest := sha256.Sum256([]byte(installationProofMessage(created.ID, installation.ProofNonce)))
+	proof, err := ecdsa.SignASN1(rand.Reader, privateKey, digest[:])
+	if err != nil {
+		t.Fatalf("SignASN1() error = %v", err)
+	}
+	if _, err := service.Confirm(context.Background(), ConfirmInput{
+		ActivationID: created.ID,
+		Code:         created.Code,
+		Proof:        base64.RawURLEncoding.EncodeToString(proof),
+	}); err != nil {
+		t.Fatalf("Confirm() error = %v", err)
+	}
+
+	devices, err := service.ListDevicesForUser(context.Background(), "user-42")
+	if err != nil {
+		t.Fatalf("ListDevicesForUser() error = %v", err)
+	}
+	if len(devices) != 1 || devices[0].ID != installation.DeviceID ||
+		devices[0].ActivationID != created.ID || devices[0].Endpoint == "" {
+		t.Fatalf("ListDevicesForUser() = %#v, want the active installation", devices)
+	}
+	otherUserDevices, err := service.ListDevicesForUser(context.Background(), "user-43")
+	if err != nil {
+		t.Fatalf("ListDevicesForUser() for another user error = %v", err)
+	}
+	if len(otherUserDevices) != 0 {
+		t.Fatalf("ListDevicesForUser() leaked devices across users: %#v", otherUserDevices)
+	}
+}
+
 type fakeProvisioner struct{}
 
 func (fakeProvisioner) Provision(context.Context, string, string) (PreparedIdentity, error) {

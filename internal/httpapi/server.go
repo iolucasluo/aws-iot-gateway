@@ -49,6 +49,10 @@ func (s server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.createActivation(writer, request)
 		return
 	}
+	if request.Method == http.MethodGet && request.URL.Path == "/v1/devices" {
+		s.listDevices(writer, request)
+		return
+	}
 	if activationID, ok := strings.CutPrefix(request.URL.Path, "/v1/activations/"); ok &&
 		activationID != "" && !strings.Contains(activationID, "/") && request.Method == http.MethodGet {
 		s.getActivation(writer, request, activationID)
@@ -103,6 +107,32 @@ func (s server) getActivation(writer http.ResponseWriter, request *http.Request,
 		return
 	}
 	writeJSON(writer, http.StatusOK, activationResponse{Activation: value})
+}
+
+func (s server) listDevices(writer http.ResponseWriter, request *http.Request) {
+	subject, ok := s.requireSubject(writer, request)
+	if !ok {
+		return
+	}
+	devices, err := s.activation.ListDevicesForUser(request.Context(), subject)
+	if err != nil {
+		writeActivationError(writer, err)
+		return
+	}
+	type deviceResponse struct {
+		ID           string `json:"id"`
+		ActivationID string `json:"activation_id"`
+		Endpoint     string `json:"aws_iot_endpoint"`
+	}
+	response := make([]deviceResponse, 0, len(devices))
+	for _, device := range devices {
+		response = append(response, deviceResponse{
+			ID:           device.ID,
+			ActivationID: device.ActivationID,
+			Endpoint:     device.Endpoint,
+		})
+	}
+	writeJSON(writer, http.StatusOK, response)
 }
 
 func (s server) prepareDevice(writer http.ResponseWriter, request *http.Request, activationID string) {
