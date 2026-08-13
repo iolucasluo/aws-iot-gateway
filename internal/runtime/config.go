@@ -19,7 +19,7 @@ type Config struct {
 
 func LoadConfig(getenv func(string) string) (Config, error) {
 	config := Config{
-		ListenAddress:    valueOr(getenv("GATEWAY_LISTEN_ADDRESS"), ":8080"),
+		ListenAddress:    valueOr(getenv("GATEWAY_LISTEN_ADDRESS"), ":14080"),
 		ActivationState:  valueOr(getenv("GATEWAY_ACTIVATION_STATE_PATH"), "./var/activations.json"),
 		AWSRegion:        strings.TrimSpace(getenv("AWS_REGION")),
 		ThingPrefix:      strings.TrimSpace(getenv("AWS_IOT_THING_PREFIX")),

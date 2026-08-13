@@ -15,7 +15,7 @@ func TestLoadConfigRejectsMissingSecretsAndAcceptsInjectedTokenMap(t *testing.T)
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
-	if config.ListenAddress != ":8080" || config.ActivationState != "./var/activations.json" ||
+	if config.ListenAddress != ":14080" || config.ActivationState != "./var/activations.json" ||
 		config.InternalTokens["injected-demo-token"] != "internal-user-42" {
 		t.Fatalf("LoadConfig() = %#v", config)
 	}

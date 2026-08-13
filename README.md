@@ -19,6 +19,10 @@ cp .env.example .env.local
 go run ./cmd/aws-iot-gateway
 ```
 
+默认监听地址为 `:14080`，可用 `GATEWAY_LISTEN_ADDRESS` 覆盖。启动后可访问
+`http://localhost:14080/healthz` 检查进程存活；移动 App 应使用运行时注入的完整 Gateway
+origin，不要把本机地址写死到 App 源码。
+
 运行需要标准 AWS credential provider chain。Gateway IAM role 的最小权限应限于指定 prefix 的 `CreateCertificateFromCsr`、`CreateThing`、`AttachThingPrincipal`、`AttachPolicy`、`UpdateCertificate` 和 `DescribeEndpoint`。本仓库不创建或修改 AWS 资源；实际部署需使用独立、受控的 AWS 变更流程。
 
 `GATEWAY_INTERNAL_TOKENS_JSON` 仅为非生产 demo 的 runtime 注入认证映射，不能放进镜像、Git 或移动 App。生产集成应由内部认证网关验证用户 token，并以同一 `Authenticator` 边界提供可信 subject。
