@@ -155,6 +155,7 @@ func (s server) prepareDevice(writer http.ResponseWriter, request *http.Request,
 	writeJSON(writer, http.StatusOK, map[string]string{
 		"activation_id":      installation.ActivationID,
 		"device_id":          installation.DeviceID,
+		"certificate_id":     installation.CertificateID,
 		"certificate_pem":    installation.Certificate,
 		"aws_iot_endpoint":   installation.Endpoint,
 		"installation_nonce": installation.ProofNonce,
