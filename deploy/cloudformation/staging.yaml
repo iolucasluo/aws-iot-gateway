@@ -96,6 +96,20 @@ Resources:
           FromPort: 14080
           ToPort: 14080
           SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 14080
+          ToPort: 14080
+          SourceSecurityGroupId: !Ref PublicTimeSecurityGroup
+  PublicTimeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public signed-time HTTP ingress
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
   DatabaseSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -179,6 +193,22 @@ Resources:
           - Id: ExpireStagingMedia
             Status: Enabled
             ExpirationInDays: 30
+
+  TimeBootstrapKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub aws-iot-gateway-${EnvironmentName} signed time bootstrap
+      KeySpec: ECC_NIST_P256
+      KeyUsage: SIGN_VERIFY
+      Enabled: true
+      PendingWindowInDays: 7
+  TimeBootstrapKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/aws-iot-gateway-${EnvironmentName}-time-bootstrap
+      TargetKeyId: !Ref TimeBootstrapKey
 
   IngestDLQ:
     Type: AWS::SQS::Queue
@@ -367,6 +397,9 @@ Resources:
               - Effect: Allow
                 Action: [s3:GetObject, s3:PutObject]
                 Resource: !Sub ${MediaBucket.Arn}/*
+              - Effect: Allow
+                Action: [kms:GetPublicKey, kms:Sign]
+                Resource: !GetAtt TimeBootstrapKey.Arn
   WorkerTaskRole:
     Type: AWS::IAM::Role
     Properties:
@@ -415,6 +448,8 @@ Resources:
             - {Name: AWS_IOT_INGEST_QUEUE_URL, Value: !Ref IngestQueue}
             - {Name: AWS_KVS_CHANNEL_PREFIX, Value: !Sub 'aws-iot-gateway-${EnvironmentName}-'}
             - {Name: AWS_S3_MEDIA_BUCKET, Value: !Ref MediaBucket}
+            - {Name: TIME_BOOTSTRAP_KEY_ID, Value: !Sub 'time-${EnvironmentName}-g1'}
+            - {Name: TIME_BOOTSTRAP_KMS_KEY_ID, Value: !GetAtt TimeBootstrapKey.Arn}
             - {Name: PGHOST, Value: !GetAtt Database.Endpoint.Address}
             - {Name: PGPORT, Value: !GetAtt Database.Endpoint.Port}
             - {Name: PGDATABASE, Value: gateway}
@@ -517,9 +552,52 @@ Resources:
       Protocol: TCP
       Port: 14080
       DefaultActions: [{Type: forward, TargetGroupArn: !Ref APITargetGroup}]
+  PublicTimeLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Scheme: internet-facing
+      Subnets: [!Ref SubnetA, !Ref SubnetB]
+      SecurityGroups: [!Ref PublicTimeSecurityGroup]
+  PublicTimeTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VPC
+      Protocol: HTTP
+      Port: 14080
+      TargetType: ip
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /healthz
+      HealthCheckPort: '14080'
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+  PublicTimeListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref PublicTimeLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            StatusCode: '404'
+            ContentType: application/json
+            MessageBody: '{"error":{"code":"not_found","message":"endpoint not found"}}'
+  PublicTimeRoute:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref PublicTimeListener
+      Priority: 1
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values: [/api/v1/device-time/bootstrap]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref PublicTimeTargetGroup
   APIService:
     Type: AWS::ECS::Service
-    DependsOn: APIListener
+    DependsOn: [APIListener, PublicTimeListener, PublicTimeRoute]
     Properties:
       ServiceName: api
       Cluster: !Ref ECSCluster
@@ -540,6 +618,9 @@ Resources:
         - ContainerName: api
           ContainerPort: 14080
           TargetGroupArn: !Ref APITargetGroup
+        - ContainerName: api
+          ContainerPort: 14080
+          TargetGroupArn: !Ref PublicTimeTargetGroup
   WorkerService:
     Type: AWS::ECS::Service
     Properties:
@@ -598,6 +679,12 @@ Resources:
 Outputs:
   APIBaseURL:
     Value: !Sub https://${HTTPAPI}.execute-api.${AWS::Region}.${AWS::URLSuffix}
+  TimeBootstrapURL:
+    Value: !Sub http://${PublicTimeLoadBalancer.DNSName}/api/v1/device-time/bootstrap
+  TimeBootstrapKeyArn:
+    Value: !GetAtt TimeBootstrapKey.Arn
+  TimeBootstrapKeyID:
+    Value: !Sub time-${EnvironmentName}-g1
   ECSClusterName:
     Value: !Ref ECSCluster
   APIServiceName:

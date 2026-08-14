@@ -25,6 +25,8 @@ type server struct {
 	media         *media.StreamService
 	assets        *media.AssetService
 	verifier      *internalauth.Verifier
+	timeBootstrap TimeBootstrapService
+	bootstrapRate TimeBootstrapLimiter
 	deviceRuntime DeviceRuntimeConfig
 }
 
@@ -38,12 +40,14 @@ type DeviceRuntimeConfig struct {
 }
 
 type Dependencies struct {
-	Binding       *binding.Service
-	Device        *devicemodule.Service
-	Events        *events.QueryService
-	Media         *media.StreamService
-	Assets        *media.AssetService
-	DeviceRuntime DeviceRuntimeConfig
+	Binding              *binding.Service
+	Device               *devicemodule.Service
+	Events               *events.QueryService
+	Media                *media.StreamService
+	Assets               *media.AssetService
+	TimeBootstrap        TimeBootstrapService
+	TimeBootstrapLimiter TimeBootstrapLimiter
+	DeviceRuntime        DeviceRuntimeConfig
 }
 
 func NewInternalAPI(service *activation.Service, verifier *internalauth.Verifier, dependencies ...Dependencies) http.Handler {
@@ -54,6 +58,7 @@ func NewInternalAPI(service *activation.Service, verifier *internalauth.Verifier
 	return server{
 		activation: service, binding: dependency.Binding, device: dependency.Device,
 		events: dependency.Events, media: dependency.Media, assets: dependency.Assets, verifier: verifier,
+		timeBootstrap: dependency.TimeBootstrap, bootstrapRate: dependency.TimeBootstrapLimiter,
 		deviceRuntime: dependency.DeviceRuntime,
 	}
 }
@@ -61,6 +66,10 @@ func NewInternalAPI(service *activation.Service, verifier *internalauth.Verifier
 func (s server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	if request.Method == http.MethodGet && request.URL.Path == "/healthz" {
 		writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+	if request.Method == http.MethodPost && request.URL.Path == "/api/v1/device-time/bootstrap" {
+		s.serveTimeBootstrap(writer, request)
 		return
 	}
 	if strings.HasPrefix(request.URL.Path, "/api/v1/openapi/") {

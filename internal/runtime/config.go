@@ -37,6 +37,8 @@ type Config struct {
 	IngestQueueURL        string
 	KVSChannelPrefix      string
 	S3MediaBucket         string
+	TimeBootstrapKeyID    string
+	TimeBootstrapKMSKeyID string
 	InternalApps          []InternalApp
 }
 
@@ -59,6 +61,8 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		IngestQueueURL:        strings.TrimSpace(getenv("AWS_IOT_INGEST_QUEUE_URL")),
 		KVSChannelPrefix:      strings.TrimSpace(getenv("AWS_KVS_CHANNEL_PREFIX")),
 		S3MediaBucket:         strings.TrimSpace(getenv("AWS_S3_MEDIA_BUCKET")),
+		TimeBootstrapKeyID:    strings.TrimSpace(getenv("TIME_BOOTSTRAP_KEY_ID")),
+		TimeBootstrapKMSKeyID: strings.TrimSpace(getenv("TIME_BOOTSTRAP_KMS_KEY_ID")),
 	}
 	if !validEnvironment(config.Environment) {
 		return Config{}, fmt.Errorf("GATEWAY_ENVIRONMENT must be development, staging, or production")
@@ -89,6 +93,12 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	}
 	if !regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`).MatchString(config.S3MediaBucket) {
 		return Config{}, fmt.Errorf("AWS_S3_MEDIA_BUCKET is invalid")
+	}
+	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`).MatchString(config.TimeBootstrapKeyID) {
+		return Config{}, fmt.Errorf("TIME_BOOTSTRAP_KEY_ID is required and must be a safe COSE kid")
+	}
+	if config.TimeBootstrapKMSKeyID == "" || len(config.TimeBootstrapKMSKeyID) > 2048 || strings.ContainsAny(config.TimeBootstrapKMSKeyID, "\r\n") {
+		return Config{}, fmt.Errorf("TIME_BOOTSTRAP_KMS_KEY_ID is required and invalid")
 	}
 	if err := validateServiceURL("DATABASE_URL", config.DatabaseURL, "postgres", "postgresql"); err != nil {
 		return Config{}, err

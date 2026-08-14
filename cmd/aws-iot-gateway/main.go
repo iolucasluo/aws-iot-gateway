@@ -10,6 +10,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iot"
 	"github.com/aws/aws-sdk-go-v2/service/iotdataplane"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/jackc/pgx/v5/pgxpool"
 	redisclient "github.com/redis/go-redis/v9"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/activation"
@@ -20,6 +21,8 @@ import (
 	devicemodule "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/device"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/events"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/media"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/timebootstrap"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awskms"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awskvs"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awss3"
 	gatewaypostgres "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/postgres"
@@ -70,6 +73,20 @@ func main() {
 	awsConfig, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(config.AWSRegion))
 	if err != nil {
 		log.Fatalf("load AWS configuration: %v", err)
+	}
+	timeSigner, err := awskms.NewSigner(ctx, kms.NewFromConfig(awsConfig), config.TimeBootstrapKMSKeyID)
+	if err != nil {
+		log.Fatalf("configure signed time KMS signer: %v", err)
+	}
+	timeService, err := timebootstrap.NewService(
+		config.TimeBootstrapKeyID, timeSigner, time.Now, timebootstrap.NewSystemClockHealth(time.Now),
+	)
+	if err != nil {
+		log.Fatalf("configure signed time bootstrap: %v", err)
+	}
+	rateLimiter, err := redisstore.NewRateLimiter(redis, config.Environment)
+	if err != nil {
+		log.Fatalf("configure time bootstrap rate limiter: %v", err)
 	}
 	iotControl := iot.NewFromConfig(awsConfig)
 	provisioner, err := awsiot.New(
@@ -142,6 +159,7 @@ func main() {
 		Handler: httpapi.NewInternalAPI(service, verifier, httpapi.Dependencies{
 			Binding: bindingService, Device: deviceService, Events: events.NewQueryService(eventRepository),
 			Media: streamService, Assets: assetService,
+			TimeBootstrap: timeService, TimeBootstrapLimiter: rateLimiter,
 			DeviceRuntime: httpapi.DeviceRuntimeConfig{
 				AWSRegion: config.AWSRegion, CredentialEndpoint: config.IoTCredentialEndpoint,
 				RoleAlias: config.IoTRoleAlias, TopicPrefix: config.IoTTopicPrefix,

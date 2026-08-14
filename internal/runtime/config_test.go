@@ -25,6 +25,9 @@ func TestLoadConfigAcceptsEnvironmentOwnedInternalApps(t *testing.T) {
 		config.IoTShadowName != env["AWS_IOT_SHADOW_NAME"] {
 		t.Fatalf("device runtime config = %#v", config)
 	}
+	if config.TimeBootstrapKeyID != "time-staging-g1" || config.TimeBootstrapKMSKeyID != env["TIME_BOOTSTRAP_KMS_KEY_ID"] {
+		t.Fatalf("time bootstrap config = %#v", config)
+	}
 	if len(config.InternalApps) != 2 || config.InternalApps[0].ID != "livpet-staging" ||
 		config.InternalApps[1].APIKey != "ak_demo_staging" {
 		t.Fatalf("InternalApps = %#v", config.InternalApps)
@@ -32,6 +35,19 @@ func TestLoadConfigAcceptsEnvironmentOwnedInternalApps(t *testing.T) {
 	if config.InternalApps[0].WebhookURL != "https://livpet.example/v1/internal/webhooks/explorex" ||
 		config.InternalApps[0].WebhookSecret != "livpet-webhook-secret" {
 		t.Fatalf("LivPet webhook config = %#v", config.InternalApps[0])
+	}
+}
+
+func TestLoadConfigRequiresCompleteTimeBootstrapSigner(t *testing.T) {
+	t.Parallel()
+	for _, key := range []string{"TIME_BOOTSTRAP_KEY_ID", "TIME_BOOTSTRAP_KMS_KEY_ID"} {
+		t.Run(key, func(t *testing.T) {
+			env := validEnvironmentMap()
+			delete(env, key)
+			if _, err := LoadConfig(func(key string) string { return env[key] }); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("LoadConfig() error=%v, want missing %s", err, key)
+			}
+		})
 	}
 }
 
@@ -145,6 +161,8 @@ func validEnvironmentMap() map[string]string {
 		"AWS_IOT_INGEST_QUEUE_URL":             "https://sqs.ap-east-1.amazonaws.com/000000000000/aws-iot-gateway-staging-ingest",
 		"AWS_KVS_CHANNEL_PREFIX":               "aws-iot-gateway-staging-",
 		"AWS_S3_MEDIA_BUCKET":                  "aws-iot-gateway-staging-media-example",
+		"TIME_BOOTSTRAP_KEY_ID":                "time-staging-g1",
+		"TIME_BOOTSTRAP_KMS_KEY_ID":            "arn:aws:kms:ap-east-1:000000000000:key/00000000-0000-0000-0000-000000000000",
 		"DATABASE_URL":                         "postgres://gateway:password@postgres.example/gateway?sslmode=require",
 		"REDIS_URL":                            "rediss://redis.example:6379/0",
 		"INTERNAL_APPS_JSON": `[

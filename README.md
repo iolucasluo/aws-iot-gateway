@@ -21,16 +21,18 @@
 - PostgreSQL：activation、binding、token、设备、命令、事件、媒体和 outbox 的权威状态。
 - Redis：跨 API 副本 nonce 与限流协调，不是业务权威存储。
 - AWS IoT Core：ThingName、MQTT client ID 和运行 `device_sn` 使用 Gateway 首次激活时生成的同一随机值。
+- AWS KMS：独立 P-256 key 只签固定的 device-time COSE payload；Redis 对该公共窄路由做跨副本限流。
 - `cmd/aws-iot-gateway-worker` 消费 IoT Rule → SQS 事件，并处理 lifecycle 与 Webhook outbox。
 - KVS 与 S3：提供受 binding 约束的 WebRTC、快照、录像和喂食音频能力。
 
-隔离的 dev/staging IaC 位于 `deploy/cloudformation/`，拓扑为 API Gateway → VPC Link → private NLB → 双 API ECS，以及双 worker ECS、RDS PostgreSQL、ElastiCache Redis、SQS/DLQ、IoT Rule、KVS 和 S3。它不是生产部署基线。
+隔离的 dev/staging IaC 位于 `deploy/cloudformation/`。内部 API 仍走 API Gateway → VPC Link → private NLB；另一个公开 ALB 的 HTTP listener 只转发精确的 `/api/v1/device-time/bootstrap`，默认拒绝其他 path。两者共用双 API ECS，后台为双 worker ECS、RDS PostgreSQL、ElastiCache Redis、SQS/DLQ、IoT Rule、KVS、S3 和独立 KMS time signer。它不是生产部署基线。
 
 ## 当前 HTTP 契约
 
 | Endpoint | 调用方 | 认证 |
 | --- | --- | --- |
 | `GET /healthz` | 运行检查 | 无 |
+| `POST /api/v1/device-time/bootstrap` | 无可信 RTC 的设备 | 公共窄路由；COSE 验签后可信 |
 | `POST /api/v1/openapi/device-activations` | 内部 App backend | HMAC v2 |
 | `GET /api/v1/openapi/device-activations/{id}` | 内部 App backend | HMAC v2 |
 | `POST /api/v1/openapi/device-activations/{id}/sessions` | LivPet commissioning 兼容路径 | HMAC v2 |
