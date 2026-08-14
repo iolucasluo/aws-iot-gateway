@@ -501,6 +501,8 @@ Resources:
             - {Name: AWS_IOT_INGEST_QUEUE_URL, Value: !Ref IngestQueue}
             - {Name: AWS_KVS_CHANNEL_PREFIX, Value: !Sub 'aws-iot-gateway-${EnvironmentName}-'}
             - {Name: AWS_S3_MEDIA_BUCKET, Value: !Ref MediaBucket}
+            - {Name: TIME_BOOTSTRAP_KEY_ID, Value: !Sub 'time-${EnvironmentName}-g1'}
+            - {Name: TIME_BOOTSTRAP_KMS_KEY_ID, Value: !GetAtt TimeBootstrapKey.Arn}
             - {Name: PGHOST, Value: !GetAtt Database.Endpoint.Address}
             - {Name: PGPORT, Value: !GetAtt Database.Endpoint.Port}
             - {Name: PGDATABASE, Value: gateway}

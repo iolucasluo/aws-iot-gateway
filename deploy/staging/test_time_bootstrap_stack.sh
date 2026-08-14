@@ -18,8 +18,9 @@ require("TimeBootstrapKey:" in body and "KeySpec: ECC_NIST_P256" in body and
         "KeyUsage: SIGN_VERIFY" in body, "staging must own a dedicated asymmetric time signer")
 require("kms:GetPublicKey" in body and "kms:Sign" in body,
         "API task role must have only the time signer operations")
-require("TIME_BOOTSTRAP_KEY_ID" in body and "TIME_BOOTSTRAP_KMS_KEY_ID" in body,
-        "API task must receive signer identifiers from IaC")
+require(body.count("Name: TIME_BOOTSTRAP_KEY_ID") == 2 and
+        body.count("Name: TIME_BOOTSTRAP_KMS_KEY_ID") == 2,
+        "shared strict config requires signer identifiers in API and worker tasks")
 require("PublicTimeLoadBalancer:" in body and "Scheme: internet-facing" in body and
         "PublicTimeRoute:" in body, "staging must expose the signed bootstrap over public HTTP")
 require("/api/v1/device-time/bootstrap" in body and "Type: fixed-response" in body,
