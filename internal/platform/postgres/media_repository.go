@@ -69,6 +69,13 @@ func (repository *MediaRepository) CreateRecording(ctx context.Context, recordin
 	return nil
 }
 
+func (repository *MediaRepository) SetRecordingStatus(ctx context.Context, id, status string) error {
+	if _, err := repository.pool.Exec(ctx, `UPDATE recordings SET status=$2, updated_at=now() WHERE id=$1`, id, status); err != nil {
+		return fmt.Errorf("update recording status: %w", err)
+	}
+	return nil
+}
+
 func (repository *MediaRepository) GetRecording(ctx context.Context, bindingID, deviceSN, id string) (media.Recording, error) {
 	return scanRecording(repository.pool.QueryRow(ctx, `
 		SELECT r.id::text, r.device_id::text, d.device_sn, r.binding_id::text,

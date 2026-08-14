@@ -27,12 +27,18 @@ func (kvsStub) Playback(_ context.Context, channel awskvs.Channel, viewerID stri
 }
 
 type commanderStub struct {
-	input device.CommandInput
-	ack   map[string]any
+	input  device.CommandInput
+	ack    map[string]any
+	wait   bool
+	result *device.SendCommandsResult
 }
 
-func (commander *commanderStub) SendCommands(_ context.Context, _, _, _ string, commands []device.CommandInput, _ bool) (device.SendCommandsResult, error) {
+func (commander *commanderStub) SendCommands(_ context.Context, _, _, _ string, commands []device.CommandInput, waitACK bool) (device.SendCommandsResult, error) {
 	commander.input = commands[0]
+	commander.wait = waitACK
+	if commander.result != nil {
+		return *commander.result, nil
+	}
 	return device.SendCommandsResult{Results: []device.CommandResult{{Status: "success", Data: commander.ack}}}, nil
 }
 

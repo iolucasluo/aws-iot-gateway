@@ -22,6 +22,7 @@ const (
 var (
 	ErrSnapshotNotFound  = errors.New("snapshot not found")
 	ErrRecordingNotFound = errors.New("recording not found")
+	ErrRecordingRejected = errors.New("recording start rejected")
 )
 
 type ObjectStore interface {
@@ -65,6 +66,7 @@ type AssetRepository interface {
 	SetSnapshotStatus(context.Context, string, string) error
 	GetSnapshot(context.Context, string, string, string) (Snapshot, error)
 	CreateRecording(context.Context, Recording) error
+	SetRecordingStatus(context.Context, string, string) error
 	GetRecording(context.Context, string, string, string) (Recording, error)
 	ListRecordings(context.Context, string, string, int, string, string) ([]Recording, string, error)
 }
@@ -179,9 +181,15 @@ func (service *AssetService) CreateRecording(
 		return Recording{}, err
 	}
 	value, _ := json.Marshal(map[string]any{"duration": duration, "upload_url": uploadURL})
-	if _, err := service.commander.SendCommands(ctx, internalAppID, deviceID, deviceSN,
-		[]device.CommandInput{{Code: "record_clip", Value: value, CommandID: id}}, false); err != nil {
+	commandResult, err := service.commander.SendCommands(ctx, internalAppID, deviceID, deviceSN,
+		[]device.CommandInput{{Code: "record_clip", Value: value, CommandID: id}}, true)
+	if err != nil {
+		_ = service.repository.SetRecordingStatus(ctx, id, "failed")
 		return Recording{}, err
+	}
+	if len(commandResult.Results) != 1 || commandResult.Results[0].Status != "success" {
+		_ = service.repository.SetRecordingStatus(ctx, id, "failed")
+		return Recording{}, ErrRecordingRejected
 	}
 	return recording, nil
 }
@@ -247,7 +255,8 @@ func (service *AssetService) UploadFeedAudio(
 	internalAppID, deviceID, deviceSN, contentType string,
 	payload []byte,
 ) (map[string]any, error) {
-	if !service.valid(deviceID, deviceSN) || internalAppID == "" || len(payload) == 0 || len(payload) > maxFeedAudioSize || !strings.HasPrefix(contentType, "audio/") {
+	if !service.valid(deviceID, deviceSN) || internalAppID == "" || len(payload) == 0 || len(payload) > maxFeedAudioSize ||
+		(!strings.HasPrefix(contentType, "audio/") && contentType != "application/octet-stream") {
 		return nil, ErrInvalidInput
 	}
 	id, err := service.newID()

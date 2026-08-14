@@ -841,6 +841,8 @@ func writeMediaError(writer http.ResponseWriter, err error) {
 		writeError(writer, http.StatusNotFound, "snapshot_not_found", "snapshot was not found")
 	case errors.Is(err, media.ErrRecordingNotFound):
 		writeError(writer, http.StatusNotFound, "recording_not_found", "recording was not found")
+	case errors.Is(err, media.ErrRecordingRejected):
+		writeError(writer, http.StatusConflict, "recording_rejected", "device rejected recording start")
 	case errors.Is(err, devicemodule.ErrDeviceOffline):
 		writeError(writer, http.StatusConflict, "device_offline", "device is offline")
 	default:

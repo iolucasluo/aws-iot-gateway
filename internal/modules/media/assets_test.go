@@ -52,6 +52,10 @@ func (repository *assetRepositoryStub) CreateRecording(_ context.Context, record
 	repository.recording = recording
 	return nil
 }
+func (repository *assetRepositoryStub) SetRecordingStatus(_ context.Context, _ string, status string) error {
+	repository.recording.Status = status
+	return nil
+}
 func (repository *assetRepositoryStub) GetRecording(context.Context, string, string, string) (Recording, error) {
 	return repository.recording, nil
 }
@@ -75,15 +79,50 @@ func TestCreateSnapshotUsesEnvironmentAndDeviceScopedPresignedUpload(t *testing.
 
 func TestUploadFeedAudioHashesStoredBytesAndCommandsDevice(t *testing.T) {
 	t.Parallel()
-	store := &objectStoreStub{}
-	commander := &commanderStub{}
-	service := NewAssetService(store, commander, &assetRepositoryStub{}, "staging", func() (string, error) { return "018f0000-0000-7000-8000-000000000098", nil })
-	result, err := service.UploadFeedAudio(context.Background(), "livpet-staging", "device-uuid", "fdr-0001", "audio/pcm", []byte("pcm-bytes"))
-	if err != nil {
-		t.Fatalf("UploadFeedAudio() error = %v", err)
+	for _, contentType := range []string{"audio/pcm", "application/octet-stream"} {
+		t.Run(contentType, func(t *testing.T) {
+			store := &objectStoreStub{}
+			commander := &commanderStub{}
+			service := NewAssetService(store, commander, &assetRepositoryStub{}, "staging", func() (string, error) { return "018f0000-0000-7000-8000-000000000098", nil })
+			result, err := service.UploadFeedAudio(context.Background(), "livpet-staging", "device-uuid", "fdr-0001", contentType, []byte("pcm-bytes"))
+			if err != nil {
+				t.Fatalf("UploadFeedAudio() error = %v", err)
+			}
+			if !strings.Contains(store.uploadKey, "/feed-audio/") || string(store.payload) != "pcm-bytes" || commander.input.Code != "audio_update" || result["sha256"] == "" {
+				t.Fatalf("key=%q command=%#v result=%#v", store.uploadKey, commander.input, result)
+			}
+		})
 	}
-	if !strings.Contains(store.uploadKey, "/feed-audio/") || string(store.payload) != "pcm-bytes" || commander.input.Code != "audio_update" || result["sha256"] == "" {
-		t.Fatalf("key=%q command=%#v result=%#v", store.uploadKey, commander.input, result)
+}
+
+func TestCreateRecordingWaitsForInitialDeviceACK(t *testing.T) {
+	t.Parallel()
+	commander := &commanderStub{}
+	service := NewAssetService(&objectStoreStub{}, commander, &assetRepositoryStub{}, "staging", func() (string, error) {
+		return "018f0000-0000-7000-8000-000000000097", nil
+	})
+	if _, err := service.CreateRecording(context.Background(), "livpet-staging", "device-uuid", "binding-id", "fdr-0001", 5); err != nil {
+		t.Fatalf("CreateRecording() error = %v", err)
+	}
+	if !commander.wait {
+		t.Fatal("CreateRecording() must wait for the initial device ACK")
+	}
+}
+
+func TestCreateRecordingRejectsFailedInitialDeviceACK(t *testing.T) {
+	t.Parallel()
+	commander := &commanderStub{result: &device.SendCommandsResult{Results: []device.CommandResult{{
+		Code: "record_clip", Status: "error", Reason: "device rejected command with code 2",
+	}}}}
+	repository := &assetRepositoryStub{}
+	service := NewAssetService(&objectStoreStub{}, commander, repository, "staging", func() (string, error) {
+		return "018f0000-0000-7000-8000-000000000096", nil
+	})
+	if _, err := service.CreateRecording(context.Background(), "livpet-staging", "device-uuid", "binding-id", "fdr-0001", 5); err == nil {
+		t.Fatal("CreateRecording() must reject a failed initial device ACK")
+	}
+	if repository.recording.Status != "failed" {
+		t.Fatalf("recording status = %q, want failed", repository.recording.Status)
 	}
 }
 
