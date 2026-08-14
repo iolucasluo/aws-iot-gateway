@@ -226,18 +226,34 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 			return true
 		}
 		var body struct {
-			Type    string `json:"type"`
-			WaitACK *bool  `json:"wait_ack,omitempty"`
+			Type                  string `json:"type"`
+			WaitACK               *bool  `json:"wait_ack,omitempty"`
+			RequestedCapabilities *struct {
+				VideoReceive *bool     `json:"video_receive"`
+				AudioReceive *bool     `json:"audio_receive"`
+				AudioSend    *bool     `json:"audio_send"`
+				DataChannels *[]string `json:"data_channels"`
+			} `json:"requested_capabilities"`
 		}
 		if !decodeJSON(writer, request, &body) {
 			return true
 		}
+		capabilities := body.RequestedCapabilities
 		if body.Type != "webrtc" || (body.WaitACK != nil && !*body.WaitACK) {
 			writeError(writer, http.StatusBadRequest, "invalid_request", "WebRTC stream requires wait_ack")
 			return true
 		}
+		if capabilities == nil || capabilities.VideoReceive == nil || capabilities.AudioReceive == nil ||
+			capabilities.AudioSend == nil || capabilities.DataChannels == nil {
+			writeError(writer, http.StatusBadRequest, "invalid_stream_capabilities", "requested_capabilities must contain all fields")
+			return true
+		}
 		result, err := s.media.Create(
 			request.Context(), principal.InternalAppID, ownedBinding.DeviceID, ownedBinding.ID, ownedBinding.DeviceSN,
+			media.StreamCapabilities{
+				VideoReceive: *capabilities.VideoReceive, AudioReceive: *capabilities.AudioReceive,
+				AudioSend: *capabilities.AudioSend, DataChannels: *capabilities.DataChannels,
+			},
 		)
 		if err != nil {
 			writeMediaError(writer, err)
@@ -245,7 +261,7 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		}
 		writer.Header().Set("Cache-Control", "no-store")
 		writer.Header().Set("Pragma", "no-cache")
-		writeJSON(writer, http.StatusOK, result)
+		writeJSON(writer, http.StatusCreated, result)
 		return true
 	case "snapshots":
 		if s.assets == nil {
@@ -813,6 +829,12 @@ func writeMediaError(writer http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, media.ErrInvalidInput):
 		writeError(writer, http.StatusBadRequest, "invalid_request", "media request is invalid")
+	case errors.Is(err, media.ErrInvalidCapabilities):
+		writeError(writer, http.StatusBadRequest, "invalid_stream_capabilities", "invalid requested stream capabilities")
+	case errors.Is(err, media.ErrStreamCapabilityUnavailable):
+		writeError(writer, http.StatusConflict, "stream_capability_unavailable", "device could not grant any requested stream capability")
+	case errors.Is(err, media.ErrStreamRejected):
+		writeError(writer, http.StatusConflict, "stream_rejected", "device rejected stream start")
 	case errors.Is(err, media.ErrStreamNotFound):
 		writeError(writer, http.StatusNotFound, "stream_not_found", "stream was not found")
 	case errors.Is(err, media.ErrSnapshotNotFound):

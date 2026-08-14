@@ -47,6 +47,11 @@
 
 设备子路由覆盖 detail、shadow、commands、schedules、events、streams、snapshots、recordings 和 feed-audio。Bearer `/v1/activations`、`/v1/devices` 和旧 `/v1/device-activations/{id}/*` 已从 router 删除。完整目标路由和阶段验收见根仓 `docs/2026-08-13-internal-aws-api-implementation-plan.md`。
 
+`POST .../{device_sn}/streams` 保留既有 `webrtc.v1` 能力协商：请求必须完整携带
+`requested_capabilities`，Gateway 将同一请求交给设备并校验设备 ACK；成功响应为 `201`，包含
+`stream_id`、`firmware_version`、`supported_capabilities`、`granted_capabilities`、短期
+`signaling` 和 `ice_servers`。Gateway 不以固定默认能力伪造设备 ACK。
+
 ## 本地运行与验证
 
 复制 `.env.example` 的键到不受版本控制的本地 secret provider，提供真实 PostgreSQL、Redis 和 AWS standard credential chain，再运行：

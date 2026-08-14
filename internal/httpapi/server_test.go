@@ -14,6 +14,8 @@ import (
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/internalauth"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/binding"
 	devicemodule "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/device"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/media"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awskvs"
 )
 
 func TestInternalAPICreatesAndPollsHMACActivation(t *testing.T) {
@@ -158,6 +160,47 @@ func TestInternalAPICommandRequiresDeviceTokenAndPreservesLivPetResult(t *testin
 	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"status":"success"`)) ||
 		!bytes.Contains(response.Body.Bytes(), []byte(`"command_id":"session-command"`)) {
 		t.Fatalf("command = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestInternalAPIStreamPreservesOpenAPICapabilityContract(t *testing.T) {
+	t.Parallel()
+	now := time.UnixMilli(1_718_000_000_000)
+	bindingRepository := &httpBindingRepository{binding: binding.Binding{
+		ID: "018f0000-0000-7000-8000-000000000002", DeviceID: "018f0000-0000-7000-8000-000000000001",
+		DeviceSN: "fdr-00000000000000000000000000000001", InternalAppID: "livpet-staging", Active: true,
+	}}
+	bindingService := binding.NewService(bindingRepository, func() (string, error) { return "device-token-stream", nil }, func() time.Time { return now }, nil)
+	if _, err := bindingService.IssueToken(context.Background(), "livpet-staging", bindingRepository.binding.DeviceSN); err != nil {
+		t.Fatalf("IssueToken() error = %v", err)
+	}
+	streamService := media.NewStreamService(
+		httpKVS{}, httpStreamCommander{}, &httpStreamRepository{}, "aws-iot-gateway-staging-",
+		func() (string, error) { return "viewer-stream-1", nil },
+	)
+	handler := newSignedTestHandler(t, activation.NewService(), now, Dependencies{Binding: bindingService, Media: streamService})
+	path := "/api/v1/openapi/devices/" + bindingRepository.binding.DeviceSN + "/streams"
+	body := []byte(`{"type":"webrtc","requested_capabilities":{"video_receive":true,"audio_receive":false,"audio_send":false,"data_channels":[]}}`)
+	request := signedInternalRequest(t, now, "nonce-stream-valid1", http.MethodPost, path, body)
+	request.Header.Set("X-Device-Token", "device-token-stream")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("stream status = %d, want 201: %s", response.Code, response.Body.String())
+	}
+	var result struct {
+		StreamID                  string                   `json:"stream_id"`
+		CapabilityContractVersion string                   `json:"capability_contract_version"`
+		FirmwareVersion           string                   `json:"firmware_version"`
+		SupportedCapabilities     media.StreamCapabilities `json:"supported_capabilities"`
+		GrantedCapabilities       media.StreamCapabilities `json:"granted_capabilities"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode stream response: %v", err)
+	}
+	if result.StreamID != "viewer-stream-1" || result.CapabilityContractVersion != "webrtc.v1" ||
+		result.FirmwareVersion != "v0.0.0" || !result.SupportedCapabilities.AudioReceive || !result.GrantedCapabilities.VideoReceive {
+		t.Fatalf("stream response = %#v", result)
 	}
 }
 
@@ -387,6 +430,54 @@ type httpCommandRepository struct{}
 func (*httpCommandRepository) Create(context.Context, devicemodule.Command) error { return nil }
 func (*httpCommandRepository) Complete(context.Context, string, string, map[string]any, string) error {
 	return nil
+}
+
+type httpKVS struct{}
+
+func (httpKVS) EnsureChannel(_ context.Context, name string) (awskvs.Channel, error) {
+	return awskvs.Channel{Name: name, ARN: "arn:aws:kinesisvideo:ap-east-1:123456789012:channel/test/1"}, nil
+}
+
+func (httpKVS) Playback(_ context.Context, channel awskvs.Channel, viewerID string, _ time.Duration) (awskvs.PlaybackConfig, error) {
+	return awskvs.PlaybackConfig{
+		Provider: "aws_kvs", ChannelName: channel.Name, ChannelARN: channel.ARN, ClientID: viewerID,
+		WSSURL: "wss://signaling.example.test", ICEServers: []awskvs.ICEServer{{URLs: "stun:example.test:443"}},
+		ExpiresAt: time.UnixMilli(1_718_000_300_000),
+	}, nil
+}
+
+type httpStreamCommander struct{}
+
+func (httpStreamCommander) SendCommands(_ context.Context, _, _, _ string, commands []devicemodule.CommandInput, _ bool) (devicemodule.SendCommandsResult, error) {
+	var value map[string]any
+	if len(commands) != 1 || json.Unmarshal(commands[0].Value, &value) != nil {
+		return devicemodule.SendCommandsResult{}, devicemodule.ErrInvalidInput
+	}
+	viewerID, _ := value["viewer_client_id"].(string)
+	return devicemodule.SendCommandsResult{Results: []devicemodule.CommandResult{{
+		Status: "success",
+		Data: map[string]any{
+			"code": float64(0), "action": "stream", "type": "webrtc", "start": float64(1), "status": "ready",
+			"viewer_client_id": viewerID, "capability_contract_version": "webrtc.v1", "firmware_version": "v0.0.0",
+			"supported": map[string]any{
+				"video_receive": true, "audio_receive": true, "audio_send": true,
+				"data_channels": []any{"explorex.control.v1"},
+			},
+			"accepted": map[string]any{
+				"video_receive": true, "audio_receive": false, "audio_send": false, "data_channels": []any{},
+			},
+		},
+	}}}, nil
+}
+
+type httpStreamRepository struct{}
+
+func (*httpStreamRepository) Create(context.Context, media.Stream) error { return nil }
+func (*httpStreamRepository) Find(context.Context, string, string, string) (bool, error) {
+	return true, nil
+}
+func (*httpStreamRepository) Close(context.Context, string, string, string) (bool, error) {
+	return true, nil
 }
 
 func (repository *httpBindingRepository) FindActiveBinding(_ context.Context, internalAppID, deviceSN string) (binding.Binding, error) {
