@@ -38,6 +38,8 @@ for suffix in ("update/delta", "get/accepted"):
 
 require(f"topic/$aws/things/{thing}/shadow/name/internal-aws/update" in body,
         "device policy must allow the runtime named shadow update")
+require("iot:GetThingShadow" in body,
+        "API task role must be able to read the device detail named shadow")
 
 print("test_device_policy_contract: OK")
 PY

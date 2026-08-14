@@ -399,6 +399,9 @@ Resources:
                   - iot:Publish
                 Resource: '*'
               - Effect: Allow
+                Action: iot:GetThingShadow
+                Resource: !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:thing/*
+              - Effect: Allow
                 Action:
                   - kinesisvideo:CreateSignalingChannel
                   - kinesisvideo:DescribeSignalingChannel
