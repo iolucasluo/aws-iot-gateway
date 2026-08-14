@@ -54,9 +54,20 @@
 
 ## 本地运行与验证
 
-复制 `.env.example` 的键到不受版本控制的本地 secret provider，提供真实 PostgreSQL、Redis 和 AWS standard credential chain，再运行：
+首次本地联调把 `.env.local.example` 复制为开发者自己的 `.env.dev`、`.env.cwj` 等
+`.env.<name>` 文件；这些文件全部被 Git 忽略。它们只保存该开发环境的 Gateway/AWS 资源参数和
+Internal App 配置，AWS access key 仍走 standard credential chain，不写入环境文件。
+
+本地开发优先复用 `127.0.0.1:5432/6379` 上已有的 PostgreSQL/Redis 进程，但必须使用独立的
+`aws_iot_gateway` 数据库和 Redis DB index（示例为 `/1`）。根工作区 `local-dev` skill 只探测、
+不启停用户已有的进程；端口为空时才使用 `deploy/local/compose.yaml` 启动 fallback 依赖。
+直接使用 fallback 时可运行：
 
 ```sh
+docker compose --env-file .env.cwj -f deploy/local/compose.yaml up -d --wait
+set -a
+. ./.env.cwj
+set +a
 go run ./cmd/aws-iot-gateway
 ```
 
