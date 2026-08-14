@@ -13,13 +13,16 @@ type DataClient interface {
 	GetThingShadow(context.Context, *iotdataplane.GetThingShadowInput, ...func(*iotdataplane.Options)) (*iotdataplane.GetThingShadowOutput, error)
 }
 
-type Runtime struct{ client DataClient }
+type Runtime struct {
+	client     DataClient
+	shadowName string
+}
 
-func NewRuntime(client DataClient) (*Runtime, error) {
-	if client == nil {
-		return nil, fmt.Errorf("AWS IoT runtime requires a data-plane client")
+func NewRuntime(client DataClient, shadowName string) (*Runtime, error) {
+	if client == nil || shadowName == "" {
+		return nil, fmt.Errorf("AWS IoT runtime requires a data-plane client and shadow name")
 	}
-	return &Runtime{client: client}, nil
+	return &Runtime{client: client, shadowName: shadowName}, nil
 }
 
 func (runtime *Runtime) Publish(ctx context.Context, topic string, payload []byte) error {
@@ -38,7 +41,9 @@ func (runtime *Runtime) GetShadow(ctx context.Context, deviceSN string) ([]byte,
 	if deviceSN == "" {
 		return nil, fmt.Errorf("AWS IoT shadow thing name is empty")
 	}
-	result, err := runtime.client.GetThingShadow(ctx, &iotdataplane.GetThingShadowInput{ThingName: aws.String(deviceSN)})
+	result, err := runtime.client.GetThingShadow(ctx, &iotdataplane.GetThingShadowInput{
+		ThingName: aws.String(deviceSN), ShadowName: aws.String(runtime.shadowName),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("get AWS IoT thing shadow: %w", err)
 	}

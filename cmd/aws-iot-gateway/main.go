@@ -112,7 +112,7 @@ func main() {
 	iotData := iotdataplane.NewFromConfig(awsConfig, func(options *iotdataplane.Options) {
 		options.BaseEndpoint = aws.String("https://" + *dataEndpoint.EndpointAddress)
 	})
-	deviceRuntime, err := awsiot.NewRuntime(iotData)
+	deviceRuntime, err := awsiot.NewRuntime(iotData, config.IoTShadowName)
 	if err != nil {
 		log.Fatalf("configure AWS IoT runtime: %v", err)
 	}

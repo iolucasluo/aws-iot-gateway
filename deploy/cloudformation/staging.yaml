@@ -316,13 +316,24 @@ Resources:
             Action: iot:Publish
             Resource:
               - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/dt/aws-iot-gateway-${EnvironmentName}/${!iot:Connection.Thing.ThingName}/event
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/dt/aws-iot-gateway-${EnvironmentName}/${!iot:Connection.Thing.ThingName}/status
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/dt/aws-iot-gateway-${EnvironmentName}/${!iot:Connection.Thing.ThingName}/lwt
               - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/cmd/aws-iot-gateway-${EnvironmentName}/${!iot:Connection.Thing.ThingName}/res
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/$aws/things/${!iot:Connection.Thing.ThingName}/shadow/name/internal-aws/update
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/$aws/things/${!iot:Connection.Thing.ThingName}/shadow/name/time-config/update
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/$aws/things/${!iot:Connection.Thing.ThingName}/shadow/name/time-config/get
           - Effect: Allow
             Action: iot:Receive
-            Resource: !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/cmd/aws-iot-gateway-${EnvironmentName}/${!iot:Connection.Thing.ThingName}/req
+            Resource:
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/cmd/aws-iot-gateway-${EnvironmentName}/${!iot:Connection.Thing.ThingName}/req
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/$aws/things/${!iot:Connection.Thing.ThingName}/shadow/name/time-config/update/delta
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/$aws/things/${!iot:Connection.Thing.ThingName}/shadow/name/time-config/get/accepted
           - Effect: Allow
             Action: iot:Subscribe
-            Resource: !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topicfilter/cmd/aws-iot-gateway-${EnvironmentName}/${!iot:Connection.Thing.ThingName}/req
+            Resource:
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topicfilter/cmd/aws-iot-gateway-${EnvironmentName}/${!iot:Connection.Thing.ThingName}/req
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topicfilter/$aws/things/${!iot:Connection.Thing.ThingName}/shadow/name/time-config/update/delta
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topicfilter/$aws/things/${!iot:Connection.Thing.ThingName}/shadow/name/time-config/get/accepted
           - Effect: Allow
             Action: iot:AssumeRoleWithCertificate
             Resource: !GetAtt DeviceRoleAlias.RoleAliasArn
