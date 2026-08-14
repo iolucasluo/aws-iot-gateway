@@ -13,16 +13,16 @@ func TestProvisionCreatesInactiveCertificateAndAttachesOnlyFixedResources(t *tes
 	t.Parallel()
 
 	client := &fakeClient{}
-	provisioner, err := New(client, "aws-iot-demo-", "aws-iot-demo-device")
+	provisioner, err := New(client, "aws-iot-gateway-staging-device")
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	identity, err := provisioner.Provision(context.Background(), "activation-1", "csr-pem")
+	identity, err := provisioner.Provision(context.Background(), "fdr-00000000000000000000000000000001", "csr-pem")
 	if err != nil {
 		t.Fatalf("Provision() error = %v", err)
 	}
 	if identity != (activation.PreparedIdentity{
-		DeviceID:       "aws-iot-demo-activation-1",
+		DeviceID:       "fdr-00000000000000000000000000000001",
 		CertificateID:  "certificate-1",
 		CertificatePEM: "certificate-pem",
 		AWSIoTEndpoint: "endpoint-ats.iot.example",
@@ -32,10 +32,10 @@ func TestProvisionCreatesInactiveCertificateAndAttachesOnlyFixedResources(t *tes
 	if client.certificateInput == nil || client.certificateInput.SetAsActive {
 		t.Fatalf("certificate input = %#v, want inactive certificate", client.certificateInput)
 	}
-	if client.thingInput == nil || aws.ToString(client.thingInput.ThingName) != "aws-iot-demo-activation-1" {
+	if client.thingInput == nil || aws.ToString(client.thingInput.ThingName) != "fdr-00000000000000000000000000000001" {
 		t.Fatalf("thing input = %#v", client.thingInput)
 	}
-	if client.policyInput == nil || aws.ToString(client.policyInput.PolicyName) != "aws-iot-demo-device" {
+	if client.policyInput == nil || aws.ToString(client.policyInput.PolicyName) != "aws-iot-gateway-staging-device" {
 		t.Fatalf("policy input = %#v", client.policyInput)
 	}
 	if err := provisioner.Activate(context.Background(), identity.CertificateID); err != nil {

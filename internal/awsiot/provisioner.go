@@ -20,20 +20,22 @@ type Client interface {
 }
 
 type Provisioner struct {
-	client      Client
-	thingPrefix string
-	policyName  string
+	client     Client
+	policyName string
 }
 
-func New(client Client, thingPrefix, policyName string) (*Provisioner, error) {
-	if client == nil || thingPrefix == "" || policyName == "" {
-		return nil, fmt.Errorf("AWS IoT provisioner requires client, thing prefix, and policy name")
+func New(client Client, policyName string) (*Provisioner, error) {
+	if client == nil || policyName == "" {
+		return nil, fmt.Errorf("AWS IoT provisioner requires client and policy name")
 	}
-	return &Provisioner{client: client, thingPrefix: thingPrefix, policyName: policyName}, nil
+	return &Provisioner{client: client, policyName: policyName}, nil
 }
 
-func (p *Provisioner) Provision(ctx context.Context, activationID, csrPEM string) (activation.PreparedIdentity, error) {
-	thingName := p.thingPrefix + activationID
+func (p *Provisioner) Provision(ctx context.Context, deviceSN, csrPEM string) (activation.PreparedIdentity, error) {
+	if deviceSN == "" {
+		return activation.PreparedIdentity{}, fmt.Errorf("device sn is empty")
+	}
+	thingName := deviceSN
 	certificate, err := p.client.CreateCertificateFromCsr(ctx, &iot.CreateCertificateFromCsrInput{
 		CertificateSigningRequest: aws.String(csrPEM),
 		SetAsActive:               false,

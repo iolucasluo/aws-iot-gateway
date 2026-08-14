@@ -13,160 +13,46 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"sort"
-	"sync"
+	"strings"
 	"time"
 )
 
-var (
-	ErrInvalidInput              = errors.New("invalid activation input")
-	ErrActivationNotFound        = errors.New("activation not found")
-	ErrActivationUnauthorized    = errors.New("activation code is invalid")
-	ErrActivationExpired         = errors.New("activation has expired")
-	ErrProvisionerNotConfigured  = errors.New("provisioner is not configured")
-	ErrActivationAlreadyPrepared = errors.New("activation was prepared with another csr")
-	ErrInstallationProofInvalid  = errors.New("installation proof is invalid")
-)
-
-type Method string
-
-const (
-	MethodQR  Method = "qr"
-	MethodAP  Method = "ap"
-	MethodBLE Method = "ble"
-)
-
-type CreateInput struct {
-	UserSubject string
-	Method      Method
-}
-
-type PrepareInput struct {
-	ActivationID string
-	Code         string
-	CSRPEM       string
-}
-
-type ConfirmInput struct {
-	ActivationID string
-	Code         string
-	Proof        string
-}
-
-type Activation struct {
-	ID        string
-	Code      string
-	Method    Method
-	User      string
-	Status    Status
-	ExpiresAt time.Time
-}
-
-type Status string
-
-const (
-	StatusCreated    Status = "created"
-	StatusInstalling Status = "installing"
-	StatusActive     Status = "active"
-)
-
-type PreparedIdentity struct {
-	DeviceID       string
-	CertificateID  string
-	CertificatePEM string
-	AWSIoTEndpoint string
-}
-
-type Installation struct {
-	ActivationID  string
-	DeviceID      string
-	CertificateID string
-	Certificate   string
-	Endpoint      string
-	ProofNonce    string
-}
-
-// Device is the user-visible projection of an active operational identity.
-// It deliberately excludes certificate material, activation codes and proof data.
-type Device struct {
-	ID           string
-	ActivationID string
-	Endpoint     string
-}
-
-type Provisioner interface {
-	Provision(context.Context, string, string) (PreparedIdentity, error)
-}
-
-type Activator interface {
-	Activate(context.Context, string) error
-}
-
 type Service struct {
 	provisioner Provisioner
-	store       RecordStore
-	mu          sync.Mutex
-	records     map[string]record
+	repository  Repository
 	now         func() time.Time
 }
 
-type record struct {
-	activation   Activation
-	codeHash     [sha256.Size]byte
-	csrPEM       string
-	installation Installation
-}
-
 func NewService() *Service {
-	return newService(nil)
+	return NewServiceWithRepository(nil, NewMemoryRepository())
 }
 
 func NewServiceWith(provisioner Provisioner) *Service {
-	return newService(provisioner)
+	return NewServiceWithRepository(provisioner, NewMemoryRepository())
 }
 
-func NewServiceWithStore(provisioner Provisioner, store RecordStore) (*Service, error) {
-	service := newService(provisioner)
-	service.store = store
-	if store == nil {
-		return service, nil
-	}
-	records, err := store.Load(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("load activation state: %w", err)
-	}
-	for _, stored := range records {
-		codeHash, err := hex.DecodeString(stored.CodeHash)
-		if err != nil || len(codeHash) != sha256.Size || stored.Activation.ID == "" {
-			return nil, fmt.Errorf("load activation state: invalid persisted record")
-		}
-		var hash [sha256.Size]byte
-		copy(hash[:], codeHash)
-		stored.Activation.Code = ""
-		service.records[stored.Activation.ID] = record{
-			activation:   stored.Activation,
-			codeHash:     hash,
-			csrPEM:       stored.CSRPEM,
-			installation: stored.Installation,
-		}
-	}
-	return service, nil
+func NewServiceWithRepository(provisioner Provisioner, repository Repository) *Service {
+	return &Service{provisioner: provisioner, repository: repository, now: func() time.Time { return time.Now().UTC() }}
 }
 
-func newService(provisioner Provisioner) *Service {
-	return &Service{
-		provisioner: provisioner,
-		records:     make(map[string]record),
-		now:         func() time.Time { return time.Now().UTC() },
-	}
-}
-
-func (s *Service) Create(ctx context.Context, input CreateInput) (Activation, error) {
-	if input.UserSubject == "" || !input.Method.valid() {
+func (service *Service) Create(ctx context.Context, input CreateInput) (Activation, error) {
+	if service.repository == nil || strings.TrimSpace(input.InternalAppID) == "" ||
+		strings.TrimSpace(input.BindingExternalUserID) == "" || strings.TrimSpace(input.IdempotencyKey) == "" ||
+		len(input.IdempotencyKey) > 128 || !input.Method.valid() {
 		return Activation{}, ErrInvalidInput
 	}
-
-	id, err := randomToken(16)
+	requestHash := sha256.Sum256([]byte(strings.Join([]string{
+		input.InternalAppID, input.BindingExternalUserID, string(input.Method),
+	}, "\n")))
+	if existing, err := service.repository.FindByIdempotency(ctx, input.InternalAppID, input.IdempotencyKey); err == nil {
+		if existing.Activation.RequestHash != requestHash {
+			return Activation{}, ErrIdempotencyConflict
+		}
+		return Activation{}, ErrActivationInProgress
+	} else if !errors.Is(err, ErrActivationNotFound) {
+		return Activation{}, fmt.Errorf("find activation idempotency key: %w", err)
+	}
+	id, err := randomUUID()
 	if err != nil {
 		return Activation{}, fmt.Errorf("generate activation id: %w", err)
 	}
@@ -174,106 +60,149 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Activation, er
 	if err != nil {
 		return Activation{}, fmt.Errorf("generate activation code: %w", err)
 	}
-	activation := Activation{
-		ID:        id,
-		Code:      code,
-		Method:    input.Method,
-		User:      input.UserSubject,
-		Status:    StatusCreated,
-		ExpiresAt: s.now().Add(5 * time.Minute),
+	value := Activation{
+		ID: id, Code: code, Method: input.Method, InternalAppID: input.InternalAppID,
+		BindingExternalUserID: input.BindingExternalUserID, IdempotencyKey: input.IdempotencyKey,
+		RequestHash: requestHash, Status: StatusPending, ExpiresAt: service.now().Add(5 * time.Minute),
 	}
-	s.mu.Lock()
-	s.records[activation.ID] = record{
-		activation: activation,
-		codeHash:   sha256.Sum256([]byte(code)),
-	}
-	if err := s.persistLocked(ctx); err != nil {
-		delete(s.records, activation.ID)
-		s.mu.Unlock()
+	if err := service.repository.Create(ctx, Record{Activation: value, CodeHash: sha256.Sum256([]byte(code))}); err != nil {
 		return Activation{}, err
 	}
-	s.mu.Unlock()
-	return activation, nil
+	return value, nil
 }
 
-func (s *Service) Prepare(ctx context.Context, input PrepareInput) (Installation, error) {
-	if input.ActivationID == "" || input.Code == "" || input.CSRPEM == "" {
+func (service *Service) Prepare(ctx context.Context, input PrepareInput) (Installation, error) {
+	if service.repository == nil || input.ActivationID == "" || input.Code == "" || input.CSRPEM == "" || !input.ExpectedMethod.valid() {
 		return Installation{}, ErrInvalidInput
 	}
-	if s.provisioner == nil {
+	if service.provisioner == nil {
 		return Installation{}, ErrProvisionerNotConfigured
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	record, err := s.authorizeLocked(input.ActivationID, input.Code)
+	record, err := service.repository.FindByID(ctx, input.ActivationID)
 	if err != nil {
 		return Installation{}, err
 	}
-	if record.installation.ActivationID != "" {
-		if record.csrPEM != input.CSRPEM {
+	if err := service.authorize(record, input.Code, input.ExpectedMethod); err != nil {
+		return Installation{}, err
+	}
+	if record.Installation.ActivationID != "" {
+		if record.CSRPEM != input.CSRPEM {
 			return Installation{}, ErrActivationAlreadyPrepared
 		}
-		return record.installation, nil
+		return record.Installation, nil
 	}
-
-	identity, err := s.provisioner.Provision(ctx, input.ActivationID, input.CSRPEM)
+	deviceInternalID, err := randomUUID()
 	if err != nil {
+		return Installation{}, fmt.Errorf("generate internal device id: %w", err)
+	}
+	deviceSN, err := randomDeviceSN()
+	if err != nil {
+		return Installation{}, fmt.Errorf("generate device sn: %w", err)
+	}
+	record, err = service.repository.ReservePreparation(ctx, input.ActivationID, deviceInternalID, deviceSN, input.CSRPEM)
+	if err != nil {
+		return Installation{}, err
+	}
+	if record.Installation.ActivationID != "" {
+		return record.Installation, nil
+	}
+	identity, err := service.provisioner.Provision(ctx, record.Activation.DeviceSN, input.CSRPEM)
+	if err != nil {
+		_ = service.repository.FailPreparation(ctx, input.ActivationID, "aws_iot_provision_failed")
 		return Installation{}, fmt.Errorf("provision operational identity: %w", err)
 	}
-	if identity.DeviceID == "" || identity.CertificateID == "" ||
+	if identity.DeviceID != record.Activation.DeviceSN || identity.CertificateID == "" ||
 		identity.CertificatePEM == "" || identity.AWSIoTEndpoint == "" {
+		_ = service.repository.FailPreparation(ctx, input.ActivationID, "aws_iot_incomplete_result")
 		return Installation{}, fmt.Errorf("provision operational identity: incomplete result")
 	}
 	nonce, err := randomToken(32)
 	if err != nil {
+		_ = service.repository.FailPreparation(ctx, input.ActivationID, "nonce_generation_failed")
 		return Installation{}, fmt.Errorf("generate installation proof nonce: %w", err)
 	}
-	record.csrPEM = input.CSRPEM
-	record.installation = Installation{
-		ActivationID:  input.ActivationID,
-		DeviceID:      identity.DeviceID,
-		CertificateID: identity.CertificateID,
-		Certificate:   identity.CertificatePEM,
-		Endpoint:      identity.AWSIoTEndpoint,
-		ProofNonce:    nonce,
+	installation := Installation{
+		ActivationID: input.ActivationID, DeviceID: identity.DeviceID, CertificateID: identity.CertificateID,
+		Certificate: identity.CertificatePEM, Endpoint: identity.AWSIoTEndpoint, ProofNonce: nonce,
 	}
-	record.activation.Status = StatusInstalling
-	s.records[input.ActivationID] = record
-	if err := s.persistLocked(ctx); err != nil {
-		return Installation{}, err
+	completed, err := service.repository.CompletePreparation(ctx, input.ActivationID, installation)
+	if err != nil {
+		return Installation{}, fmt.Errorf("persist prepared operational identity: %w", err)
 	}
-	return record.installation, nil
+	return completed.Installation, nil
 }
 
-func (s *Service) Confirm(ctx context.Context, input ConfirmInput) (Activation, error) {
-	if input.ActivationID == "" || input.Code == "" || input.Proof == "" {
+func (service *Service) Confirm(ctx context.Context, input ConfirmInput) (Activation, error) {
+	if service.repository == nil || input.ActivationID == "" || input.Code == "" || input.Proof == "" {
 		return Activation{}, ErrInvalidInput
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	record, err := s.authorizeLocked(input.ActivationID, input.Code)
+	record, err := service.repository.FindByID(ctx, input.ActivationID)
 	if err != nil {
 		return Activation{}, err
 	}
-	if record.installation.ActivationID == "" || record.csrPEM == "" {
-		return Activation{}, ErrActivationAlreadyPrepared
-	}
-	if err := verifyInstallationProof(record.csrPEM, record.installation, input.Proof); err != nil {
+	if err := service.authorize(record, input.Code, record.Activation.Method); err != nil {
 		return Activation{}, err
 	}
-	if activator, ok := s.provisioner.(Activator); ok {
-		if err := activator.Activate(ctx, record.installation.CertificateID); err != nil {
+	if record.Installation.ActivationID == "" || record.CSRPEM == "" {
+		return Activation{}, ErrActivationAlreadyPrepared
+	}
+	if err := verifyInstallationProof(record.CSRPEM, record.Installation, input.Proof); err != nil {
+		return Activation{}, err
+	}
+	if record.Activation.Status == StatusActivated {
+		value := record.Activation
+		value.Code = ""
+		return value, nil
+	}
+	if activator, ok := service.provisioner.(Activator); ok {
+		if err := activator.Activate(ctx, record.Installation.CertificateID); err != nil {
 			return Activation{}, fmt.Errorf("activate operational identity: %w", err)
 		}
 	}
-	record.activation.Status = StatusActive
-	record.activation.Code = ""
-	s.records[input.ActivationID] = record
-	if err := s.persistLocked(ctx); err != nil {
+	bindingID, err := randomUUID()
+	if err != nil {
+		return Activation{}, fmt.Errorf("generate binding id: %w", err)
+	}
+	record, err = service.repository.CompleteActivation(ctx, input.ActivationID, bindingID)
+	if err != nil {
 		return Activation{}, err
 	}
-	return record.activation, nil
+	value := record.Activation
+	value.Code = ""
+	return value, nil
+}
+
+func (service *Service) GetForInternalApp(ctx context.Context, internalAppID, activationID string) (Activation, error) {
+	if service.repository == nil || internalAppID == "" || activationID == "" {
+		return Activation{}, ErrInvalidInput
+	}
+	record, err := service.repository.FindByID(ctx, activationID)
+	if err != nil || record.Activation.InternalAppID != internalAppID {
+		return Activation{}, ErrActivationNotFound
+	}
+	if !service.now().Before(record.Activation.ExpiresAt) && record.Activation.Status != StatusActivated {
+		return Activation{}, ErrActivationExpired
+	}
+	value := record.Activation
+	value.Code = ""
+	return value, nil
+}
+
+func (service *Service) ListDevicesForBinding(ctx context.Context, internalAppID, externalUserID string) ([]Device, error) {
+	if service.repository == nil || internalAppID == "" {
+		return nil, ErrInvalidInput
+	}
+	return service.repository.ListDevices(ctx, internalAppID, externalUserID)
+}
+
+func (service *Service) authorize(record Record, code string, expectedMethod Method) error {
+	if !service.now().Before(record.Activation.ExpiresAt) {
+		return ErrActivationExpired
+	}
+	if record.Activation.Method != expectedMethod || sha256.Sum256([]byte(code)) != record.CodeHash {
+		return ErrActivationUnauthorized
+	}
+	return nil
 }
 
 func installationProofMessage(activationID, nonce string) string {
@@ -309,98 +238,29 @@ func verifyInstallationProof(csrPEM string, installation Installation, encodedPr
 	return nil
 }
 
-func (s *Service) GetForUser(_ context.Context, userSubject, activationID string) (Activation, error) {
-	if userSubject == "" || activationID == "" {
-		return Activation{}, ErrInvalidInput
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	record, ok := s.records[activationID]
-	if !ok || record.activation.User != userSubject {
-		return Activation{}, ErrActivationNotFound
-	}
-	if !s.now().Before(record.activation.ExpiresAt) {
-		return Activation{}, ErrActivationExpired
-	}
-	activation := record.activation
-	activation.Code = ""
-	return activation, nil
-}
-
-func (s *Service) ListDevicesForUser(_ context.Context, userSubject string) ([]Device, error) {
-	if userSubject == "" {
-		return nil, ErrInvalidInput
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	devices := make([]Device, 0)
-	for _, record := range s.records {
-		if record.activation.User != userSubject || record.activation.Status != StatusActive ||
-			record.installation.DeviceID == "" {
-			continue
-		}
-		devices = append(devices, Device{
-			ID:           record.installation.DeviceID,
-			ActivationID: record.activation.ID,
-			Endpoint:     record.installation.Endpoint,
-		})
-	}
-	sort.Slice(devices, func(i, j int) bool {
-		return devices[i].ID < devices[j].ID
-	})
-	return devices, nil
-}
-
-func (s *Service) authorizeLocked(activationID, code string) (record, error) {
-	record, ok := s.records[activationID]
-	if !ok {
-		return record, ErrActivationNotFound
-	}
-	if !s.now().Before(record.activation.ExpiresAt) {
-		return record, ErrActivationExpired
-	}
-	if sha256.Sum256([]byte(code)) != record.codeHash {
-		return record, ErrActivationUnauthorized
-	}
-	return record, nil
-}
-
-func (s *Service) persistLocked(ctx context.Context) error {
-	if s.store == nil {
-		return nil
-	}
-	ids := make([]string, 0, len(s.records))
-	for id := range s.records {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	stored := make([]StoredRecord, 0, len(ids))
-	for _, id := range ids {
-		record := s.records[id]
-		activation := record.activation
-		activation.Code = ""
-		stored = append(stored, StoredRecord{
-			Activation:   activation,
-			CodeHash:     hex.EncodeToString(record.codeHash[:]),
-			CSRPEM:       record.csrPEM,
-			Installation: record.installation,
-		})
-	}
-	if err := s.store.Save(ctx, stored); err != nil {
-		return fmt.Errorf("persist activation state: %w", err)
-	}
-	return nil
-}
-
-func (m Method) valid() bool {
-	return m == MethodQR || m == MethodAP || m == MethodBLE
-}
-
 func randomToken(size int) (string, error) {
-	bytes := make([]byte, size)
-	if _, err := rand.Read(bytes); err != nil {
+	value := make([]byte, size)
+	if _, err := rand.Read(value); err != nil {
 		return "", err
 	}
-	return base64.RawURLEncoding.EncodeToString(bytes), nil
+	return base64.RawURLEncoding.EncodeToString(value), nil
+}
+
+func randomDeviceSN() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return "fdr-" + hex.EncodeToString(value), nil
+}
+
+func randomUUID() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	value[6] = (value[6] & 0x0f) | 0x40
+	value[8] = (value[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		value[0:4], value[4:6], value[6:8], value[8:10], value[10:16]), nil
 }

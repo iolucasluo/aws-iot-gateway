@@ -8,6 +8,6 @@
 - `rules/安全边界.md`：凭据、设备密钥、用户隔离和 AWS 权限边界。
 - `rules/测试与验证.md`：Go 测试、静态检查和交付证据。
 
-规则只描述本仓当前实现。跨仓 payload 的设备端权威契约位于
+规则只描述本仓当前实现与已批准 Internal AWS API 边界。跨仓 payload 的设备端权威契约位于
 `anyka-workspace/docs/gateway-commissioning-v1.md`；App 消费方位于
 `aws-iot-demo-app/lib/aws_demo/`。

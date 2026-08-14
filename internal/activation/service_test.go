@@ -10,7 +10,6 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -18,17 +17,14 @@ import (
 func TestCreateBindsShortLivedCodeToUserAndMethod(t *testing.T) {
 	t.Parallel()
 
-	activation, err := NewService().Create(context.Background(), CreateInput{
-		UserSubject: "user-42",
-		Method:      MethodBLE,
-	})
+	activation, err := NewService().Create(context.Background(), testCreateInput(MethodBLE))
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	if activation.ID == "" || activation.Code == "" {
 		t.Fatal("Create() must issue an activation id and code")
 	}
-	if activation.User != "user-42" || activation.Method != MethodBLE {
+	if activation.InternalAppID != "livpet-staging" || activation.BindingExternalUserID != "user-42" || activation.Method != MethodBLE {
 		t.Fatalf("Create() binding = %#v, want user-42 and ble", activation)
 	}
 	if time.Until(activation.ExpiresAt) <= 0 {
@@ -40,18 +36,16 @@ func TestPrepareRequiresTheIssuedCodeAndReturnsOnlyADeviceInstallPayload(t *test
 	t.Parallel()
 
 	service := NewServiceWith(fakeProvisioner{})
-	created, err := service.Create(context.Background(), CreateInput{
-		UserSubject: "user-42",
-		Method:      MethodQR,
-	})
+	created, err := service.Create(context.Background(), testCreateInput(MethodQR))
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
 	installation, err := service.Prepare(context.Background(), PrepareInput{
-		ActivationID: created.ID,
-		Code:         created.Code,
-		CSRPEM:       "-----BEGIN CERTIFICATE REQUEST-----\\nrequest\\n-----END CERTIFICATE REQUEST-----",
+		ActivationID:   created.ID,
+		Code:           created.Code,
+		CSRPEM:         "-----BEGIN CERTIFICATE REQUEST-----\\nrequest\\n-----END CERTIFICATE REQUEST-----",
+		ExpectedMethod: MethodQR,
 	})
 	if err != nil {
 		t.Fatalf("Prepare() error = %v", err)
@@ -66,23 +60,41 @@ func TestPrepareRequiresTheIssuedCodeAndReturnsOnlyADeviceInstallPayload(t *test
 	}
 }
 
+func TestPrepareGeneratesDeviceSNBeforeAWSProvisioning(t *testing.T) {
+	t.Parallel()
+
+	provisioner := &deviceSNProvisioner{}
+	service := NewServiceWith(provisioner)
+	created, err := service.Create(context.Background(), testCreateInput(MethodQR))
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	installation, err := service.Prepare(context.Background(), PrepareInput{
+		ActivationID: created.ID, Code: created.Code, CSRPEM: "csr", ExpectedMethod: MethodQR,
+	})
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if len(provisioner.deviceSN) != 36 || len(installation.DeviceID) != 36 ||
+		provisioner.deviceSN[:4] != "fdr-" || installation.DeviceID != provisioner.deviceSN {
+		t.Fatalf("generated device SN = %q, installation = %#v", provisioner.deviceSN, installation)
+	}
+}
+
 func TestGetForUserDoesNotReturnActivationCode(t *testing.T) {
 	t.Parallel()
 
 	service := NewService()
-	created, err := service.Create(context.Background(), CreateInput{
-		UserSubject: "user-42",
-		Method:      MethodAP,
-	})
+	created, err := service.Create(context.Background(), testCreateInput(MethodAP))
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	activation, err := service.GetForUser(context.Background(), "user-42", created.ID)
+	activation, err := service.GetForInternalApp(context.Background(), "livpet-staging", created.ID)
 	if err != nil {
 		t.Fatalf("GetForUser() error = %v", err)
 	}
-	if activation.Code != "" || activation.Status != StatusCreated {
+	if activation.Code != "" || activation.Status != StatusPending {
 		t.Fatalf("GetForUser() = %#v, want metadata without code", activation)
 	}
 }
@@ -91,53 +103,18 @@ func TestPrepareRejectsAWrongActivationCode(t *testing.T) {
 	t.Parallel()
 
 	service := NewServiceWith(fakeProvisioner{})
-	created, err := service.Create(context.Background(), CreateInput{
-		UserSubject: "user-42",
-		Method:      MethodQR,
-	})
+	created, err := service.Create(context.Background(), testCreateInput(MethodQR))
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	_, err = service.Prepare(context.Background(), PrepareInput{
-		ActivationID: created.ID,
-		Code:         "wrong-code",
-		CSRPEM:       "csr",
+		ActivationID:   created.ID,
+		Code:           "wrong-code",
+		CSRPEM:         "csr",
+		ExpectedMethod: MethodQR,
 	})
 	if !errors.Is(err, ErrActivationUnauthorized) {
 		t.Fatalf("Prepare() error = %v, want ErrActivationUnauthorized", err)
-	}
-}
-
-func TestFileBackedServiceSurvivesRestartWithoutPersistingTheCode(t *testing.T) {
-	t.Parallel()
-
-	store := NewFileStore(filepath.Join(t.TempDir(), "activations.json"))
-	service, err := NewServiceWithStore(fakeProvisioner{}, store)
-	if err != nil {
-		t.Fatalf("NewServiceWithStore() error = %v", err)
-	}
-	created, err := service.Create(context.Background(), CreateInput{
-		UserSubject: "user-42",
-		Method:      MethodBLE,
-	})
-	if err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
-
-	restarted, err := NewServiceWithStore(fakeProvisioner{}, store)
-	if err != nil {
-		t.Fatalf("NewServiceWithStore() after restart error = %v", err)
-	}
-	installation, err := restarted.Prepare(context.Background(), PrepareInput{
-		ActivationID: created.ID,
-		Code:         created.Code,
-		CSRPEM:       "csr",
-	})
-	if err != nil {
-		t.Fatalf("Prepare() after restart error = %v", err)
-	}
-	if installation.DeviceID == "" {
-		t.Fatalf("Prepare() after restart = %#v, want installation", installation)
 	}
 }
 
@@ -155,17 +132,15 @@ func TestConfirmRequiresProofFromTheOperationalPrivateKey(t *testing.T) {
 	csrPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}))
 
 	service := NewServiceWith(fakeProvisioner{})
-	created, err := service.Create(context.Background(), CreateInput{
-		UserSubject: "user-42",
-		Method:      MethodAP,
-	})
+	created, err := service.Create(context.Background(), testCreateInput(MethodAP))
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	installation, err := service.Prepare(context.Background(), PrepareInput{
-		ActivationID: created.ID,
-		Code:         created.Code,
-		CSRPEM:       csrPEM,
+		ActivationID:   created.ID,
+		Code:           created.Code,
+		CSRPEM:         csrPEM,
+		ExpectedMethod: MethodAP,
 	})
 	if err != nil {
 		t.Fatalf("Prepare() error = %v", err)
@@ -184,8 +159,19 @@ func TestConfirmRequiresProofFromTheOperationalPrivateKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Confirm() error = %v", err)
 	}
-	if confirmed.Status != StatusActive || confirmed.Code != "" {
+	if confirmed.Status != StatusActivated || confirmed.Code != "" {
 		t.Fatalf("Confirm() = %#v, want active metadata without code", confirmed)
+	}
+	retried, err := service.Confirm(context.Background(), ConfirmInput{
+		ActivationID: created.ID,
+		Code:         created.Code,
+		Proof:        base64.RawURLEncoding.EncodeToString(signature),
+	})
+	if err != nil {
+		t.Fatalf("Confirm() retry error = %v", err)
+	}
+	if retried.Status != StatusActivated || retried.ID != confirmed.ID || retried.Code != "" {
+		t.Fatalf("Confirm() retry = %#v, want the existing activated result", retried)
 	}
 }
 
@@ -200,17 +186,15 @@ func TestListDevicesForUserShowsOnlyActivatedInstallations(t *testing.T) {
 		t.Fatalf("CreateCertificateRequest() error = %v", err)
 	}
 	csrPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}))
-	created, err := service.Create(context.Background(), CreateInput{
-		UserSubject: "user-42",
-		Method:      MethodQR,
-	})
+	created, err := service.Create(context.Background(), testCreateInput(MethodQR))
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 	installation, err := service.Prepare(context.Background(), PrepareInput{
-		ActivationID: created.ID,
-		Code:         created.Code,
-		CSRPEM:       csrPEM,
+		ActivationID:   created.ID,
+		Code:           created.Code,
+		CSRPEM:         csrPEM,
+		ExpectedMethod: MethodQR,
 	})
 	if err != nil {
 		t.Fatalf("Prepare() error = %v", err)
@@ -228,7 +212,7 @@ func TestListDevicesForUserShowsOnlyActivatedInstallations(t *testing.T) {
 		t.Fatalf("Confirm() error = %v", err)
 	}
 
-	devices, err := service.ListDevicesForUser(context.Background(), "user-42")
+	devices, err := service.ListDevicesForBinding(context.Background(), "livpet-staging", "user-42")
 	if err != nil {
 		t.Fatalf("ListDevicesForUser() error = %v", err)
 	}
@@ -236,7 +220,7 @@ func TestListDevicesForUserShowsOnlyActivatedInstallations(t *testing.T) {
 		devices[0].ActivationID != created.ID || devices[0].Endpoint == "" {
 		t.Fatalf("ListDevicesForUser() = %#v, want the active installation", devices)
 	}
-	otherUserDevices, err := service.ListDevicesForUser(context.Background(), "user-43")
+	otherUserDevices, err := service.ListDevicesForBinding(context.Background(), "livpet-staging", "user-43")
 	if err != nil {
 		t.Fatalf("ListDevicesForUser() for another user error = %v", err)
 	}
@@ -247,11 +231,28 @@ func TestListDevicesForUserShowsOnlyActivatedInstallations(t *testing.T) {
 
 type fakeProvisioner struct{}
 
-func (fakeProvisioner) Provision(context.Context, string, string) (PreparedIdentity, error) {
+func (fakeProvisioner) Provision(_ context.Context, deviceSN, _ string) (PreparedIdentity, error) {
 	return PreparedIdentity{
-		DeviceID:       "aws-iot-demo-device-1",
+		DeviceID:       deviceSN,
 		CertificateID:  "cert-1",
 		CertificatePEM: "certificate-pem",
 		AWSIoTEndpoint: "example-ats.iot.ap-southeast-1.amazonaws.com",
+	}, nil
+}
+
+func testCreateInput(method Method) CreateInput {
+	return CreateInput{
+		InternalAppID: "livpet-staging", BindingExternalUserID: "user-42",
+		IdempotencyKey: "operation-1-" + string(method), Method: method,
+	}
+}
+
+type deviceSNProvisioner struct{ deviceSN string }
+
+func (provisioner *deviceSNProvisioner) Provision(_ context.Context, deviceSN, _ string) (PreparedIdentity, error) {
+	provisioner.deviceSN = deviceSN
+	return PreparedIdentity{
+		DeviceID: deviceSN, CertificateID: "cert-1", CertificatePEM: "certificate-pem",
+		AWSIoTEndpoint: "endpoint-ats.iot.example",
 	}, nil
 }

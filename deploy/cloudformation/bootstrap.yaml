@@ -1,0 +1,30 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ECR bootstrap for the Internal AWS API staging deployment.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: staging
+    AllowedValues: [staging]
+
+Resources:
+  GatewayRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub aws-iot-gateway-${EnvironmentName}
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: IMMUTABLE
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"retain 20 staging images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":20},"action":{"type":"expire"}}]}
+
+Outputs:
+  RepositoryName:
+    Value: !Ref GatewayRepository
+  RepositoryUri:
+    Value: !GetAtt GatewayRepository.RepositoryUri

@@ -1,0 +1,618 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Internal AWS API staging runtime (API, worker, PostgreSQL, Redis, IoT, SQS, KVS and S3).
+
+Parameters:
+  ContainerImage:
+    Type: String
+    Description: Immutable ECR image URI including a tag or digest.
+  InternalAppsSecretArn:
+    Type: String
+    Description: Secrets Manager ARN whose value is the complete INTERNAL_APPS_JSON array.
+    NoEcho: true
+  IoTCredentialProviderEndpoint:
+    Type: String
+    AllowedPattern: '^[A-Za-z0-9.-]+\.credentials\.iot\.ap-east-1\.amazonaws\.com$'
+  EnvironmentName:
+    Type: String
+    Default: staging
+    AllowedValues: [staging]
+  DatabaseInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+  RedisNodeType:
+    Type: String
+    Default: cache.t4g.micro
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags: [{Key: Name, Value: !Sub 'aws-iot-gateway-${EnvironmentName}'}]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  SubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: ap-east-1c
+      CidrBlock: 10.42.0.0/24
+      MapPublicIpOnLaunch: true
+  SubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: ap-east-1b
+      CidrBlock: 10.42.1.0/24
+      MapPublicIpOnLaunch: true
+  SubnetARouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {SubnetId: !Ref SubnetA, RouteTableId: !Ref PublicRouteTable}
+  SubnetBRouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {SubnetId: !Ref SubnetB, RouteTableId: !Ref PublicRouteTable}
+
+  VPCLinkSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: API Gateway VPC Link egress
+      VpcId: !Ref VPC
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: NLB ingress from API Gateway VPC Link
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 14080
+          ToPort: 14080
+          SourceSecurityGroupId: !Ref VPCLinkSecurityGroup
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Gateway API and worker tasks
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 14080
+          ToPort: 14080
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PostgreSQL from gateway tasks
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref TaskSecurityGroup
+  RedisSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Redis from gateway tasks
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref TaskSecurityGroup
+
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Gateway staging database subnets
+      SubnetIds: [!Ref SubnetA, !Ref SubnetB]
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub aws-iot-gateway-${EnvironmentName}
+      Engine: postgres
+      DBInstanceClass: !Ref DatabaseInstanceClass
+      AllocatedStorage: 20
+      MaxAllocatedStorage: 100
+      StorageType: gp3
+      StorageEncrypted: true
+      DBName: gateway
+      MasterUsername: gateway_admin
+      ManageMasterUserPassword: true
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 7
+      AutoMinorVersionUpgrade: true
+      # Staging must remain replaceable during integration; snapshots are retained separately.
+      DeletionProtection: false
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VPCSecurityGroups: [!Ref DatabaseSecurityGroup]
+
+  RedisSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: Gateway staging Redis subnets
+      SubnetIds: [!Ref SubnetA, !Ref SubnetB]
+  Redis:
+    Type: AWS::ElastiCache::CacheCluster
+    Properties:
+      ClusterName: !Sub aws-iot-gateway-${EnvironmentName}
+      Engine: redis
+      CacheNodeType: !Ref RedisNodeType
+      NumCacheNodes: 1
+      AutoMinorVersionUpgrade: true
+      CacheSubnetGroupName: !Ref RedisSubnetGroup
+      VpcSecurityGroupIds: [!Ref RedisSecurityGroup]
+
+  MediaBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireStagingMedia
+            Status: Enabled
+            ExpirationInDays: 30
+
+  IngestDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub aws-iot-gateway-${EnvironmentName}-ingest-dlq
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+  IngestQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub aws-iot-gateway-${EnvironmentName}-ingest
+      ReceiveMessageWaitTimeSeconds: 20
+      VisibilityTimeout: 60
+      MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt IngestDLQ.Arn
+        maxReceiveCount: 5
+
+  IoTRuleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: iot.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: send-ingest
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt IngestQueue.Arn
+  CommandResponseRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: !Sub aws_iot_gateway_${EnvironmentName}_command_response
+      TopicRulePayload:
+        AwsIotSqlVersion: '2016-03-23'
+        RuleDisabled: false
+        Sql: !Sub "SELECT *, topic() AS topic FROM 'cmd/aws-iot-gateway-${EnvironmentName}/+/res'"
+        Actions:
+          - Sqs:
+              QueueUrl: !Ref IngestQueue
+              RoleArn: !GetAtt IoTRuleRole.Arn
+              UseBase64: false
+  DeviceEventRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: !Sub aws_iot_gateway_${EnvironmentName}_device_event
+      TopicRulePayload:
+        AwsIotSqlVersion: '2016-03-23'
+        RuleDisabled: false
+        Sql: !Sub "SELECT *, topic() AS topic FROM 'dt/aws-iot-gateway-${EnvironmentName}/+/event'"
+        Actions:
+          - Sqs:
+              QueueUrl: !Ref IngestQueue
+              RoleArn: !GetAtt IoTRuleRole.Arn
+              UseBase64: false
+
+  DeviceKVSRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub aws-iot-gateway-${EnvironmentName}-device-kvs
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: credentials.iot.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: device-kvs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kinesisvideo:CreateSignalingChannel
+                  - kinesisvideo:DescribeSignalingChannel
+                  - kinesisvideo:GetSignalingChannelEndpoint
+                  - kinesisvideo:GetIceServerConfig
+                  - kinesisvideo:ConnectAsMaster
+                Resource: !Sub arn:${AWS::Partition}:kinesisvideo:${AWS::Region}:${AWS::AccountId}:channel/aws-iot-gateway-${EnvironmentName}-*
+  DeviceRoleAlias:
+    Type: AWS::IoT::RoleAlias
+    Properties:
+      RoleAlias: !Sub aws-iot-gateway-${EnvironmentName}-kvs
+      RoleArn: !GetAtt DeviceKVSRole.Arn
+      CredentialDurationSeconds: 3600
+  DevicePolicy:
+    Type: AWS::IoT::Policy
+    Properties:
+      PolicyName: !Sub aws-iot-gateway-${EnvironmentName}-device
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: iot:Connect
+            Resource: !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:client/${!iot:Connection.Thing.ThingName}
+          - Effect: Allow
+            Action: iot:Publish
+            Resource:
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/dt/aws-iot-gateway-${EnvironmentName}/${!iot:Connection.Thing.ThingName}/event
+              - !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/cmd/aws-iot-gateway-${EnvironmentName}/${!iot:Connection.Thing.ThingName}/res
+          - Effect: Allow
+            Action: iot:Receive
+            Resource: !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topic/cmd/aws-iot-gateway-${EnvironmentName}/${!iot:Connection.Thing.ThingName}/req
+          - Effect: Allow
+            Action: iot:Subscribe
+            Resource: !Sub arn:${AWS::Partition}:iot:${AWS::Region}:${AWS::AccountId}:topicfilter/cmd/aws-iot-gateway-${EnvironmentName}/${!iot:Connection.Thing.ThingName}/req
+          - Effect: Allow
+            Action: iot:AssumeRoleWithCertificate
+            Resource: !GetAtt DeviceRoleAlias.RoleAliasArn
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub aws-iot-gateway-${EnvironmentName}
+      ClusterSettings: [{Name: containerInsights, Value: enabled}]
+  APILogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/aws-iot-gateway-${EnvironmentName}/api
+      RetentionInDays: 30
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/aws-iot-gateway-${EnvironmentName}/worker
+      RetentionInDays: 30
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: read-runtime-secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref InternalAppsSecretArn
+                  - !GetAtt Database.MasterUserSecret.SecretArn
+  APITaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: gateway-api
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iot:CreateCertificateFromCsr
+                  - iot:CreateThing
+                  - iot:AttachThingPrincipal
+                  - iot:AttachPolicy
+                  - iot:UpdateCertificate
+                  - iot:DescribeEndpoint
+                  - iot:Publish
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - kinesisvideo:CreateSignalingChannel
+                  - kinesisvideo:DescribeSignalingChannel
+                  - kinesisvideo:GetSignalingChannelEndpoint
+                  - kinesisvideo:GetIceServerConfig
+                Resource: '*'
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub ${MediaBucket.Arn}/*
+  WorkerTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: gateway-worker
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes]
+                Resource: !GetAtt IngestQueue.Arn
+              - Effect: Allow
+                Action: iot:UpdateCertificate
+                Resource: '*'
+
+  APITaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub aws-iot-gateway-${EnvironmentName}-api
+      Cpu: '512'
+      Memory: '1024'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt APITaskRole.Arn
+      ContainerDefinitions:
+        - Name: api
+          Image: !Ref ContainerImage
+          Essential: true
+          PortMappings: [{ContainerPort: 14080, Protocol: tcp}]
+          Environment:
+            - {Name: GATEWAY_ENVIRONMENT, Value: !Ref EnvironmentName}
+            - {Name: GATEWAY_LISTEN_ADDRESS, Value: ':14080'}
+            - {Name: AWS_REGION, Value: !Ref 'AWS::Region'}
+            - {Name: AWS_IOT_DEVICE_POLICY_NAME, Value: !Ref DevicePolicy}
+            - {Name: AWS_IOT_TOPIC_PREFIX, Value: !Sub 'aws-iot-gateway-${EnvironmentName}'}
+            - {Name: AWS_IOT_CREDENTIAL_PROVIDER_ENDPOINT, Value: !Ref IoTCredentialProviderEndpoint}
+            - {Name: AWS_IOT_ROLE_ALIAS, Value: !Ref DeviceRoleAlias}
+            - {Name: AWS_IOT_SHADOW_NAME, Value: internal-aws}
+            - {Name: AWS_IOT_INGEST_QUEUE_URL, Value: !Ref IngestQueue}
+            - {Name: AWS_KVS_CHANNEL_PREFIX, Value: !Sub 'aws-iot-gateway-${EnvironmentName}-'}
+            - {Name: AWS_S3_MEDIA_BUCKET, Value: !Ref MediaBucket}
+            - {Name: PGHOST, Value: !GetAtt Database.Endpoint.Address}
+            - {Name: PGPORT, Value: !GetAtt Database.Endpoint.Port}
+            - {Name: PGDATABASE, Value: gateway}
+            - Name: REDIS_URL
+              Value: !Sub
+                - redis://${Host}:${Port}/0
+                - {Host: !GetAtt Redis.RedisEndpoint.Address, Port: !GetAtt Redis.RedisEndpoint.Port}
+          Secrets:
+            - Name: PGUSER
+              ValueFrom: !Sub
+                - '${SecretArn}:username::'
+                - {SecretArn: !GetAtt Database.MasterUserSecret.SecretArn}
+            - Name: PGPASSWORD
+              ValueFrom: !Sub
+                - '${SecretArn}:password::'
+                - {SecretArn: !GetAtt Database.MasterUserSecret.SecretArn}
+            - {Name: INTERNAL_APPS_JSON, ValueFrom: !Ref InternalAppsSecretArn}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref APILogGroup
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: api
+      Tags: [{Key: Environment, Value: !Ref EnvironmentName}]
+
+  WorkerTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub aws-iot-gateway-${EnvironmentName}-worker
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt WorkerTaskRole.Arn
+      ContainerDefinitions:
+        - Name: worker
+          Image: !Ref ContainerImage
+          Command: [/usr/local/bin/aws-iot-gateway-worker]
+          Essential: true
+          Environment:
+            - {Name: GATEWAY_ENVIRONMENT, Value: !Ref EnvironmentName}
+            - {Name: AWS_REGION, Value: !Ref 'AWS::Region'}
+            - {Name: AWS_IOT_DEVICE_POLICY_NAME, Value: !Ref DevicePolicy}
+            - {Name: AWS_IOT_TOPIC_PREFIX, Value: !Sub 'aws-iot-gateway-${EnvironmentName}'}
+            - {Name: AWS_IOT_CREDENTIAL_PROVIDER_ENDPOINT, Value: !Ref IoTCredentialProviderEndpoint}
+            - {Name: AWS_IOT_ROLE_ALIAS, Value: !Ref DeviceRoleAlias}
+            - {Name: AWS_IOT_SHADOW_NAME, Value: internal-aws}
+            - {Name: AWS_IOT_INGEST_QUEUE_URL, Value: !Ref IngestQueue}
+            - {Name: AWS_KVS_CHANNEL_PREFIX, Value: !Sub 'aws-iot-gateway-${EnvironmentName}-'}
+            - {Name: AWS_S3_MEDIA_BUCKET, Value: !Ref MediaBucket}
+            - {Name: PGHOST, Value: !GetAtt Database.Endpoint.Address}
+            - {Name: PGPORT, Value: !GetAtt Database.Endpoint.Port}
+            - {Name: PGDATABASE, Value: gateway}
+            - Name: REDIS_URL
+              Value: !Sub
+                - redis://${Host}:${Port}/0
+                - {Host: !GetAtt Redis.RedisEndpoint.Address, Port: !GetAtt Redis.RedisEndpoint.Port}
+          Secrets:
+            - Name: PGUSER
+              ValueFrom: !Sub
+                - '${SecretArn}:username::'
+                - {SecretArn: !GetAtt Database.MasterUserSecret.SecretArn}
+            - Name: PGPASSWORD
+              ValueFrom: !Sub
+                - '${SecretArn}:password::'
+                - {SecretArn: !GetAtt Database.MasterUserSecret.SecretArn}
+            - {Name: INTERNAL_APPS_JSON, ValueFrom: !Ref InternalAppsSecretArn}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref WorkerLogGroup
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: worker
+      Tags: [{Key: Environment, Value: !Ref EnvironmentName}]
+
+  NetworkLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: network
+      Scheme: internal
+      Subnets: [!Ref SubnetA, !Ref SubnetB]
+      SecurityGroups: [!Ref LoadBalancerSecurityGroup]
+  APITargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VPC
+      Protocol: TCP
+      Port: 14080
+      TargetType: ip
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /healthz
+      HealthCheckPort: '14080'
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+  APIListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref NetworkLoadBalancer
+      Protocol: TCP
+      Port: 14080
+      DefaultActions: [{Type: forward, TargetGroupArn: !Ref APITargetGroup}]
+  APIService:
+    Type: AWS::ECS::Service
+    DependsOn: APIListener
+    Properties:
+      ServiceName: api
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref APITaskDefinition
+      DesiredCount: 2
+      LaunchType: FARGATE
+      EnableExecuteCommand: true
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 50
+        MaximumPercent: 200
+        DeploymentCircuitBreaker: {Enable: true, Rollback: true}
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: [!Ref SubnetA, !Ref SubnetB]
+          SecurityGroups: [!Ref TaskSecurityGroup]
+      LoadBalancers:
+        - ContainerName: api
+          ContainerPort: 14080
+          TargetGroupArn: !Ref APITargetGroup
+  WorkerService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: worker
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref WorkerTaskDefinition
+      DesiredCount: 2
+      LaunchType: FARGATE
+      EnableExecuteCommand: true
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 200
+        DeploymentCircuitBreaker: {Enable: true, Rollback: true}
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: [!Ref SubnetA, !Ref SubnetB]
+          SecurityGroups: [!Ref TaskSecurityGroup]
+
+  HTTPAPI:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub aws-iot-gateway-${EnvironmentName}
+      ProtocolType: HTTP
+      DisableExecuteApiEndpoint: false
+  VPCLink:
+    Type: AWS::ApiGatewayV2::VpcLink
+    Properties:
+      Name: !Sub aws-iot-gateway-${EnvironmentName}
+      SubnetIds: [!Ref SubnetA, !Ref SubnetB]
+      SecurityGroupIds: [!Ref VPCLinkSecurityGroup]
+  HTTPIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HTTPAPI
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      IntegrationUri: !Ref APIListener
+      ConnectionType: VPC_LINK
+      ConnectionId: !Ref VPCLink
+      PayloadFormatVersion: '1.0'
+      TimeoutInMillis: 29000
+  DefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HTTPAPI
+      RouteKey: '$default'
+      Target: !Sub integrations/${HTTPIntegration}
+  DefaultStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HTTPAPI
+      StageName: '$default'
+      AutoDeploy: true
+
+Outputs:
+  APIBaseURL:
+    Value: !Sub https://${HTTPAPI}.execute-api.${AWS::Region}.${AWS::URLSuffix}
+  ECSClusterName:
+    Value: !Ref ECSCluster
+  APIServiceName:
+    Value: !GetAtt APIService.Name
+  WorkerServiceName:
+    Value: !GetAtt WorkerService.Name
+  IoTCredentialProviderEndpoint:
+    Value: !Ref IoTCredentialProviderEndpoint
+  IoTDataEndpointCommand:
+    Value: aws iot describe-endpoint --endpoint-type iot:Data-ATS
+  DevicePolicyName:
+    Value: !Ref DevicePolicy
+  DeviceRoleAlias:
+    Value: !Ref DeviceRoleAlias
+  MediaBucketName:
+    Value: !Ref MediaBucket
+  IngestQueueURL:
+    Value: !Ref IngestQueue
