@@ -40,6 +40,20 @@ func TestMigrateCreatesRequiredTablesAndGlobalBindingConstraint(t *testing.T) {
 			t.Fatalf("table %s does not exist", table)
 		}
 	}
+	for _, column := range []string{"presence_online", "presence_updated_at", "last_seen_at"} {
+		var exists bool
+		if err := pool.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM information_schema.columns
+				WHERE table_schema='public' AND table_name='devices' AND column_name=$1
+			)
+		`, column).Scan(&exists); err != nil {
+			t.Fatalf("check devices.%s: %v", column, err)
+		}
+		if !exists {
+			t.Fatalf("devices.%s does not exist", column)
+		}
+	}
 
 	deviceID := "018f0000-0000-7000-8000-000000000001"
 	_, err = pool.Exec(ctx, `

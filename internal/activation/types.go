@@ -96,6 +96,8 @@ type Device struct {
 	Endpoint              string
 	BindingExternalUserID string
 	Status                string
+	Online                bool
+	LastSeenAt            *time.Time
 }
 
 type Record struct {

@@ -23,6 +23,10 @@ type Service struct {
 	now         func() time.Time
 }
 
+// The device publishes status every 60 seconds. Three missed heartbeats fail closed to offline
+// even if an MQTT LWT or its SQS delivery is lost.
+const deviceOnlineFreshness = 3 * time.Minute
+
 func NewService() *Service {
 	return NewServiceWithRepository(nil, NewMemoryRepository())
 }
@@ -192,7 +196,17 @@ func (service *Service) ListDevicesForBinding(ctx context.Context, internalAppID
 	if service.repository == nil || internalAppID == "" {
 		return nil, ErrInvalidInput
 	}
-	return service.repository.ListDevices(ctx, internalAppID, externalUserID)
+	devices, err := service.repository.ListDevices(ctx, internalAppID, externalUserID)
+	if err != nil {
+		return nil, err
+	}
+	oldestFreshPresence := service.now().Add(-deviceOnlineFreshness)
+	for index := range devices {
+		if devices[index].LastSeenAt == nil || devices[index].LastSeenAt.Before(oldestFreshPresence) {
+			devices[index].Online = false
+		}
+	}
+	return devices, nil
 }
 
 func (service *Service) authorize(record Record, code string, expectedMethod Method) error {

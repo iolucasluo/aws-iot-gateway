@@ -237,7 +237,8 @@ func (repository *ActivationRepository) CompleteActivation(ctx context.Context, 
 
 func (repository *ActivationRepository) ListDevices(ctx context.Context, internalAppID, externalUserID string) ([]activation.Device, error) {
 	rows, err := repository.pool.Query(ctx, `
-		SELECT d.device_sn, a.id::text, d.aws_iot_endpoint, b.binding_external_user_id, 'provisioned'
+		SELECT d.device_sn, a.id::text, d.aws_iot_endpoint, b.binding_external_user_id, 'provisioned',
+		       d.presence_online, d.last_seen_at
 		FROM bindings b
 		JOIN devices d ON d.id=b.device_id
 		JOIN activations a ON a.device_id=d.id AND a.status='activated'
@@ -251,7 +252,10 @@ func (repository *ActivationRepository) ListDevices(ctx context.Context, interna
 	devices := make([]activation.Device, 0)
 	for rows.Next() {
 		var device activation.Device
-		if err := rows.Scan(&device.ID, &device.ActivationID, &device.Endpoint, &device.BindingExternalUserID, &device.Status); err != nil {
+		if err := rows.Scan(
+			&device.ID, &device.ActivationID, &device.Endpoint, &device.BindingExternalUserID,
+			&device.Status, &device.Online, &device.LastSeenAt,
+		); err != nil {
 			return nil, fmt.Errorf("scan bound device: %w", err)
 		}
 		devices = append(devices, device)

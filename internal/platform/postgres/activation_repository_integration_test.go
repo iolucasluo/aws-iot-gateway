@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/activation"
@@ -88,11 +89,20 @@ func TestActivationRepositorySurvivesServiceRestartAndCreatesBinding(t *testing.
 	if confirmed.Status != activation.StatusActivated || confirmed.DeviceSN != installation.DeviceID {
 		t.Fatalf("confirmed = %#v", confirmed)
 	}
+	presenceRepository, err := NewEventRepository(pool)
+	if err != nil {
+		t.Fatalf("NewEventRepository() error = %v", err)
+	}
+	presenceAt := time.Now().UTC().Truncate(time.Millisecond)
+	if err := presenceRepository.UpdatePresence(ctx, installation.DeviceID, true, presenceAt); err != nil {
+		t.Fatalf("UpdatePresence() error = %v", err)
+	}
 	devices, err := restartedAgain.ListDevicesForBinding(ctx, "livpet-staging", "user-persistent")
 	if err != nil {
 		t.Fatalf("ListDevicesForBinding() error = %v", err)
 	}
-	if len(devices) != 1 || devices[0].ID != installation.DeviceID {
+	if len(devices) != 1 || devices[0].ID != installation.DeviceID || !devices[0].Online ||
+		devices[0].LastSeenAt == nil || !devices[0].LastSeenAt.Equal(presenceAt) {
 		t.Fatalf("devices = %#v", devices)
 	}
 

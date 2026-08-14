@@ -81,6 +81,33 @@ func TestRuntimeRepositoriesPersistCommandMediaEventAndWebhookOutbox(t *testing.
 	}
 
 	eventRepository, _ := NewEventRepository(pool)
+	statusAt := time.Date(2026, 8, 14, 10, 0, 0, 0, time.UTC)
+	offlineAt := statusAt.Add(time.Minute)
+	if err := eventRepository.UpdatePresence(ctx, deviceSN, true, statusAt); err != nil {
+		t.Fatalf("store online presence: %v", err)
+	}
+	if err := eventRepository.UpdatePresence(ctx, deviceSN, false, offlineAt); err != nil {
+		t.Fatalf("store offline presence: %v", err)
+	}
+	if err := eventRepository.UpdatePresence(ctx, deviceSN, true, statusAt.Add(-time.Minute)); err != nil {
+		t.Fatalf("ignore reordered presence: %v", err)
+	}
+	if err := eventRepository.UpdatePresence(ctx, deviceSN, true, offlineAt); err != nil {
+		t.Fatalf("ignore same-timestamp heartbeat after LWT: %v", err)
+	}
+	var presenceOnline bool
+	var presenceUpdatedAt, lastSeenAt time.Time
+	if err := pool.QueryRow(ctx, `
+		SELECT presence_online, presence_updated_at, last_seen_at FROM devices WHERE id=$1
+	`, deviceID).Scan(&presenceOnline, &presenceUpdatedAt, &lastSeenAt); err != nil {
+		t.Fatalf("read device presence: %v", err)
+	}
+	if presenceOnline || !presenceUpdatedAt.Equal(offlineAt) || !lastSeenAt.Equal(statusAt) {
+		t.Fatalf("presence = online:%t updated:%s last_seen:%s", presenceOnline, presenceUpdatedAt, lastSeenAt)
+	}
+	if err := eventRepository.UpdatePresence(ctx, "fdr-unknown", true, statusAt); err == nil {
+		t.Fatal("UpdatePresence() accepted an unknown device")
+	}
 	occurredAt := time.Now().UTC()
 	if err := eventRepository.Store(ctx, events.Event{
 		ID: "038f0000-0000-7000-8000-000000000030", DeviceSN: deviceSN,

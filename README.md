@@ -18,11 +18,13 @@
 
 ## 进程与依赖
 
-- PostgreSQL：activation、binding、token、设备、命令、事件、媒体和 outbox 的权威状态。
+- PostgreSQL：activation、binding、token、设备、presence、命令、事件、媒体和 outbox 的权威状态。
 - Redis：跨 API 副本 nonce 与限流协调，不是业务权威存储。
 - AWS IoT Core：ThingName、MQTT client ID 和运行 `device_sn` 使用 Gateway 首次激活时生成的同一随机值。
 - AWS KMS：独立 P-256 key 只签固定的 device-time COSE payload；Redis 对该公共窄路由做跨副本限流。
 - `cmd/aws-iot-gateway-worker` 消费 IoT Rule → SQS 事件，并处理 lifecycle 与 Webhook outbox。
+- worker 同时消费设备 60 秒 `status` 心跳和 MQTT LWT，按 AWS IoT 接收时间防乱序写入 presence；
+  设备列表在连续三次心跳缺失后 fail closed 为离线，不再把陈旧 Shadow 当作连接状态。
 - KVS 与 S3：提供受 binding 约束的 WebRTC、快照、录像和喂食音频能力。
 
 隔离的 dev/staging IaC 位于 `deploy/cloudformation/`。内部 API 仍走 API Gateway → VPC Link → private NLB；另一个公开 ALB 的 HTTP listener 只转发精确的 `/api/v1/device-time/bootstrap`，默认拒绝其他 path。两者共用双 API ECS，后台为双 worker ECS、RDS PostgreSQL、ElastiCache Redis、SQS/DLQ、IoT Rule、KVS、S3 和独立 KMS time signer。它不是生产部署基线。

@@ -271,6 +271,32 @@ Resources:
               QueueUrl: !Ref IngestQueue
               RoleArn: !GetAtt IoTRuleRole.Arn
               UseBase64: false
+  DeviceStatusRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: !Sub aws_iot_gateway_${EnvironmentName}_device_status
+      TopicRulePayload:
+        AwsIotSqlVersion: '2016-03-23'
+        RuleDisabled: false
+        Sql: !Sub "SELECT online, topic() AS topic, timestamp() AS received_at_ms FROM 'dt/aws-iot-gateway-${EnvironmentName}/+/status'"
+        Actions:
+          - Sqs:
+              QueueUrl: !Ref IngestQueue
+              RoleArn: !GetAtt IoTRuleRole.Arn
+              UseBase64: false
+  DeviceLWTRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: !Sub aws_iot_gateway_${EnvironmentName}_device_lwt
+      TopicRulePayload:
+        AwsIotSqlVersion: '2016-03-23'
+        RuleDisabled: false
+        Sql: !Sub "SELECT online, topic() AS topic, timestamp() AS received_at_ms FROM 'dt/aws-iot-gateway-${EnvironmentName}/+/lwt'"
+        Actions:
+          - Sqs:
+              QueueUrl: !Ref IngestQueue
+              RoleArn: !GetAtt IoTRuleRole.Arn
+              UseBase64: false
 
   DeviceKVSRole:
     Type: AWS::IAM::Role

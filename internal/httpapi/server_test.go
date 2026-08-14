@@ -217,20 +217,45 @@ func TestInternalAPIRequiresHMACForOpenAPIPath(t *testing.T) {
 	}
 }
 
-func TestShadowPresencePreservesOpenAPIListFields(t *testing.T) {
+type httpDeviceListRepository struct {
+	activation.Repository
+	devices []activation.Device
+}
+
+func (repository *httpDeviceListRepository) ListDevices(context.Context, string, string) ([]activation.Device, error) {
+	return append([]activation.Device(nil), repository.devices...), nil
+}
+
+func TestDeviceListUsesPersistedPresenceWithoutRequiringShadow(t *testing.T) {
 	t.Parallel()
 
-	online, lastSeenAt := shadowPresence(map[string]any{
-		"state":     map[string]any{"reported": map[string]any{"online": true}},
-		"timestamp": float64(1_786_689_289),
-	})
-	if !online || lastSeenAt != "2026-08-14T06:34:49Z" {
-		t.Fatalf("shadowPresence() = %v %q", online, lastSeenAt)
+	now := time.Now().UTC().Truncate(time.Second)
+	repository := &httpDeviceListRepository{devices: []activation.Device{{
+		ID: "fdr-0001", ActivationID: "018f0000-0000-7000-8000-000000000001",
+		Endpoint: "example-ats.iot.ap-east-1.amazonaws.com", BindingExternalUserID: "user-1",
+		Status: "provisioned", Online: true, LastSeenAt: &now,
+	}}}
+	handler := newSignedTestHandler(t, activation.NewServiceWithRepository(nil, repository), now)
+	request := signedInternalRequest(t, now, "nonce-presence-001", http.MethodPost,
+		"/api/v1/openapi/devices/list", []byte(`{"binding_external_user_id":"user-1"}`))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("devices/list status = %d: %s", response.Code, response.Body.String())
 	}
-
-	online, lastSeenAt = shadowPresence(map[string]any{"state": map[string]any{}})
-	if online || lastSeenAt != "" {
-		t.Fatalf("incomplete shadowPresence() = %v %q", online, lastSeenAt)
+	var result struct {
+		Devices []struct {
+			DeviceSN   string `json:"device_sn"`
+			Online     bool   `json:"online"`
+			LastSeenAt string `json:"last_seen_at"`
+		} `json:"devices"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode devices/list: %v", err)
+	}
+	if len(result.Devices) != 1 || result.Devices[0].DeviceSN != "fdr-0001" ||
+		!result.Devices[0].Online || result.Devices[0].LastSeenAt != now.Format(time.RFC3339) {
+		t.Fatalf("devices/list = %#v", result.Devices)
 	}
 }
 

@@ -24,6 +24,24 @@ func (repository *eventRepositoryStub) Store(_ context.Context, event Event) err
 	return nil
 }
 
+func (*eventRepositoryStub) UpdatePresence(context.Context, string, bool, time.Time) error {
+	return nil
+}
+
+type presenceRepositoryStub struct {
+	eventRepositoryStub
+	deviceSN   string
+	online     bool
+	observedAt time.Time
+}
+
+func (repository *presenceRepositoryStub) UpdatePresence(_ context.Context, deviceSN string, online bool, observedAt time.Time) error {
+	repository.deviceSN = deviceSN
+	repository.online = online
+	repository.observedAt = observedAt
+	return nil
+}
+
 func TestIngestRoutesCommandACKByExactEnvironmentTopic(t *testing.T) {
 	t.Parallel()
 	sink := &ackSinkStub{}
@@ -65,6 +83,41 @@ func TestIngestStoresCanonicalDeviceEvent(t *testing.T) {
 	}
 }
 
+func TestIngestRoutesStatusAndLWTToPresenceRepository(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name           string
+		payload        string
+		wantOnline     bool
+		wantObservedAt int64
+	}{
+		{
+			name: "status heartbeat", wantOnline: true, wantObservedAt: 1786704179000,
+			payload: `{"topic":"dt/aws-iot-gateway-staging/fdr-0001/status","online":true,"received_at_ms":1786704179000}`,
+		},
+		{
+			name: "last will", wantOnline: false, wantObservedAt: 1786704239000,
+			payload: `{"topic":"dt/aws-iot-gateway-staging/fdr-0001/lwt","online":false,"received_at_ms":1786704239000}`,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			repository := &presenceRepositoryStub{}
+			service, err := NewIngestService("aws-iot-gateway-staging", &ackSinkStub{}, repository)
+			if err != nil {
+				t.Fatalf("NewIngestService() error = %v", err)
+			}
+			if err := service.Handle(context.Background(), []byte(testCase.payload)); err != nil {
+				t.Fatalf("Handle() error = %v", err)
+			}
+			if repository.deviceSN != "fdr-0001" || repository.online != testCase.wantOnline ||
+				repository.observedAt.UnixMilli() != testCase.wantObservedAt {
+				t.Fatalf("presence = %q/%t/%s", repository.deviceSN, repository.online, repository.observedAt)
+			}
+		})
+	}
+}
+
 func TestIngestRejectsCrossEnvironmentAndMalformedIdentity(t *testing.T) {
 	t.Parallel()
 	service, err := NewIngestService("aws-iot-gateway-staging", &ackSinkStub{}, &eventRepositoryStub{})
@@ -74,6 +127,8 @@ func TestIngestRejectsCrossEnvironmentAndMalformedIdentity(t *testing.T) {
 	for _, payload := range []string{
 		`{"topic":"cmd/another-env/fdr-0001/res","session_id":"session-1","code":0}`,
 		`{"topic":"dt/aws-iot-gateway-staging/fdr-0001/event","event_id":"not-a-uuid","event_type":"feed_done","boot_id":"boot","event_seq":1,"data":{}}`,
+		`{"topic":"dt/aws-iot-gateway-staging/fdr-0001/status","online":false,"received_at_ms":1786704179000}`,
+		`{"topic":"dt/aws-iot-gateway-staging/fdr-0001/lwt","online":false}`,
 	} {
 		if err := service.Handle(context.Background(), []byte(payload)); err == nil {
 			t.Fatalf("Handle() accepted %s", payload)

@@ -23,6 +23,34 @@ func NewEventRepository(pool *pgxpool.Pool) (*EventRepository, error) {
 	return &EventRepository{pool: pool}, nil
 }
 
+func (repository *EventRepository) UpdatePresence(ctx context.Context, deviceSN string, online bool, observedAt time.Time) error {
+	commandTag, err := repository.pool.Exec(ctx, `
+		UPDATE devices
+		SET presence_online=$2,
+		    presence_updated_at=$3,
+		    last_seen_at=CASE WHEN $2 THEN GREATEST(COALESCE(last_seen_at,$3),$3) ELSE last_seen_at END,
+		    updated_at=now()
+		WHERE device_sn=$1 AND (
+			presence_updated_at IS NULL OR presence_updated_at<$3 OR
+			(presence_updated_at=$3 AND presence_online AND NOT $2)
+		)
+	`, deviceSN, online, observedAt)
+	if err != nil {
+		return fmt.Errorf("update device presence: %w", err)
+	}
+	if commandTag.RowsAffected() > 0 {
+		return nil
+	}
+	var exists bool
+	if err := repository.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM devices WHERE device_sn=$1)`, deviceSN).Scan(&exists); err != nil {
+		return fmt.Errorf("check presence device: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("update presence for unknown device")
+	}
+	return nil
+}
+
 func (repository *EventRepository) Store(ctx context.Context, event events.Event) error {
 	transaction, err := repository.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {

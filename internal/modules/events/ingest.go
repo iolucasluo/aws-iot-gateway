@@ -40,6 +40,15 @@ type EventRepository interface {
 	Store(context.Context, Event) error
 }
 
+type PresenceRepository interface {
+	UpdatePresence(context.Context, string, bool, time.Time) error
+}
+
+type IngestRepository interface {
+	EventRepository
+	PresenceRepository
+}
+
 type EventReader interface {
 	List(context.Context, string, string, int) ([]Event, error)
 }
@@ -61,10 +70,10 @@ func (service *QueryService) List(ctx context.Context, deviceID, eventType strin
 type IngestService struct {
 	namespace  string
 	ackSink    ACKSink
-	repository EventRepository
+	repository IngestRepository
 }
 
-func NewIngestService(namespace string, ackSink ACKSink, repository EventRepository) (*IngestService, error) {
+func NewIngestService(namespace string, ackSink ACKSink, repository IngestRepository) (*IngestService, error) {
 	if !namespacePattern.MatchString(namespace) || ackSink == nil || repository == nil {
 		return nil, fmt.Errorf("event ingest requires a namespace, ACK sink, and repository")
 	}
@@ -95,6 +104,15 @@ func (service *IngestService) Handle(ctx context.Context, payload []byte) error 
 		}
 		delete(message, "topic")
 		return service.ackSink.Store(ctx, deviceSN, sessionID, message, ackRetention)
+	}
+	if parts[0] == "dt" && (parts[3] == "status" || parts[3] == "lwt") {
+		online, onlineOK := message["online"].(bool)
+		receivedAtMS, timestampOK := integer(message["received_at_ms"])
+		expectedOnline := parts[3] == "status"
+		if !onlineOK || online != expectedOnline || !timestampOK || receivedAtMS <= 0 {
+			return fmt.Errorf("device presence message is invalid")
+		}
+		return service.repository.UpdatePresence(ctx, deviceSN, online, time.UnixMilli(receivedAtMS).UTC())
 	}
 	if parts[0] != "dt" || parts[3] != "event" {
 		return fmt.Errorf("unsupported IoT ingest topic")

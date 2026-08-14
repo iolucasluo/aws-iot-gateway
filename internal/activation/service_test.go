@@ -229,6 +229,39 @@ func TestListDevicesForUserShowsOnlyActivatedInstallations(t *testing.T) {
 	}
 }
 
+type deviceListRepositoryStub struct {
+	Repository
+	devices []Device
+}
+
+func (repository *deviceListRepositoryStub) ListDevices(context.Context, string, string) ([]Device, error) {
+	return append([]Device(nil), repository.devices...), nil
+}
+
+func TestDeviceListExpiresStaleOnlinePresence(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	fresh := now.Add(-2 * time.Minute)
+	stale := now.Add(-4 * time.Minute)
+	lastWill := now.Add(-time.Minute)
+	repository := &deviceListRepositoryStub{devices: []Device{
+		{ID: "fresh", Online: true, LastSeenAt: &fresh},
+		{ID: "stale", Online: true, LastSeenAt: &stale},
+		{ID: "lwt", Online: false, LastSeenAt: &lastWill},
+	}}
+	service := NewServiceWithRepository(nil, repository)
+	service.now = func() time.Time { return now }
+
+	devices, err := service.ListDevicesForBinding(context.Background(), "demo-staging", "user-1")
+	if err != nil {
+		t.Fatalf("ListDevicesForBinding() error = %v", err)
+	}
+	if len(devices) != 3 || !devices[0].Online || devices[1].Online || devices[2].Online {
+		t.Fatalf("devices = %#v", devices)
+	}
+}
+
 type fakeProvisioner struct{}
 
 func (fakeProvisioner) Provision(_ context.Context, deviceSN, _ string) (PreparedIdentity, error) {
