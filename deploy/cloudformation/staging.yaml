@@ -409,6 +409,9 @@ Resources:
                   - kinesisvideo:GetIceServerConfig
                 Resource: '*'
               - Effect: Allow
+                Action: kinesisvideo:ConnectAsViewer
+                Resource: !Sub arn:${AWS::Partition}:kinesisvideo:${AWS::Region}:${AWS::AccountId}:channel/aws-iot-gateway-${EnvironmentName}-*
+              - Effect: Allow
                 Action: [s3:GetObject, s3:PutObject]
                 Resource: !Sub ${MediaBucket.Arn}/*
               - Effect: Allow
