@@ -174,6 +174,23 @@ func TestInternalAPIRequiresHMACForOpenAPIPath(t *testing.T) {
 	}
 }
 
+func TestShadowPresencePreservesOpenAPIListFields(t *testing.T) {
+	t.Parallel()
+
+	online, lastSeenAt := shadowPresence(map[string]any{
+		"state":     map[string]any{"reported": map[string]any{"online": true}},
+		"timestamp": float64(1_786_689_289),
+	})
+	if !online || lastSeenAt != "2026-08-14T06:34:49Z" {
+		t.Fatalf("shadowPresence() = %v %q", online, lastSeenAt)
+	}
+
+	online, lastSeenAt = shadowPresence(map[string]any{"state": map[string]any{}})
+	if online || lastSeenAt != "" {
+		t.Fatalf("incomplete shadowPresence() = %v %q", online, lastSeenAt)
+	}
+}
+
 func TestLivPetDeviceRoutesReachTheCompatibleDeviceOperationHandler(t *testing.T) {
 	t.Parallel()
 	now := time.UnixMilli(1_718_000_000_000)

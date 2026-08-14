@@ -543,11 +543,18 @@ func (s server) listDevices(writer http.ResponseWriter, request *http.Request) {
 				continue
 			}
 		}
+		online, lastSeenAt := false, ""
+		if s.device != nil {
+			if shadow, shadowErr := s.device.GetShadow(request.Context(), device.ID); shadowErr == nil {
+				online, lastSeenAt = shadowPresence(shadow)
+			}
+		}
 		response = append(response, map[string]any{
 			"device_sn": device.ID, "pid": "feeder-x1", "status": device.Status,
 			"nickname": "", "is_subscription": false,
 			"activation_id": device.ActivationID, "aws_iot_endpoint": device.Endpoint,
 			"binding_external_user_id": device.BindingExternalUserID,
+			"online":                   online, "last_seen_at": lastSeenAt,
 		})
 	}
 	if body.Offset >= len(response) {
@@ -559,6 +566,27 @@ func (s server) listDevices(writer http.ResponseWriter, request *http.Request) {
 		response = response[:body.Limit]
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"devices": response})
+}
+
+func shadowPresence(value any) (bool, string) {
+	shadow, ok := value.(map[string]any)
+	if !ok {
+		return false, ""
+	}
+	state, ok := shadow["state"].(map[string]any)
+	if !ok {
+		return false, ""
+	}
+	reported, ok := state["reported"].(map[string]any)
+	if !ok {
+		return false, ""
+	}
+	online, _ := reported["online"].(bool)
+	timestamp, ok := shadow["timestamp"].(float64)
+	if !ok || timestamp <= 0 {
+		return online, ""
+	}
+	return online, time.Unix(int64(timestamp), 0).UTC().Format(time.RFC3339)
 }
 
 func (s server) issueDeviceToken(writer http.ResponseWriter, request *http.Request) {
