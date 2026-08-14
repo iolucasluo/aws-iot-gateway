@@ -25,6 +25,8 @@ var (
 	ErrSigningFailed   = errors.New("KVS signaling URL signing failed")
 )
 
+const maxWSSPresignTTL = 299 * time.Second
+
 type ICEServer struct {
 	URLs       any    `json:"urls"`
 	Username   string `json:"username,omitempty"`
@@ -185,6 +187,9 @@ func (client *Client) iceServers(ctx context.Context, endpoint, channelARN, view
 }
 
 func (client *Client) signWSS(ctx context.Context, endpoint, channelARN, viewerClientID string, ttl time.Duration) (string, time.Time, error) {
+	if ttl > maxWSSPresignTTL {
+		ttl = maxWSSPresignTTL
+	}
 	credentials, err := client.config.Credentials.Retrieve(ctx)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("retrieve AWS credentials: %w", err)
