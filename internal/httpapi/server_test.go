@@ -129,6 +129,31 @@ func TestInternalAPIIssuesAndRevokesCompatibleDeviceToken(t *testing.T) {
 	}
 }
 
+func TestInternalAPIRecommissionEchoesAndAppliesFullResetScope(t *testing.T) {
+	t.Parallel()
+
+	now := time.UnixMilli(1_718_000_000_000)
+	repository := &httpBindingRepository{binding: binding.Binding{
+		ID: "018f0000-0000-7000-8000-000000000002", DeviceID: "018f0000-0000-7000-8000-000000000001",
+		DeviceSN: "fdr-00000000000000000000000000000001", InternalAppID: "livpet-staging", Active: true,
+	}}
+	bindingService := binding.NewService(repository, func() (string, error) { return "device-token-recommission", nil },
+		func() time.Time { return now }, httpRecommissioner{})
+	if _, err := bindingService.IssueToken(context.Background(), "livpet-staging", repository.binding.DeviceSN); err != nil {
+		t.Fatalf("IssueToken() error = %v", err)
+	}
+	handler := newSignedTestHandler(t, activation.NewService(), now, Dependencies{Binding: bindingService})
+	path := "/api/v1/openapi/devices/recommission/device-token-recommission"
+	request := signedInternalRequest(t, now, "nonce-recommission1", http.MethodPost, path,
+		[]byte(`{"reset_scope":"all"}`))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!bytes.Contains(response.Body.Bytes(), []byte(`"reset_scope":"all"`)) || repository.binding.Active {
+		t.Fatalf("recommission(all) = %d %s, active=%t", response.Code, response.Body.String(), repository.binding.Active)
+	}
+}
+
 func TestInternalAPICommandRequiresDeviceTokenAndPreservesLivPetResult(t *testing.T) {
 	t.Parallel()
 	now := time.UnixMilli(1_718_000_000_000)
@@ -441,6 +466,10 @@ type httpBindingRepository struct {
 }
 
 type httpPublisher struct{}
+
+type httpRecommissioner struct{}
+
+func (httpRecommissioner) Reset(context.Context, binding.Binding, string) error { return nil }
 
 func (*httpPublisher) Publish(context.Context, string, []byte) error { return nil }
 

@@ -50,7 +50,7 @@ func (repository *repositoryStub) ReleaseBinding(_ context.Context, bindingID, _
 
 type recommissionerStub struct{ err error }
 
-func (recommissioner recommissionerStub) ResetRuntime(context.Context, Binding) error {
+func (recommissioner recommissionerStub) Reset(context.Context, Binding, string) error {
 	return recommissioner.err
 }
 
@@ -122,6 +122,42 @@ func TestRecommissionKeepsBindingUntilRuntimeResetACK(t *testing.T) {
 	}
 	if !repository.released {
 		t.Fatal("binding was not released after device ACK")
+	}
+}
+
+func TestRecommissionAcceptsFullResetAfterDeviceACK(t *testing.T) {
+	t.Parallel()
+
+	repository := &repositoryStub{binding: testBinding()}
+	service := NewService(repository, func() (string, error) { return "plain-device-token", nil }, time.Now,
+		recommissionerStub{})
+	issued, err := service.IssueToken(context.Background(), "livpet-staging", repository.binding.DeviceSN)
+	if err != nil {
+		t.Fatalf("IssueToken() error = %v", err)
+	}
+	if _, err := service.Recommission(context.Background(), "livpet-staging", issued.DeviceToken, "all"); err != nil {
+		t.Fatalf("Recommission(all) error = %v", err)
+	}
+	if !repository.released {
+		t.Fatal("binding was not released after full-reset ACK")
+	}
+}
+
+func TestRecommissionKeepsBindingWhenFullResetACKFails(t *testing.T) {
+	t.Parallel()
+
+	repository := &repositoryStub{binding: testBinding()}
+	service := NewService(repository, func() (string, error) { return "plain-device-token", nil }, time.Now,
+		recommissionerStub{err: errors.New("ack timeout")})
+	issued, err := service.IssueToken(context.Background(), "livpet-staging", repository.binding.DeviceSN)
+	if err != nil {
+		t.Fatalf("IssueToken() error = %v", err)
+	}
+	if _, err := service.Recommission(context.Background(), "livpet-staging", issued.DeviceToken, "all"); !errors.Is(err, ErrRecommissionUnavailable) {
+		t.Fatalf("Recommission(all) error = %v", err)
+	}
+	if repository.released {
+		t.Fatal("binding was released without full-reset ACK")
 	}
 }
 

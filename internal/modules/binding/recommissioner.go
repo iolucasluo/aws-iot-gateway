@@ -21,9 +21,15 @@ func NewDeviceRecommissioner(commander DeviceCommander) (*DeviceRecommissioner, 
 	return &DeviceRecommissioner{commander: commander}, nil
 }
 
-func (recommissioner *DeviceRecommissioner) ResetRuntime(ctx context.Context, binding Binding) error {
-	value, _ := json.Marshal(map[string]any{"reset_scope": "runtime"})
-	_, err := recommissioner.commander.SendCommands(
+func (recommissioner *DeviceRecommissioner) Reset(ctx context.Context, binding Binding, resetScope string) error {
+	if resetScope != "runtime" && resetScope != "all" {
+		return ErrInvalidInput
+	}
+	value, err := json.Marshal(map[string]any{"reset_scope": resetScope})
+	if err != nil {
+		return fmt.Errorf("encode recommission command: %w", err)
+	}
+	_, err = recommissioner.commander.SendCommands(
 		ctx, binding.InternalAppID, binding.DeviceID, binding.DeviceSN,
 		[]device.CommandInput{{Code: "recommission", Value: value}}, true,
 	)

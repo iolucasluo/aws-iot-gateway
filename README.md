@@ -49,6 +49,10 @@
 
 设备子路由覆盖 detail、shadow、commands、schedules、events、streams、snapshots、recordings 和 feed-audio。Bearer `/v1/activations`、`/v1/devices` 和旧 `/v1/device-activations/{id}/*` 已从 router 删除。完整目标路由和阶段验收见根仓 `docs/2026-08-13-internal-aws-api-implementation-plan.md`。
 
+`recommission` 只接受 `reset_scope=runtime|all`：默认 `runtime` 仅清理 Wi-Fi 与运行身份，`all`
+还清理设备本地用户数据。两种 scope 都必须先取得设备 ACK，Gateway 才撤销 token、释放 binding
+并进入旧运行证书禁用流程；离线、超时、未知 scope 或 ACK 失败均保持 binding 有效。
+
 `POST .../{device_sn}/streams` 保留既有 `webrtc.v1` 能力协商：请求必须完整携带
 `requested_capabilities`，Gateway 将同一请求交给设备并校验设备 ACK；成功响应为 `201`，包含
 `stream_id`、`firmware_version`、`supported_capabilities`、`granted_capabilities`、短期

@@ -58,7 +58,7 @@ type Repository interface {
 }
 
 type Recommissioner interface {
-	ResetRuntime(context.Context, Binding) error
+	Reset(context.Context, Binding, string) error
 }
 
 type TokenGenerator func() (string, error)
@@ -133,7 +133,7 @@ func (service *Service) Unbind(ctx context.Context, internalAppID, token string)
 }
 
 func (service *Service) Recommission(ctx context.Context, internalAppID, token, resetScope string) (Binding, error) {
-	if resetScope != "runtime" {
+	if resetScope != "runtime" && resetScope != "all" {
 		return Binding{}, ErrInvalidInput
 	}
 	binding, err := service.bindingForToken(ctx, internalAppID, token)
@@ -143,7 +143,7 @@ func (service *Service) Recommission(ctx context.Context, internalAppID, token, 
 	if service.recommissioner == nil {
 		return Binding{}, ErrRecommissionUnavailable
 	}
-	if err := service.recommissioner.ResetRuntime(ctx, binding); err != nil {
+	if err := service.recommissioner.Reset(ctx, binding, resetScope); err != nil {
 		return Binding{}, fmt.Errorf("%w: %v", ErrRecommissionUnavailable, err)
 	}
 	finalizeContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), recommissionFinalizeTimeout)

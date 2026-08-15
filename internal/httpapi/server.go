@@ -649,7 +649,7 @@ func (s server) recommissionDevice(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"device_sn": released.DeviceSN, "unbound": true, "recommissioning": true, "reset_scope": "runtime",
+		"device_sn": released.DeviceSN, "unbound": true, "recommissioning": true, "reset_scope": body.ResetScope,
 	})
 }
 
