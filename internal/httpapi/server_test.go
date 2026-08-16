@@ -130,6 +130,96 @@ func TestInternalAPIIssuesAndRevokesCompatibleDeviceToken(t *testing.T) {
 	}
 }
 
+func TestInternalAPIAuthorizesBoundUserNetworkReconfiguration(t *testing.T) {
+	t.Parallel()
+
+	now := time.UnixMilli(1_718_000_000_000)
+	deviceSN := "fdr-00000000000000000000000000000001"
+	repository := &httpBindingRepository{binding: binding.Binding{
+		ID: "018f0000-0000-7000-8000-000000000002", DeviceID: "018f0000-0000-7000-8000-000000000001",
+		DeviceSN: deviceSN, InternalAppID: "livpet-staging", BindingExternalUserID: "user-42", Active: true,
+	}}
+	repository.token = binding.DeviceToken{
+		BindingID: repository.binding.ID, TokenHash: binding.HashToken("same-user-device-token"),
+		ExpiresAt: now.Add(time.Hour),
+	}
+	bindingService := binding.NewService(repository, nil, func() time.Time { return now }, nil)
+	handler := newSignedTestHandler(t, activation.NewService(), now, Dependencies{Binding: bindingService})
+	path := "/api/v1/openapi/devices/" + deviceSN + "/network-reconfiguration-authorizations"
+	body := []byte(`{"binding_external_user_id":"user-42","wifi_credentials_sha256":"0c8f371a2f7e8d9b4c717f22fea097fe53750c0c3c9705611ca4c58594e48fcc"}`)
+	request := signedInternalRequest(t, now, "nonce-network-auth1", http.MethodPost, path, body)
+	request.Header.Set("X-Device-Token", "same-user-device-token")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	var authorized map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &authorized); err != nil {
+		t.Fatalf("decode network reconfiguration authorization: %v", err)
+	}
+	if response.Code != http.StatusOK || len(authorized) != 2 || authorized["authorized"] != true ||
+		authorized["device_sn"] != deviceSN {
+		t.Fatalf("network reconfiguration authorization = %d %s", response.Code, response.Body.String())
+	}
+	if !repository.binding.Active || repository.binding.BindingExternalUserID != "user-42" {
+		t.Fatalf("authorization mutated binding = %#v", repository.binding)
+	}
+	replay := signedInternalRequest(t, now, "nonce-network-auth1", http.MethodPost, path, body)
+	replay.Header.Set("X-Device-Token", "same-user-device-token")
+	replayResponse := httptest.NewRecorder()
+	handler.ServeHTTP(replayResponse, replay)
+	if replayResponse.Code != http.StatusConflict ||
+		!bytes.Contains(replayResponse.Body.Bytes(), []byte(`"error_code":"nonce_replayed"`)) {
+		t.Fatalf("replayed authorization = %d %s", replayResponse.Code, replayResponse.Body.String())
+	}
+}
+
+func TestInternalAPIRejectsNetworkReconfigurationWithoutExactBindingProof(t *testing.T) {
+	t.Parallel()
+
+	now := time.UnixMilli(1_718_000_000_000)
+	deviceSN := "fdr-00000000000000000000000000000001"
+	repository := &httpBindingRepository{binding: binding.Binding{
+		ID: "018f0000-0000-7000-8000-000000000002", DeviceID: "018f0000-0000-7000-8000-000000000001",
+		DeviceSN: deviceSN, InternalAppID: "livpet-staging", BindingExternalUserID: "user-42", Active: true,
+	}}
+	repository.token = binding.DeviceToken{
+		BindingID: repository.binding.ID, TokenHash: binding.HashToken("same-user-device-token"),
+		ExpiresAt: now.Add(time.Hour),
+	}
+	bindingService := binding.NewService(repository, nil, func() time.Time { return now }, nil)
+	handler := newSignedTestHandler(t, activation.NewService(), now, Dependencies{Binding: bindingService})
+	path := "/api/v1/openapi/devices/" + deviceSN + "/network-reconfiguration-authorizations"
+
+	for _, testCase := range []struct {
+		name, body, token, path string
+		want                    int
+	}{
+		{name: "missing token", body: `{"binding_external_user_id":"user-42","wifi_credentials_sha256":"0c8f371a2f7e8d9b4c717f22fea097fe53750c0c3c9705611ca4c58594e48fcc"}`, want: http.StatusUnauthorized},
+		{name: "wrong token", body: `{"binding_external_user_id":"user-42","wifi_credentials_sha256":"0c8f371a2f7e8d9b4c717f22fea097fe53750c0c3c9705611ca4c58594e48fcc"}`, token: "wrong-device-token", want: http.StatusForbidden},
+		{name: "wrong device", body: `{"binding_external_user_id":"user-42","wifi_credentials_sha256":"0c8f371a2f7e8d9b4c717f22fea097fe53750c0c3c9705611ca4c58594e48fcc"}`, token: "same-user-device-token", path: "/api/v1/openapi/devices/fdr-wrong/network-reconfiguration-authorizations", want: http.StatusForbidden},
+		{name: "wrong user", body: `{"binding_external_user_id":"user-43","wifi_credentials_sha256":"0c8f371a2f7e8d9b4c717f22fea097fe53750c0c3c9705611ca4c58594e48fcc"}`, token: "same-user-device-token", want: http.StatusForbidden},
+		{name: "invalid digest", body: `{"binding_external_user_id":"user-42","wifi_credentials_sha256":"not-a-sha256"}`, token: "same-user-device-token", want: http.StatusBadRequest},
+		{name: "unknown field", body: `{"binding_external_user_id":"user-42","wifi_credentials_sha256":"0c8f371a2f7e8d9b4c717f22fea097fe53750c0c3c9705611ca4c58594e48fcc","admin":true}`, token: "same-user-device-token", want: http.StatusBadRequest},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			requestPath := testCase.path
+			if requestPath == "" {
+				requestPath = path
+			}
+			request := signedInternalRequest(t, now, "nonce-network-"+strings.ReplaceAll(testCase.name, " ", "-"), http.MethodPost, requestPath, []byte(testCase.body))
+			if testCase.token != "" {
+				request.Header.Set("X-Device-Token", testCase.token)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != testCase.want {
+				t.Fatalf("status = %d, want %d: %s", response.Code, testCase.want, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestInternalAPIRecommissionEchoesAndAppliesFullResetScope(t *testing.T) {
 	t.Parallel()
 

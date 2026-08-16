@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +39,8 @@ type DeviceRuntimeConfig struct {
 	ShadowName         string
 	KVSChannelPrefix   string
 }
+
+var sha256HexPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 type Dependencies struct {
 	Binding              *binding.Service
@@ -146,7 +149,8 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		(operation == "snapshots" && len(parts) == 3 && request.Method == http.MethodGet) ||
 		(operation == "recordings" && len(parts) == 2 && (request.Method == http.MethodPost || request.Method == http.MethodGet)) ||
 		(operation == "recordings" && len(parts) == 3 && request.Method == http.MethodGet) ||
-		(operation == "feed-audio" && len(parts) == 2 && (request.Method == http.MethodPost || request.Method == http.MethodDelete))
+		(operation == "feed-audio" && len(parts) == 2 && (request.Method == http.MethodPost || request.Method == http.MethodDelete)) ||
+		(operation == "network-reconfiguration-authorizations" && len(parts) == 2 && request.Method == http.MethodPost)
 	if !recognized {
 		return false
 	}
@@ -170,6 +174,27 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		return true
 	}
 	switch operation {
+	case "network-reconfiguration-authorizations":
+		var body struct {
+			BindingExternalUserID string `json:"binding_external_user_id"`
+			WiFiCredentialsSHA256 string `json:"wifi_credentials_sha256"`
+		}
+		if !decodeJSON(writer, request, &body) {
+			return true
+		}
+		if body.BindingExternalUserID == "" ||
+			body.BindingExternalUserID != ownedBinding.BindingExternalUserID {
+			writeError(writer, http.StatusForbidden, "device_operation_forbidden", "device operation is forbidden")
+			return true
+		}
+		if !sha256HexPattern.MatchString(body.WiFiCredentialsSHA256) {
+			writeError(writer, http.StatusBadRequest, "invalid_request", "Wi-Fi credentials digest is invalid")
+			return true
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{
+			"authorized": true, "device_sn": ownedBinding.DeviceSN,
+		})
+		return true
 	case "detail":
 		writeJSON(writer, http.StatusOK, map[string]any{
 			"device_sn": ownedBinding.DeviceSN, "pid": "feeder-x1", "status": "provisioned",

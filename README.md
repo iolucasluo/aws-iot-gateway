@@ -48,6 +48,7 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 | `POST /api/v1/openapi/devices/unbind/{device_token}` | 内部 App backend | HMAC v1 |
 | `POST /api/v1/openapi/devices/recommission/{device_token}` | 内部 App backend | HMAC v1 |
 | `/api/v1/openapi/devices/{device_sn}/*` | 内部 App backend | HMAC v1 + `X-Device-Token` |
+| `POST /api/v1/openapi/devices/{device_sn}/network-reconfiguration-authorizations` | 已绑定设备换网转发 | HMAC v1 + `X-Device-Token` |
 | `POST /api/v1/device-activations/session/prepare-installation` | 设备 | activation code |
 | `POST /api/v1/device-activations/qr/prepare-installation` | 设备 | activation code |
 | `POST /api/v1/device-activations/confirm-installation` | 设备 | activation code + operational-key proof |
@@ -65,6 +66,19 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 `factory_reset(scope=wifi)` 以及缺失显式 scope 的 `factory_reset` 均返回 `400 invalid_request`，不会
 下发 MQTT；更换网络必须使用 ACK-based `recommission(runtime)`。`schedule`、`feed_log`、`settings`
 等不改变设备运行身份的 scope 继续走普通设备命令路径。
+
+物理按键恢复出厂只清除设备本地 Wi-Fi 与用户数据，不释放 binding，也不删除 `device_sn` 或 AWS IoT
+运行身份。原绑定用户重新配网时，App 将上述 `network-reconfiguration-authorizations` 请求连同该
+binding 的 `X-Device-Token` 预签名后交给设备；请求 body 包含 `binding_external_user_id` 与
+`wifi_credentials_sha256`，不上传 Wi-Fi 明文。Gateway 必须把前者与 active binding 精确比较；摘要
+固定为四个字段的 versioned length-prefixed 字节串的 SHA-256 小写 hex。字段顺序为 domain
+`ExploreX-Bound-WiFi-Reconfiguration-v1`、`device_sn`、`wifi_ssid`、`wifi_password`；每个字段先编码
+为 UTF-8，再在前面写 4 字节无符号大端字节长度。App 与设备都必须拒绝包含 U+0000 的字段。设备
+临时联网并原样转发，Gateway 只有在 HMAC、nonce、时效、外部用户 ID 和 device token 均属于当前
+active binding 时返回授权；该接口不创建 activation、不改 binding。跨语言 known-answer：`device_sn` =
+`fdr-00000000000000000000000000000001`、SSID = `Lab-WiFi`、password = `demo-pass` 时摘要为
+`0c8f371a2f7e8d9b4c717f22fea097fe53750c0c3c9705611ca4c58594e48fcc`。成功响应固定为
+`200 {"authorized":true,"device_sn":"<device_sn>"}`；拒绝沿用现有 Internal API 扁平兼容错误格式。
 
 `POST .../{device_sn}/streams` 保留既有 `webrtc.v1` 能力协商：新请求必须完整携带
 `requested_capabilities`，Gateway 将同一请求交给设备并校验设备 ACK；成功响应为 `201`，包含
