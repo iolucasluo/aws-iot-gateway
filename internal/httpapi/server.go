@@ -243,18 +243,42 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 			writeError(writer, http.StatusBadRequest, "invalid_request", "WebRTC stream requires wait_ack")
 			return true
 		}
-		if capabilities == nil || capabilities.VideoReceive == nil || capabilities.AudioReceive == nil ||
+		legacyLivPetStream := capabilities == nil
+		requested := media.StreamCapabilities{}
+		if capabilities == nil {
+			if body.WaitACK == nil {
+				writeError(writer, http.StatusBadRequest, "invalid_stream_capabilities", "legacy WebRTC stream requires explicit wait_ack")
+				return true
+			}
+			// LivPet's existing viewer always offers recvonly video and sendrecv audio,
+			// but predates the explicit webrtc.v1 capability request. Keep that exact
+			// wire shape compatible while still requiring the device's real ACK/grant.
+			requested = media.StreamCapabilities{
+				VideoReceive: true, AudioReceive: true, AudioSend: true, DataChannels: []string{},
+			}
+		} else if capabilities.VideoReceive == nil || capabilities.AudioReceive == nil ||
 			capabilities.AudioSend == nil || capabilities.DataChannels == nil {
 			writeError(writer, http.StatusBadRequest, "invalid_stream_capabilities", "requested_capabilities must contain all fields")
 			return true
-		}
-		result, err := s.media.Create(
-			request.Context(), principal.InternalAppID, ownedBinding.DeviceID, ownedBinding.ID, ownedBinding.DeviceSN,
-			media.StreamCapabilities{
+		} else {
+			requested = media.StreamCapabilities{
 				VideoReceive: *capabilities.VideoReceive, AudioReceive: *capabilities.AudioReceive,
 				AudioSend: *capabilities.AudioSend, DataChannels: *capabilities.DataChannels,
-			},
-		)
+			}
+		}
+		var result media.StreamResult
+		var err error
+		if legacyLivPetStream {
+			result, err = s.media.CreateExact(
+				request.Context(), principal.InternalAppID, ownedBinding.DeviceID, ownedBinding.ID, ownedBinding.DeviceSN,
+				requested,
+			)
+		} else {
+			result, err = s.media.Create(
+				request.Context(), principal.InternalAppID, ownedBinding.DeviceID, ownedBinding.ID, ownedBinding.DeviceSN,
+				requested,
+			)
+		}
 		if err != nil {
 			writeMediaError(writer, err)
 			return true
@@ -866,7 +890,7 @@ func writeMediaError(writer http.ResponseWriter, err error) {
 	case errors.Is(err, media.ErrInvalidCapabilities):
 		writeError(writer, http.StatusBadRequest, "invalid_stream_capabilities", "invalid requested stream capabilities")
 	case errors.Is(err, media.ErrStreamCapabilityUnavailable):
-		writeError(writer, http.StatusConflict, "stream_capability_unavailable", "device could not grant any requested stream capability")
+		writeError(writer, http.StatusConflict, "stream_capability_unavailable", "device could not grant the required stream capabilities")
 	case errors.Is(err, media.ErrStreamRejected):
 		writeError(writer, http.StatusConflict, "stream_rejected", "device rejected stream start")
 	case errors.Is(err, media.ErrStreamNotFound):

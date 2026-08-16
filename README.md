@@ -63,10 +63,12 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 或在批量命令中夹带该生命周期操作都会 fail closed，绑定保持有效。其他 `factory_reset` scope
 继续走普通设备命令路径。
 
-`POST .../{device_sn}/streams` 保留既有 `webrtc.v1` 能力协商：请求必须完整携带
+`POST .../{device_sn}/streams` 保留既有 `webrtc.v1` 能力协商：新请求必须完整携带
 `requested_capabilities`，Gateway 将同一请求交给设备并校验设备 ACK；成功响应为 `201`，包含
 `stream_id`、`firmware_version`、`supported_capabilities`、`granted_capabilities`、短期
-`signaling` 和 `ice_servers`。Gateway 不以固定默认能力伪造设备 ACK。
+`signaling` 和 `ice_servers`。LivPet 现有 backend 省略能力字段但明确 `wait_ack=true`，兼容层会按其
+实际 SDP 补成接收视频、双向音频且无 DataChannel，并要求设备完整授予；部分授予会撤销本次 viewer
+grant 并返回 409。该兼容映射仍以设备真实 ACK 为准，不伪造设备能力。
 
 ## 本地运行与验证
 

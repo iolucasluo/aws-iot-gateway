@@ -102,6 +102,25 @@ func (service *StreamService) Create(
 	internalAppID, deviceID, bindingID, deviceSN string,
 	requested StreamCapabilities,
 ) (StreamResult, error) {
+	return service.create(ctx, internalAppID, deviceID, bindingID, deviceSN, requested, false)
+}
+
+// CreateExact is for legacy viewers that cannot consume a granted-capability
+// subset. A partial grant is revoked before it can be returned as a usable stream.
+func (service *StreamService) CreateExact(
+	ctx context.Context,
+	internalAppID, deviceID, bindingID, deviceSN string,
+	requested StreamCapabilities,
+) (StreamResult, error) {
+	return service.create(ctx, internalAppID, deviceID, bindingID, deviceSN, requested, true)
+}
+
+func (service *StreamService) create(
+	ctx context.Context,
+	internalAppID, deviceID, bindingID, deviceSN string,
+	requested StreamCapabilities,
+	requireExactGrant bool,
+) (StreamResult, error) {
 	if service == nil || service.kvs == nil || service.commander == nil || service.repository == nil || service.newID == nil ||
 		strings.TrimSpace(internalAppID) == "" || strings.TrimSpace(deviceID) == "" || strings.TrimSpace(bindingID) == "" || strings.TrimSpace(deviceSN) == "" {
 		return StreamResult{}, ErrInvalidInput
@@ -133,6 +152,12 @@ func (service *StreamService) Create(
 	capabilityFacts, err := validateCapabilityACK(commandResult, viewerID, requested)
 	if err != nil {
 		return StreamResult{}, err
+	}
+	if requireExactGrant && !capabilitiesEqual(capabilityFacts.accepted, requested) {
+		stopValue, _ := json.Marshal(map[string]any{"type": "webrtc", "start": 0, "viewer_client_id": viewerID})
+		_, _ = service.commander.SendCommands(ctx, internalAppID, deviceID, deviceSN,
+			[]device.CommandInput{{Code: "stream", Value: stopValue}}, false)
+		return StreamResult{}, ErrStreamCapabilityUnavailable
 	}
 	stream := Stream{
 		ID: viewerID, DeviceID: deviceID, DeviceSN: deviceSN, BindingID: bindingID,
@@ -275,6 +300,10 @@ func capabilitiesSubset(subset, superset StreamCapabilities) bool {
 		}
 	}
 	return true
+}
+
+func capabilitiesEqual(left, right StreamCapabilities) bool {
+	return capabilitiesSubset(left, right) && capabilitiesSubset(right, left)
 }
 
 func stringValue(value any) string {

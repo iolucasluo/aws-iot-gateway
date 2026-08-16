@@ -30,16 +30,50 @@ type commanderStub struct {
 	input  device.CommandInput
 	ack    map[string]any
 	wait   bool
+	calls  int
 	result *device.SendCommandsResult
 }
 
 func (commander *commanderStub) SendCommands(_ context.Context, _, _, _ string, commands []device.CommandInput, waitACK bool) (device.SendCommandsResult, error) {
+	commander.calls++
 	commander.input = commands[0]
 	commander.wait = waitACK
 	if commander.result != nil {
 		return *commander.result, nil
 	}
 	return device.SendCommandsResult{Results: []device.CommandResult{{Status: "success", Data: commander.ack}}}, nil
+}
+
+func TestCreateExactStreamRejectsPartialGrantAndRevokesViewer(t *testing.T) {
+	t.Parallel()
+	commander := &commanderStub{ack: map[string]any{
+		"code": float64(0), "action": "stream", "type": "webrtc", "start": float64(1), "status": "ready",
+		"viewer_client_id": "viewer-1", "capability_contract_version": "webrtc.v1", "firmware_version": "v0.0.0",
+		"supported": map[string]any{
+			"video_receive": true, "audio_receive": true, "audio_send": true, "data_channels": []any{},
+		},
+		"accepted": map[string]any{
+			"video_receive": true, "audio_receive": false, "audio_send": false, "data_channels": []any{},
+		},
+	}}
+	repository := &streamRepositoryStub{}
+	service := NewStreamService(kvsStub{}, commander, repository, "aws-iot-gateway-staging-", func() (string, error) { return "viewer-1", nil })
+	requested := StreamCapabilities{VideoReceive: true, AudioReceive: true, AudioSend: true, DataChannels: []string{}}
+
+	_, err := service.CreateExact(context.Background(), "livpet-staging", "device-id", "binding-id", "fdr-0001", requested)
+	if !errors.Is(err, ErrStreamCapabilityUnavailable) {
+		t.Fatalf("CreateExact() error = %v, want ErrStreamCapabilityUnavailable", err)
+	}
+	if repository.stream.ID != "" {
+		t.Fatalf("partial exact grant persisted stream = %#v", repository.stream)
+	}
+	if commander.calls != 2 || commander.wait {
+		t.Fatalf("partial exact grant cleanup calls = %d, last wait = %t", commander.calls, commander.wait)
+	}
+	var stop map[string]any
+	if json.Unmarshal(commander.input.Value, &stop) != nil || stop["start"] != float64(0) || stop["viewer_client_id"] != "viewer-1" {
+		t.Fatalf("partial exact grant cleanup = %#v", stop)
+	}
 }
 
 type streamRepositoryStub struct{ stream Stream }

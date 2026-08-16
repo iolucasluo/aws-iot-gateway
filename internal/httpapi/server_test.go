@@ -382,6 +382,63 @@ func TestInternalAPIStreamPreservesOpenAPICapabilityContract(t *testing.T) {
 	}
 }
 
+func TestLivPetLegacyWebRTCStreamDerivesAudioVideoCapabilities(t *testing.T) {
+	t.Parallel()
+	now := time.UnixMilli(1_718_000_000_000)
+	bindingRepository := &httpBindingRepository{binding: binding.Binding{
+		ID: "018f0000-0000-7000-8000-000000000002", DeviceID: "018f0000-0000-7000-8000-000000000001",
+		DeviceSN: "fdr-00000000000000000000000000000001", InternalAppID: "livpet-staging", Active: true,
+	}}
+	bindingService := binding.NewService(bindingRepository, func() (string, error) { return "device-token-stream", nil }, func() time.Time { return now }, nil)
+	if _, err := bindingService.IssueToken(context.Background(), "livpet-staging", bindingRepository.binding.DeviceSN); err != nil {
+		t.Fatalf("IssueToken() error = %v", err)
+	}
+	commander := &httpCapturingStreamCommander{}
+	streamService := media.NewStreamService(
+		httpKVS{}, commander, &httpStreamRepository{}, "aws-iot-gateway-staging-",
+		func() (string, error) { return "viewer-stream-legacy", nil },
+	)
+	handler := newSignedTestHandler(t, activation.NewService(), now, Dependencies{Binding: bindingService, Media: streamService})
+	path := "/api/v1/openapi/devices/" + bindingRepository.binding.DeviceSN + "/streams"
+	body := []byte(`{"type":"webrtc","wait_ack":true}`)
+	request := signedInternalRequest(t, now, "nonce-stream-legacy1", http.MethodPost, path, body)
+	request.Header.Set("X-Device-Token", "device-token-stream")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("legacy LivPet stream status = %d, want 201: %s", response.Code, response.Body.String())
+	}
+	if !commander.requested.VideoReceive || !commander.requested.AudioReceive || !commander.requested.AudioSend ||
+		len(commander.requested.DataChannels) != 0 {
+		t.Fatalf("legacy LivPet requested capabilities = %#v", commander.requested)
+	}
+	for index, invalidBody := range [][]byte{
+		[]byte(`{"type":"webrtc"}`),
+		[]byte(`{"type":"webrtc","wait_ack":true,"requested_capabilities":{"video_receive":true}}`),
+	} {
+		request := signedInternalRequest(t, now, fmt.Sprintf("nonce-stream-invalid%d", index), http.MethodPost, path, invalidBody)
+		request.Header.Set("X-Device-Token", "device-token-stream")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(`"error_code":"invalid_stream_capabilities"`)) {
+			t.Fatalf("invalid stream body %s = %d %s", invalidBody, response.Code, response.Body.String())
+		}
+	}
+	commander.partialGrant = true
+	partialRequest := signedInternalRequest(t, now, "nonce-stream-partial1", http.MethodPost, path, body)
+	partialRequest.Header.Set("X-Device-Token", "device-token-stream")
+	partialResponse := httptest.NewRecorder()
+	handler.ServeHTTP(partialResponse, partialRequest)
+	if partialResponse.Code != http.StatusConflict ||
+		!bytes.Contains(partialResponse.Body.Bytes(), []byte(`"error_code":"stream_capability_unavailable"`)) {
+		t.Fatalf("partial legacy grant = %d %s", partialResponse.Code, partialResponse.Body.String())
+	}
+	if commander.calls != 3 {
+		t.Fatalf("legacy LivPet commander calls = %d, want start + partial start + cleanup", commander.calls)
+	}
+}
+
 func TestInternalAPIRequiresHMACForOpenAPIPath(t *testing.T) {
 	t.Parallel()
 
@@ -682,6 +739,45 @@ func (httpStreamCommander) SendCommands(_ context.Context, _, _, _ string, comma
 			"accepted": map[string]any{
 				"video_receive": true, "audio_receive": false, "audio_send": false, "data_channels": []any{},
 			},
+		},
+	}}}, nil
+}
+
+type httpCapturingStreamCommander struct {
+	requested    media.StreamCapabilities
+	calls        int
+	partialGrant bool
+}
+
+func (commander *httpCapturingStreamCommander) SendCommands(_ context.Context, _, _, _ string, commands []devicemodule.CommandInput, _ bool) (devicemodule.SendCommandsResult, error) {
+	var value struct {
+		ViewerID              string                   `json:"viewer_client_id"`
+		Start                 int                      `json:"start"`
+		RequestedCapabilities media.StreamCapabilities `json:"requested_capabilities"`
+	}
+	if len(commands) != 1 || json.Unmarshal(commands[0].Value, &value) != nil {
+		return devicemodule.SendCommandsResult{}, devicemodule.ErrInvalidInput
+	}
+	commander.calls++
+	if value.Start == 0 {
+		return devicemodule.SendCommandsResult{}, nil
+	}
+	commander.requested = value.RequestedCapabilities
+	supported := map[string]any{
+		"video_receive": true, "audio_receive": true, "audio_send": true, "data_channels": []any{},
+	}
+	accepted := supported
+	if commander.partialGrant {
+		accepted = map[string]any{
+			"video_receive": true, "audio_receive": false, "audio_send": false, "data_channels": []any{},
+		}
+	}
+	return devicemodule.SendCommandsResult{Results: []devicemodule.CommandResult{{
+		Status: "success",
+		Data: map[string]any{
+			"code": float64(0), "action": "stream", "type": "webrtc", "start": float64(1), "status": "ready",
+			"viewer_client_id": value.ViewerID, "capability_contract_version": "webrtc.v1", "firmware_version": "v0.0.0",
+			"supported": supported, "accepted": accepted,
 		},
 	}}}, nil
 }
