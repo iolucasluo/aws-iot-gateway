@@ -29,6 +29,10 @@
 
 隔离的 dev/staging IaC 位于 `deploy/cloudformation/`。内部 API 仍走 API Gateway → VPC Link → private NLB；另一个公开 ALB 的 HTTP listener 只转发精确的 `/api/v1/device-time/bootstrap`，默认拒绝其他 path。两者共用双 API ECS，后台为双 worker ECS、RDS PostgreSQL、ElastiCache Redis、SQS/DLQ、IoT Rule、KVS、S3 和独立 KMS time signer。它不是生产部署基线。
 
+更新 CloudFormation 时，不得把 `describe-stacks` 返回的 NoEcho 参数值 `****` 当成原值重新提交。
+需要保持现有 secret ARN 时使用 `UsePreviousValue`；确需显式传值时，只能从获批准的安全输入或当前
+ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret 内容。
+
 ## 当前 HTTP 契约
 
 | Endpoint | 调用方 | 认证 |
