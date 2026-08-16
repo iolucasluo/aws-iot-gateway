@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-func TestSignMatchesLivPetHMACV2KnownAnswer(t *testing.T) {
+func TestSignMatchesLivPetHMACV1KnownAnswer(t *testing.T) {
 	t.Parallel()
 
 	signature, err := Sign("test-secret-hmac-v2", SignatureRequest{
@@ -19,13 +19,13 @@ func TestSignMatchesLivPetHMACV2KnownAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sign() error = %v", err)
 	}
-	const want = "34501739cc0e22570570539157ab73cdd28c67ec2849b654035bb493ed963957"
+	const want = "bee0a857d4d8f8f62c28fdfd27e5ca6055f87b784afee2fcd7d06055ca96f02b"
 	if signature != want {
 		t.Fatalf("Sign() = %q, want %q", signature, want)
 	}
 }
 
-func TestCanonicalizeMatchesLivPetHMACV2(t *testing.T) {
+func TestCanonicalizeMatchesLivPetHMACV1(t *testing.T) {
 	t.Parallel()
 
 	path, err := CanonicalizePath("/devices/EXFDR%2f001/~status")

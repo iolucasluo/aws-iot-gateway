@@ -1,6 +1,6 @@
 # Staging deployment
 
-This deployment is intentionally limited to `ap-east-1` staging. It creates two API tasks, two competing workers, PostgreSQL, Redis, IoT rules and policy, SQS/DLQ, KVS permissions, private media storage, a KMS P-256 signed-time key, and an AWS-managed HTTPS API Gateway URL. Status-heartbeat and LWT rules feed PostgreSQL-backed device presence through the same ingest queue. There is no Developer/Project/Product/Factory/RMA/OTA service.
+This deployment is intentionally limited to `ap-east-1` staging. It creates two API tasks, two competing `iot-gateway-event-worker` tasks, PostgreSQL, Redis, IoT rules and policy, SQS/DLQ, KVS permissions, private media storage, a KMS P-256 signed-time key, and an AWS-managed HTTPS API Gateway URL. Status-heartbeat and LWT rules feed PostgreSQL-backed device presence through the same ingest queue. There is no Developer/Project/Product/Factory/RMA/OTA service.
 
 The `INTERNAL_APPS_JSON` value lives in one explicitly created Secrets Manager secret. Do not pass it as a CloudFormation parameter or commit it. RDS creates and rotates its own master secret.
 

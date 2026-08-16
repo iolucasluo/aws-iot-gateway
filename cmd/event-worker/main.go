@@ -25,7 +25,7 @@ import (
 func main() {
 	config, err := gatewayruntime.LoadConfigFromEnvironment()
 	if err != nil {
-		log.Fatalf("invalid gateway worker configuration: %v", err)
+		log.Fatalf("invalid event worker configuration: %v", err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -94,7 +94,7 @@ func main() {
 		webhookApps,
 		time.Now,
 	)
-	log.Printf("aws-iot-gateway worker started for %s", config.Environment)
+	log.Printf("iot-gateway event-worker started for %s", config.Environment)
 	go runIngest(ctx, ingestWorker)
 	go runPeriodic(ctx, "device lifecycle job", 500*time.Millisecond, lifecycleWorker.PollOnce)
 	go runPeriodic(ctx, "webhook delivery", time.Second, webhookDispatcher.PollOnce)

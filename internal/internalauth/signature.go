@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const SignatureDomain = "ExploreX-OpenAPI-HMAC-v2"
+const SignatureDomain = "ExploreX-OpenAPI-HMAC-v1"
 
 var ErrInvalidCanonicalRequest = errors.New("invalid canonical request")
 

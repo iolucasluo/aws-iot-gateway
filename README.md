@@ -6,7 +6,7 @@
 
 ## 认证与隔离
 
-内部 App 由 `INTERNAL_APPS_JSON` 在部署时配置。请求使用 LivPet 已有 HMAC v2：
+内部 App 由 `INTERNAL_APPS_JSON` 在部署时配置。请求使用 LivPet 已有 HMAC v1：
 
 - `X-Api-Key`
 - `X-Timestamp`：7 位计数器 + 13 位 Unix 毫秒
@@ -14,7 +14,7 @@
 - `X-Signature`
 - 设备授权操作额外使用 `X-Device-Token`
 
-签名域保持 `ExploreX-OpenAPI-HMAC-v2`。Redis 以原子 `SET NX` 消费 nonce；Redis 不可用时验签 fail closed。不存在登录、自助创建 App/凭证或管理 API。
+签名域保持 `ExploreX-OpenAPI-HMAC-v1`。Redis 以原子 `SET NX` 消费 nonce；Redis 不可用时验签 fail closed。不存在登录、自助创建 App/凭证或管理 API。
 
 ## 进程与依赖
 
@@ -22,7 +22,8 @@
 - Redis：跨 API 副本 nonce 与限流协调，不是业务权威存储。
 - AWS IoT Core：ThingName、MQTT client ID 和运行 `device_sn` 使用 Gateway 首次激活时生成的同一随机值。
 - AWS KMS：独立 P-256 key 只签固定的 device-time COSE payload；Redis 对该公共窄路由做跨副本限流。
-- `cmd/aws-iot-gateway-worker` 消费 IoT Rule → SQS 事件，并处理 lifecycle 与 Webhook outbox。
+- `cmd/event-worker` 消费 IoT Rule → SQS 事件，并处理 lifecycle 与 Webhook outbox；部署可执行文件与
+  ECS service 使用无歧义别名 `iot-gateway-event-worker`。
 - worker 同时消费设备 60 秒 `status` 心跳和 MQTT LWT，按 AWS IoT 接收时间防乱序写入 presence；
   设备列表在连续三次心跳缺失后 fail closed 为离线，不再把陈旧 Shadow 当作连接状态。
 - KVS 与 S3：提供受 binding 约束的 WebRTC、快照、录像和喂食音频能力。
@@ -39,14 +40,14 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 | --- | --- | --- |
 | `GET /healthz` | 运行检查 | 无 |
 | `POST /api/v1/device-time/bootstrap` | 无可信 RTC 的设备 | 公共窄路由；COSE 验签后可信 |
-| `POST /api/v1/openapi/device-activations` | 内部 App backend | HMAC v2 |
-| `GET /api/v1/openapi/device-activations/{id}` | 内部 App backend | HMAC v2 |
-| `POST /api/v1/openapi/device-activations/{id}/sessions` | LivPet commissioning 兼容路径 | HMAC v2 |
-| `POST /api/v1/openapi/devices/list` | 内部 App backend | HMAC v2 |
-| `POST /api/v1/openapi/devices/token` | 内部 App backend | HMAC v2 |
-| `POST /api/v1/openapi/devices/unbind/{device_token}` | 内部 App backend | HMAC v2 |
-| `POST /api/v1/openapi/devices/recommission/{device_token}` | 内部 App backend | HMAC v2 |
-| `/api/v1/openapi/devices/{device_sn}/*` | 内部 App backend | HMAC v2 + `X-Device-Token` |
+| `POST /api/v1/openapi/device-activations` | 内部 App backend | HMAC v1 |
+| `GET /api/v1/openapi/device-activations/{id}` | 内部 App backend | HMAC v1 |
+| `POST /api/v1/openapi/device-activations/{id}/sessions` | LivPet commissioning 兼容路径 | HMAC v1 |
+| `POST /api/v1/openapi/devices/list` | 内部 App backend | HMAC v1 |
+| `POST /api/v1/openapi/devices/token` | 内部 App backend | HMAC v1 |
+| `POST /api/v1/openapi/devices/unbind/{device_token}` | 内部 App backend | HMAC v1 |
+| `POST /api/v1/openapi/devices/recommission/{device_token}` | 内部 App backend | HMAC v1 |
+| `/api/v1/openapi/devices/{device_sn}/*` | 内部 App backend | HMAC v1 + `X-Device-Token` |
 | `POST /api/v1/device-activations/session/prepare-installation` | 设备 | activation code |
 | `POST /api/v1/device-activations/qr/prepare-installation` | 设备 | activation code |
 | `POST /api/v1/device-activations/confirm-installation` | 设备 | activation code + operational-key proof |

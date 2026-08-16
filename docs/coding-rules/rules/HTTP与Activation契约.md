@@ -3,7 +3,7 @@
 ## 认证域
 
 - `GET /healthz` 无认证，只证明进程存活。
-- `/api/v1/openapi/*` 全部使用 `ExploreX-OpenAPI-HMAC-v2`；`openapi` 仅为 LivPet 路径兼容。
+- `/api/v1/openapi/*` 全部使用 `ExploreX-OpenAPI-HMAC-v1`；`openapi` 仅为 LivPet 路径兼容。
 - 设备安装端点位于 `/api/v1/device-activations/*`，使用短时一次性 activation code 和 operational-key installation proof。
 - Bearer `/v1/*`、开发者 JWT、登录、Project/Product/credential CRUD 均不存在。
 

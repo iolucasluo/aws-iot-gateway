@@ -5,7 +5,7 @@
 | 路径 | 职责 |
 |---|---|
 | `cmd/api/` / 迁移期 `cmd/aws-iot-gateway/` | 读取配置、装配依赖、启动 HTTP server；不放领域逻辑 |
-| `cmd/worker/` | SQS 事件摄取、Webhook/异步任务 worker；不放领域逻辑 |
+| `cmd/event-worker/` | SQS 事件摄取、Webhook/异步 lifecycle worker；不放领域逻辑 |
 | `internal/runtime/` | 运行时配置解析和 fail-closed 校验 |
 | `internal/httpapi/` | 路由、认证适配、请求解码、响应和错误映射 |
 | `internal/modules/` | activation、binding、device、event、media 等 bounded context |
