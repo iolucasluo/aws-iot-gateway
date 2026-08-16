@@ -393,10 +393,6 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		writeJSON(writer, http.StatusOK, result)
 		return true
 	}
-	if s.device == nil {
-		writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "device service is unavailable")
-		return true
-	}
 	var body struct {
 		Commands  []devicemodule.CommandInput `json:"commands"`
 		Schedules []json.RawMessage           `json:"schedules,omitempty"`
@@ -422,6 +418,39 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		}
 		commands = []devicemodule.CommandInput{{Code: "set_schedule", Value: json.RawMessage(`{"schedules":` + string(schedules) + `}`)}}
 	}
+	fullFactoryReset := false
+	for _, command := range commands {
+		if isFullFactoryReset(command) {
+			fullFactoryReset = true
+			break
+		}
+	}
+	if fullFactoryReset {
+		if operation != "commands" || len(commands) != 1 || !waitACK {
+			writeError(writer, http.StatusBadRequest, "invalid_request", "factory_reset(all) must be a single command with wait_ack enabled")
+			return true
+		}
+		reset, err := s.binding.Recommission(request.Context(), principal.InternalAppID, deviceToken, "all")
+		if err != nil {
+			if errors.Is(err, binding.ErrRecommissionRejected) {
+				writeJSON(writer, http.StatusOK, factoryResetCommandResult(reset.Receipt))
+				return true
+			}
+			if errors.Is(err, devicemodule.ErrDeviceOffline) || errors.Is(err, devicemodule.ErrDeviceBusy) ||
+				errors.Is(err, devicemodule.ErrDeviceJammed) || errors.Is(err, devicemodule.ErrPublishFailed) {
+				writeDeviceError(writer, err)
+				return true
+			}
+			writeBindingError(writer, err)
+			return true
+		}
+		writeJSON(writer, http.StatusOK, factoryResetCommandResult(reset.Receipt))
+		return true
+	}
+	if s.device == nil {
+		writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "device service is unavailable")
+		return true
+	}
 	result, err := s.device.SendCommands(
 		request.Context(), principal.InternalAppID, ownedBinding.DeviceID, ownedBinding.DeviceSN, commands, waitACK,
 	)
@@ -439,6 +468,34 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		writeJSON(writer, status, result)
 	}
 	return true
+}
+
+func isFullFactoryReset(command devicemodule.CommandInput) bool {
+	if command.Code != "factory_reset" {
+		return false
+	}
+	var value struct {
+		Scope string `json:"scope"`
+	}
+	return json.Unmarshal(command.Value, &value) == nil && value.Scope == "all"
+}
+
+func factoryResetCommandResult(receipt binding.ResetReceipt) devicemodule.SendCommandsResult {
+	data := make(map[string]any, len(receipt.Data)+3)
+	for key, value := range receipt.Data {
+		data[key] = value
+	}
+	delete(data, "reset_scope")
+	delete(data, "action")
+	data["scope"] = "all"
+	if receipt.Status == "success" {
+		data["code"] = float64(0)
+		data["will_reboot"] = true
+	}
+	return devicemodule.SendCommandsResult{Results: []devicemodule.CommandResult{{
+		Index: 0, Code: "factory_reset", Status: receipt.Status, CommandID: receipt.CommandID,
+		Data: data, Reason: receipt.Reason,
+	}}}
 }
 
 func (s server) createActivation(writer http.ResponseWriter, request *http.Request) {
@@ -643,13 +700,13 @@ func (s server) recommissionDevice(writer http.ResponseWriter, request *http.Req
 	if body.ResetScope == "" {
 		body.ResetScope = "runtime"
 	}
-	released, err := s.binding.Recommission(request.Context(), principal.InternalAppID, token, body.ResetScope)
+	result, err := s.binding.Recommission(request.Context(), principal.InternalAppID, token, body.ResetScope)
 	if err != nil {
 		writeBindingError(writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"device_sn": released.DeviceSN, "unbound": true, "recommissioning": true, "reset_scope": body.ResetScope,
+		"device_sn": result.Binding.DeviceSN, "unbound": true, "recommissioning": true, "reset_scope": body.ResetScope,
 	})
 }
 
@@ -778,7 +835,7 @@ func writeBindingError(writer http.ResponseWriter, err error) {
 		writeError(writer, http.StatusBadRequest, "token_not_found", "device token was not found")
 	case errors.Is(err, binding.ErrForbidden):
 		writeError(writer, http.StatusForbidden, "device_operation_forbidden", "device operation is forbidden")
-	case errors.Is(err, binding.ErrRecommissionUnavailable):
+	case errors.Is(err, binding.ErrRecommissionUnavailable), errors.Is(err, binding.ErrRecommissionRejected):
 		writeError(writer, http.StatusConflict, "device_recommission_unavailable", "device did not acknowledge recommissioning; binding remains active")
 	default:
 		writeError(writer, http.StatusInternalServerError, "internal_error", "internal server error")

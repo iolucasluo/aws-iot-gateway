@@ -22,6 +22,7 @@ var (
 	ErrTokenNotFound           = errors.New("token not found")
 	ErrForbidden               = errors.New("device operation forbidden")
 	ErrRecommissionUnavailable = errors.New("device recommission unavailable")
+	ErrRecommissionRejected    = errors.New("device recommission rejected")
 )
 
 type Binding struct {
@@ -49,6 +50,18 @@ type IssueTokenResult struct {
 	ExpiresAt   time.Time `json:"expires_at"`
 }
 
+type ResetReceipt struct {
+	CommandID string
+	Status    string
+	Data      map[string]any
+	Reason    string
+}
+
+type RecommissionResult struct {
+	Binding Binding
+	Receipt ResetReceipt
+}
+
 type Repository interface {
 	FindActiveBinding(context.Context, string, string) (Binding, error)
 	StoreToken(context.Context, DeviceToken) error
@@ -58,7 +71,7 @@ type Repository interface {
 }
 
 type Recommissioner interface {
-	Reset(context.Context, Binding, string) error
+	Reset(context.Context, Binding, string) (ResetReceipt, error)
 }
 
 type TokenGenerator func() (string, error)
@@ -132,23 +145,34 @@ func (service *Service) Unbind(ctx context.Context, internalAppID, token string)
 	return service.repository.ReleaseBinding(ctx, binding.ID, "unbind")
 }
 
-func (service *Service) Recommission(ctx context.Context, internalAppID, token, resetScope string) (Binding, error) {
+func (service *Service) Recommission(ctx context.Context, internalAppID, token, resetScope string) (RecommissionResult, error) {
 	if resetScope != "runtime" && resetScope != "all" {
-		return Binding{}, ErrInvalidInput
+		return RecommissionResult{}, ErrInvalidInput
 	}
 	binding, err := service.bindingForToken(ctx, internalAppID, token)
 	if err != nil {
-		return Binding{}, err
+		return RecommissionResult{}, err
 	}
 	if service.recommissioner == nil {
-		return Binding{}, ErrRecommissionUnavailable
+		return RecommissionResult{}, ErrRecommissionUnavailable
 	}
-	if err := service.recommissioner.Reset(ctx, binding, resetScope); err != nil {
-		return Binding{}, fmt.Errorf("%w: %v", ErrRecommissionUnavailable, err)
+	receipt, err := service.recommissioner.Reset(ctx, binding, resetScope)
+	if err != nil {
+		return RecommissionResult{}, fmt.Errorf("%w: %w", ErrRecommissionUnavailable, err)
+	}
+	if strings.TrimSpace(receipt.CommandID) == "" {
+		return RecommissionResult{}, fmt.Errorf("%w: device ACK receipt is incomplete", ErrRecommissionUnavailable)
+	}
+	if receipt.Status != "success" || !successfulACK(receipt.Data) {
+		return RecommissionResult{Binding: binding, Receipt: receipt}, ErrRecommissionRejected
 	}
 	finalizeContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), recommissionFinalizeTimeout)
 	defer cancel()
-	return service.repository.ReleaseBinding(finalizeContext, binding.ID, "recommission")
+	released, err := service.repository.ReleaseBinding(finalizeContext, binding.ID, "recommission")
+	if err != nil {
+		return RecommissionResult{}, err
+	}
+	return RecommissionResult{Binding: released, Receipt: receipt}, nil
 }
 
 func (service *Service) bindingForToken(ctx context.Context, internalAppID, token string) (Binding, error) {

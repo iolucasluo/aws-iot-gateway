@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,7 +139,9 @@ func TestInternalAPIRecommissionEchoesAndAppliesFullResetScope(t *testing.T) {
 		DeviceSN: "fdr-00000000000000000000000000000001", InternalAppID: "livpet-staging", Active: true,
 	}}
 	bindingService := binding.NewService(repository, func() (string, error) { return "device-token-recommission", nil },
-		func() time.Time { return now }, httpRecommissioner{})
+		func() time.Time { return now }, &httpRecommissioner{receipt: binding.ResetReceipt{
+			CommandID: "session-recommission", Status: "success", Data: map[string]any{"code": float64(0)},
+		}})
 	if _, err := bindingService.IssueToken(context.Background(), "livpet-staging", repository.binding.DeviceSN); err != nil {
 		t.Fatalf("IssueToken() error = %v", err)
 	}
@@ -151,6 +154,156 @@ func TestInternalAPIRecommissionEchoesAndAppliesFullResetScope(t *testing.T) {
 	if response.Code != http.StatusOK ||
 		!bytes.Contains(response.Body.Bytes(), []byte(`"reset_scope":"all"`)) || repository.binding.Active {
 		t.Fatalf("recommission(all) = %d %s, active=%t", response.Code, response.Body.String(), repository.binding.Active)
+	}
+}
+
+func TestInternalAPIFactoryResetAllUsesRecommissionAndPreservesLivPetResult(t *testing.T) {
+	t.Parallel()
+
+	now := time.UnixMilli(1_718_000_000_000)
+	repository := &httpBindingRepository{binding: binding.Binding{
+		ID: "018f0000-0000-7000-8000-000000000002", DeviceID: "018f0000-0000-7000-8000-000000000001",
+		DeviceSN: "fdr-00000000000000000000000000000001", InternalAppID: "livpet-staging", Active: true,
+	}}
+	recommissioner := &httpRecommissioner{receipt: binding.ResetReceipt{
+		CommandID: "livpet-factory-reset-session", Status: "success",
+		Data: map[string]any{"code": float64(0), "reset_scope": "all", "will_reboot": true},
+	}}
+	bindingService := binding.NewService(repository, func() (string, error) { return "device-token-reset", nil },
+		func() time.Time { return now }, recommissioner)
+	if _, err := bindingService.IssueToken(context.Background(), "livpet-staging", repository.binding.DeviceSN); err != nil {
+		t.Fatalf("IssueToken() error = %v", err)
+	}
+	handler := newSignedTestHandler(t, activation.NewService(), now, Dependencies{Binding: bindingService})
+	path := "/api/v1/openapi/devices/" + repository.binding.DeviceSN + "/commands"
+	body := []byte(`{"commands":[{"code":"factory_reset","value":{"scope":"all"}}],"wait_ack":true}`)
+	request := signedInternalRequest(t, now, "nonce-factory-reset", http.MethodPost, path, body)
+	request.Header.Set("X-Device-Token", "device-token-reset")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("factory_reset(all) status = %d: %s", response.Code, response.Body.String())
+	}
+	var result devicemodule.SendCommandsResult
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode factory_reset(all): %v", err)
+	}
+	if len(result.Results) != 1 || result.Results[0].Code != "factory_reset" || result.Results[0].Status != "success" ||
+		result.Results[0].CommandID != "livpet-factory-reset-session" || result.Results[0].Data["scope"] != "all" ||
+		result.Results[0].Data["code"] != float64(0) || result.Results[0].Data["will_reboot"] != true {
+		t.Fatalf("factory_reset(all) result = %#v", result)
+	}
+	if repository.binding.Active || recommissioner.resetScope != "all" {
+		t.Fatalf("active = %t, reset scope = %q", repository.binding.Active, recommissioner.resetScope)
+	}
+}
+
+func TestInternalAPIFactoryResetAllFailsClosedWithoutACKOrAsBatch(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		body string
+	}{
+		{name: "without ACK", body: `{"commands":[{"code":"factory_reset","value":{"scope":"all"}}],"wait_ack":false}`},
+		{name: "inside batch", body: `{"commands":[{"code":"feed","value":{"portions":1}},{"code":"factory_reset","value":{"scope":"all"}}],"wait_ack":true}`},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			now := time.UnixMilli(1_718_000_000_000)
+			repository := &httpBindingRepository{binding: binding.Binding{
+				ID: "018f0000-0000-7000-8000-000000000002", DeviceID: "018f0000-0000-7000-8000-000000000001",
+				DeviceSN: "fdr-00000000000000000000000000000001", InternalAppID: "livpet-staging", Active: true,
+			}}
+			recommissioner := &httpRecommissioner{receipt: binding.ResetReceipt{
+				CommandID: "must-not-run", Status: "success", Data: map[string]any{"code": float64(0)},
+			}}
+			bindingService := binding.NewService(repository, func() (string, error) { return "device-token-reset", nil },
+				func() time.Time { return now }, recommissioner)
+			if _, err := bindingService.IssueToken(context.Background(), "livpet-staging", repository.binding.DeviceSN); err != nil {
+				t.Fatalf("IssueToken() error = %v", err)
+			}
+			handler := newSignedTestHandler(t, activation.NewService(), now, Dependencies{Binding: bindingService})
+			path := "/api/v1/openapi/devices/" + repository.binding.DeviceSN + "/commands"
+			request := signedInternalRequest(t, now, "nonce-factory-reset-invalid-"+strings.ReplaceAll(testCase.name, " ", "-"),
+				http.MethodPost, path, []byte(testCase.body))
+			request.Header.Set("X-Device-Token", "device-token-reset")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest || !repository.binding.Active || recommissioner.calls != 0 {
+				t.Fatalf("factory reset invalid = %d %s, active=%t, calls=%d",
+					response.Code, response.Body.String(), repository.binding.Active, recommissioner.calls)
+			}
+		})
+	}
+}
+
+func TestInternalAPIFactoryResetAllPreservesRejectedCommandResultAndBinding(t *testing.T) {
+	t.Parallel()
+
+	now := time.UnixMilli(1_718_000_000_000)
+	repository := &httpBindingRepository{binding: binding.Binding{
+		ID: "018f0000-0000-7000-8000-000000000002", DeviceID: "018f0000-0000-7000-8000-000000000001",
+		DeviceSN: "fdr-00000000000000000000000000000001", InternalAppID: "livpet-staging", Active: true,
+	}}
+	recommissioner := &httpRecommissioner{receipt: binding.ResetReceipt{
+		CommandID: "livpet-rejected-session", Status: "error", Reason: "device rejected command with code -1",
+		Data: map[string]any{"code": float64(-1), "reset_scope": "all"},
+	}}
+	bindingService := binding.NewService(repository, func() (string, error) { return "device-token-reset", nil },
+		func() time.Time { return now }, recommissioner)
+	if _, err := bindingService.IssueToken(context.Background(), "livpet-staging", repository.binding.DeviceSN); err != nil {
+		t.Fatalf("IssueToken() error = %v", err)
+	}
+	handler := newSignedTestHandler(t, activation.NewService(), now, Dependencies{Binding: bindingService})
+	path := "/api/v1/openapi/devices/" + repository.binding.DeviceSN + "/commands"
+	body := []byte(`{"commands":[{"code":"factory_reset","value":{"scope":"all"}}],"wait_ack":true}`)
+	request := signedInternalRequest(t, now, "nonce-factory-reset-rejected", http.MethodPost, path, body)
+	request.Header.Set("X-Device-Token", "device-token-reset")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || !repository.binding.Active {
+		t.Fatalf("rejected factory reset = %d %s, active=%t", response.Code, response.Body.String(), repository.binding.Active)
+	}
+	var result devicemodule.SendCommandsResult
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode rejected factory reset: %v", err)
+	}
+	if len(result.Results) != 1 || result.Results[0].Code != "factory_reset" || result.Results[0].Status != "error" ||
+		result.Results[0].CommandID != "livpet-rejected-session" || result.Results[0].Data["code"] != float64(-1) ||
+		result.Results[0].Data["scope"] != "all" || result.Results[0].Reason == "" {
+		t.Fatalf("rejected factory reset result = %#v", result)
+	}
+}
+
+func TestInternalAPIFactoryResetAllPreservesDeviceBusyErrorAndBinding(t *testing.T) {
+	t.Parallel()
+
+	now := time.UnixMilli(1_718_000_000_000)
+	repository := &httpBindingRepository{binding: binding.Binding{
+		ID: "018f0000-0000-7000-8000-000000000002", DeviceID: "018f0000-0000-7000-8000-000000000001",
+		DeviceSN: "fdr-00000000000000000000000000000001", InternalAppID: "livpet-staging", Active: true,
+	}}
+	bindingService := binding.NewService(repository, func() (string, error) { return "device-token-reset", nil },
+		func() time.Time { return now }, &httpRecommissioner{err: devicemodule.ErrDeviceBusy})
+	if _, err := bindingService.IssueToken(context.Background(), "livpet-staging", repository.binding.DeviceSN); err != nil {
+		t.Fatalf("IssueToken() error = %v", err)
+	}
+	handler := newSignedTestHandler(t, activation.NewService(), now, Dependencies{Binding: bindingService})
+	path := "/api/v1/openapi/devices/" + repository.binding.DeviceSN + "/commands"
+	body := []byte(`{"commands":[{"code":"factory_reset","value":{"scope":"all"}}],"wait_ack":true}`)
+	request := signedInternalRequest(t, now, "nonce-factory-reset-busy", http.MethodPost, path, body)
+	request.Header.Set("X-Device-Token", "device-token-reset")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusConflict || !bytes.Contains(response.Body.Bytes(), []byte(`"error_code":"device_busy"`)) ||
+		!repository.binding.Active {
+		t.Fatalf("busy factory reset = %d %s, active=%t", response.Code, response.Body.String(), repository.binding.Active)
 	}
 }
 
@@ -467,9 +620,18 @@ type httpBindingRepository struct {
 
 type httpPublisher struct{}
 
-type httpRecommissioner struct{}
+type httpRecommissioner struct {
+	receipt    binding.ResetReceipt
+	err        error
+	calls      int
+	resetScope string
+}
 
-func (httpRecommissioner) Reset(context.Context, binding.Binding, string) error { return nil }
+func (recommissioner *httpRecommissioner) Reset(_ context.Context, _ binding.Binding, resetScope string) (binding.ResetReceipt, error) {
+	recommissioner.calls++
+	recommissioner.resetScope = resetScope
+	return recommissioner.receipt, recommissioner.err
+}
 
 func (*httpPublisher) Publish(context.Context, string, []byte) error { return nil }
 

@@ -53,6 +53,12 @@
 还清理设备本地用户数据。两种 scope 都必须先取得设备 ACK，Gateway 才撤销 token、释放 binding
 并进入旧运行证书禁用流程；离线、超时、未知 scope 或 ACK 失败均保持 binding 有效。
 
+为保持 LivPet backend 无需改动，单条 `factory_reset` 且 `value.scope=all`、`wait_ack=true` 的
+`commands` 请求由 Gateway 内部映射为设备 `recommission(all)`。设备返回零值 ACK 后才释放 binding，
+并按原 `commands.results[]` 格式将结果重新标记为 `factory_reset`；非零/缺失 ACK、关闭 `wait_ack`
+或在批量命令中夹带该生命周期操作都会 fail closed，绑定保持有效。其他 `factory_reset` scope
+继续走普通设备命令路径。
+
 `POST .../{device_sn}/streams` 保留既有 `webrtc.v1` 能力协商：请求必须完整携带
 `requested_capabilities`，Gateway 将同一请求交给设备并校验设备 ACK；成功响应为 `201`，包含
 `stream_id`、`firmware_version`、`supported_capabilities`、`granted_capabilities`、短期
