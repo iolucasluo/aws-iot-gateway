@@ -1,6 +1,7 @@
 /var/
 /bin/
 /.runtime/
+__pycache__/
 /.env
 /.env.*
 !/.env.example
