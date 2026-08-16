@@ -241,6 +241,54 @@ func TestInternalAPIFactoryResetAllFailsClosedWithoutACKOrAsBatch(t *testing.T) 
 	}
 }
 
+func TestInternalAPIRejectsLegacyWiFiResetWithoutPublishing(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		body string
+	}{
+		{name: "reset_wifi", body: `{"commands":[{"code":"reset_wifi","value":{}}],"wait_ack":true}`},
+		{name: "factory_reset wifi", body: `{"commands":[{"code":"factory_reset","value":{"scope":"wifi"}}],"wait_ack":true}`},
+		{name: "factory_reset missing scope", body: `{"commands":[{"code":"factory_reset","value":{}}],"wait_ack":true}`},
+		{name: "batch containing reset_wifi", body: `{"commands":[{"code":"feed","value":{"portions":1}},{"code":"reset_wifi","value":{}}],"wait_ack":true}`},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			now := time.UnixMilli(1_718_000_000_000)
+			repository := &httpBindingRepository{binding: binding.Binding{
+				ID: "018f0000-0000-7000-8000-000000000002", DeviceID: "018f0000-0000-7000-8000-000000000001",
+				DeviceSN: "fdr-00000000000000000000000000000001", InternalAppID: "livpet-staging", Active: true,
+			}}
+			bindingService := binding.NewService(repository, func() (string, error) { return "device-token-reset", nil },
+				func() time.Time { return now }, nil)
+			if _, err := bindingService.IssueToken(context.Background(), "livpet-staging", repository.binding.DeviceSN); err != nil {
+				t.Fatalf("IssueToken() error = %v", err)
+			}
+			publisher := &httpPublisher{}
+			deviceService := devicemodule.NewService(publisher, httpACKWaiter{}, &httpCommandRepository{},
+				"aws-iot-gateway-staging", func() (string, error) { return "must-not-publish", nil })
+			handler := newSignedTestHandler(t, activation.NewService(), now,
+				Dependencies{Binding: bindingService, Device: deviceService})
+			path := "/api/v1/openapi/devices/" + repository.binding.DeviceSN + "/commands"
+			request := signedInternalRequest(t, now, "nonce-legacy-wifi-reset-"+strings.ReplaceAll(testCase.name, " ", "-"),
+				http.MethodPost, path, []byte(testCase.body))
+			request.Header.Set("X-Device-Token", "device-token-reset")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest ||
+				!bytes.Contains(response.Body.Bytes(), []byte(`"error_code":"invalid_request"`)) ||
+				!bytes.Contains(response.Body.Bytes(), []byte(`recommission(runtime)`)) ||
+				publisher.calls != 0 || !repository.binding.Active {
+				t.Fatalf("legacy Wi-Fi reset = %d %s, publishes=%d, active=%t",
+					response.Code, response.Body.String(), publisher.calls, repository.binding.Active)
+			}
+		})
+	}
+}
+
 func TestInternalAPIFactoryResetAllPreservesRejectedCommandResultAndBinding(t *testing.T) {
 	t.Parallel()
 
@@ -675,7 +723,9 @@ type httpBindingRepository struct {
 	plaintextStored bool
 }
 
-type httpPublisher struct{}
+type httpPublisher struct {
+	calls int
+}
 
 type httpRecommissioner struct {
 	receipt    binding.ResetReceipt
@@ -690,7 +740,10 @@ func (recommissioner *httpRecommissioner) Reset(_ context.Context, _ binding.Bin
 	return recommissioner.receipt, recommissioner.err
 }
 
-func (*httpPublisher) Publish(context.Context, string, []byte) error { return nil }
+func (publisher *httpPublisher) Publish(context.Context, string, []byte) error {
+	publisher.calls++
+	return nil
+}
 
 type httpACKWaiter struct{}
 

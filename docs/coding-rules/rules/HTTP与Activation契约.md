@@ -27,5 +27,8 @@ pending -> activating -> installing -> finalizing -> activated
 ## 错误与输入
 
 - 拒绝未知 JSON 字段、畸形 percent escape、超限 body、过期/重放 nonce 和错误 method。
+- `reset_wifi`、`factory_reset(scope=wifi)` 和缺失显式 scope 的 `factory_reset` 必须在 MQTT publish
+  前以 `400 invalid_request` 拒绝；换网只能走 ACK-based `recommission(runtime)`，防止设备运行身份
+  与 Gateway binding/token 分裂。
 - 稳定业务错误使用 `{ "error": { "code": "...", "message": "..." } }`，不得返回 AWS/SQL/Redis 内部错误。
 - token、code、secret、CSR 私钥和设备私钥不得进入响应之外的日志；Gateway 永不接收 operational private key。

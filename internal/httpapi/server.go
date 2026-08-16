@@ -442,6 +442,12 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		}
 		commands = []devicemodule.CommandInput{{Code: "set_schedule", Value: json.RawMessage(`{"schedules":` + string(schedules) + `}`)}}
 	}
+	for _, command := range commands {
+		if reason := unsupportedLegacyWiFiReset(command); reason != "" {
+			writeError(writer, http.StatusBadRequest, "invalid_request", reason)
+			return true
+		}
+	}
 	fullFactoryReset := false
 	for _, command := range commands {
 		if isFullFactoryReset(command) {
@@ -495,13 +501,35 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 }
 
 func isFullFactoryReset(command devicemodule.CommandInput) bool {
-	if command.Code != "factory_reset" {
-		return false
+	scope, ok := factoryResetScope(command)
+	return ok && scope == "all"
+}
+
+func unsupportedLegacyWiFiReset(command devicemodule.CommandInput) string {
+	if command.Code == "reset_wifi" {
+		return "reset_wifi is unsupported; use recommission(runtime)"
 	}
+	if command.Code != "factory_reset" {
+		return ""
+	}
+	scope, ok := factoryResetScope(command)
+	if !ok {
+		return "factory_reset requires an explicit scope; use recommission(runtime) to change Wi-Fi"
+	}
+	if scope == "wifi" {
+		return "factory_reset(wifi) is unsupported; use recommission(runtime)"
+	}
+	return ""
+}
+
+func factoryResetScope(command devicemodule.CommandInput) (string, bool) {
 	var value struct {
 		Scope string `json:"scope"`
 	}
-	return json.Unmarshal(command.Value, &value) == nil && value.Scope == "all"
+	if json.Unmarshal(command.Value, &value) != nil || value.Scope == "" {
+		return "", false
+	}
+	return value.Scope, true
 }
 
 func factoryResetCommandResult(receipt binding.ResetReceipt) devicemodule.SendCommandsResult {
