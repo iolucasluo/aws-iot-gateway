@@ -21,7 +21,7 @@ func NewMediaRepository(pool *pgxpool.Pool) (*MediaRepository, error) {
 
 func (repository *MediaRepository) CreateSnapshot(ctx context.Context, snapshot media.Snapshot) error {
 	if _, err := repository.pool.Exec(ctx, `
-		INSERT INTO snapshots (id, device_id, binding_id, object_key, status, expires_at)
+		INSERT INTO device_snapshots (id, device_registry_id, device_binding_id, object_key, status, expires_at)
 		VALUES ($1,$2,$3,$4,$5,$6)
 	`, snapshot.ID, snapshot.DeviceID, snapshot.BindingID, snapshot.ObjectKey, snapshot.Status, snapshot.ExpiresAt); err != nil {
 		return fmt.Errorf("create snapshot: %w", err)
@@ -30,7 +30,7 @@ func (repository *MediaRepository) CreateSnapshot(ctx context.Context, snapshot 
 }
 
 func (repository *MediaRepository) SetSnapshotStatus(ctx context.Context, id, status string) error {
-	if _, err := repository.pool.Exec(ctx, `UPDATE snapshots SET status=$2, updated_at=now() WHERE id=$1`, id, status); err != nil {
+	if _, err := repository.pool.Exec(ctx, `UPDATE device_snapshots SET status=$2, updated_at=now() WHERE id=$1`, id, status); err != nil {
 		return fmt.Errorf("update snapshot status: %w", err)
 	}
 	return nil
@@ -39,10 +39,10 @@ func (repository *MediaRepository) SetSnapshotStatus(ctx context.Context, id, st
 func (repository *MediaRepository) GetSnapshot(ctx context.Context, bindingID, deviceSN, id string) (media.Snapshot, error) {
 	var snapshot media.Snapshot
 	if err := repository.pool.QueryRow(ctx, `
-		SELECT s.id::text, s.device_id::text, d.device_sn, s.binding_id::text,
+		SELECT s.id::text, s.device_registry_id::text, d.device_sn, s.device_binding_id::text,
 		       COALESCE(s.object_key,''), s.status, s.expires_at
-		FROM snapshots s JOIN devices d ON d.id=s.device_id
-		WHERE s.id=$1 AND s.binding_id=$2 AND d.device_sn=$3
+		FROM device_snapshots s JOIN device_registry d ON d.id=s.device_registry_id
+		WHERE s.id=$1 AND s.device_binding_id=$2 AND d.device_sn=$3
 	`, id, bindingID, deviceSN).Scan(
 		&snapshot.ID, &snapshot.DeviceID, &snapshot.DeviceSN, &snapshot.BindingID,
 		&snapshot.ObjectKey, &snapshot.Status, &snapshot.ExpiresAt,
@@ -58,8 +58,8 @@ func (repository *MediaRepository) GetSnapshot(ctx context.Context, bindingID, d
 func (repository *MediaRepository) CreateRecording(ctx context.Context, recording media.Recording) error {
 	metadata := map[string]any{"session_id": recording.ID}
 	if _, err := repository.pool.Exec(ctx, `
-		INSERT INTO recordings (
-			id, device_id, binding_id, kind, object_key, status,
+		INSERT INTO device_recordings (
+			id, device_registry_id, device_binding_id, kind, object_key, status,
 			duration_seconds, device_metadata, created_at, updated_at
 		) VALUES ($1,$2,$3,'cloud',$4,$5,$6,$7,$8,$8)
 	`, recording.ID, recording.DeviceID, recording.BindingID, recording.ObjectKey,
@@ -70,7 +70,7 @@ func (repository *MediaRepository) CreateRecording(ctx context.Context, recordin
 }
 
 func (repository *MediaRepository) SetRecordingStatus(ctx context.Context, id, status string) error {
-	if _, err := repository.pool.Exec(ctx, `UPDATE recordings SET status=$2, updated_at=now() WHERE id=$1`, id, status); err != nil {
+	if _, err := repository.pool.Exec(ctx, `UPDATE device_recordings SET status=$2, updated_at=now() WHERE id=$1`, id, status); err != nil {
 		return fmt.Errorf("update recording status: %w", err)
 	}
 	return nil
@@ -78,10 +78,10 @@ func (repository *MediaRepository) SetRecordingStatus(ctx context.Context, id, s
 
 func (repository *MediaRepository) GetRecording(ctx context.Context, bindingID, deviceSN, id string) (media.Recording, error) {
 	return scanRecording(repository.pool.QueryRow(ctx, `
-		SELECT r.id::text, r.device_id::text, d.device_sn, r.binding_id::text,
+		SELECT r.id::text, r.device_registry_id::text, d.device_sn, r.device_binding_id::text,
 		       COALESCE(r.object_key,''), r.status, COALESCE(r.duration_seconds,0), r.created_at
-		FROM recordings r JOIN devices d ON d.id=r.device_id
-		WHERE r.id=$1 AND r.binding_id=$2 AND d.device_sn=$3 AND r.kind='cloud'
+		FROM device_recordings r JOIN device_registry d ON d.id=r.device_registry_id
+		WHERE r.id=$1 AND r.device_binding_id=$2 AND d.device_sn=$3 AND r.kind='cloud'
 	`, id, bindingID, deviceSN))
 }
 
@@ -92,13 +92,13 @@ func (repository *MediaRepository) ListRecordings(
 	cursor, status string,
 ) ([]media.Recording, string, error) {
 	rows, err := repository.pool.Query(ctx, `
-		SELECT r.id::text, r.device_id::text, d.device_sn, r.binding_id::text,
+		SELECT r.id::text, r.device_registry_id::text, d.device_sn, r.device_binding_id::text,
 		       COALESCE(r.object_key,''), r.status, COALESCE(r.duration_seconds,0), r.created_at
-		FROM recordings r JOIN devices d ON d.id=r.device_id
-		WHERE r.binding_id=$1 AND d.device_sn=$2 AND r.kind='cloud'
+		FROM device_recordings r JOIN device_registry d ON d.id=r.device_registry_id
+		WHERE r.device_binding_id=$1 AND d.device_sn=$2 AND r.kind='cloud'
 		  AND ($3='' OR r.status=$3)
 		  AND ($4='' OR (r.created_at,r.id) < (
-			SELECT created_at,id FROM recordings WHERE id=$4::uuid
+			SELECT created_at,id FROM device_recordings WHERE id=$4::uuid
 		  ))
 		ORDER BY r.created_at DESC, r.id DESC LIMIT $5
 	`, bindingID, deviceSN, status, cursor, limit+1)

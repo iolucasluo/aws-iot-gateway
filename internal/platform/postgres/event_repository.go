@@ -25,7 +25,7 @@ func NewEventRepository(pool *pgxpool.Pool) (*EventRepository, error) {
 
 func (repository *EventRepository) UpdatePresence(ctx context.Context, deviceSN string, online bool, observedAt time.Time) error {
 	commandTag, err := repository.pool.Exec(ctx, `
-		UPDATE devices
+		UPDATE device_registry
 		SET presence_online=$2,
 		    presence_updated_at=$3,
 		    last_seen_at=CASE WHEN $2 THEN GREATEST(COALESCE(last_seen_at,$3),$3) ELSE last_seen_at END,
@@ -42,7 +42,7 @@ func (repository *EventRepository) UpdatePresence(ctx context.Context, deviceSN 
 		return nil
 	}
 	var exists bool
-	if err := repository.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM devices WHERE device_sn=$1)`, deviceSN).Scan(&exists); err != nil {
+	if err := repository.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM device_registry WHERE device_sn=$1)`, deviceSN).Scan(&exists); err != nil {
 		return fmt.Errorf("check presence device: %w", err)
 	}
 	if !exists {
@@ -60,8 +60,8 @@ func (repository *EventRepository) Store(ctx context.Context, event events.Event
 	var deviceID, internalAppID string
 	if err := transaction.QueryRow(ctx, `
 		SELECT d.id::text, COALESCE(b.internal_app_id, '')
-		FROM devices d
-		LEFT JOIN bindings b ON b.device_id=d.id AND b.status='active'
+		FROM device_registry d
+		LEFT JOIN device_bindings b ON b.device_registry_id=d.id AND b.status='active'
 		WHERE d.device_sn=$1
 	`, event.DeviceSN).Scan(&deviceID, &internalAppID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -71,7 +71,7 @@ func (repository *EventRepository) Store(ctx context.Context, event events.Event
 	}
 	commandTag, err := transaction.Exec(ctx, `
 		INSERT INTO device_events (
-			id, device_id, event_type, boot_id, event_seq, monotonic_ms,
+			id, device_registry_id, event_type, boot_id, event_seq, monotonic_ms,
 			time_quality, time_source, occurred_at, received_at, data
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		ON CONFLICT DO NOTHING
@@ -92,8 +92,8 @@ func (repository *EventRepository) Store(ctx context.Context, event events.Event
 				status = "ready"
 			}
 			if _, err := transaction.Exec(ctx, `
-				UPDATE recordings SET status=$3, device_metadata=device_metadata || $4::jsonb, updated_at=now()
-				WHERE device_id=$1 AND device_metadata->>'session_id'=$2
+				UPDATE device_recordings SET status=$3, device_metadata=device_metadata || $4::jsonb, updated_at=now()
+				WHERE device_registry_id=$1 AND device_metadata->>'session_id'=$2
 			`, deviceID, sessionID, status, event.Data); err != nil {
 				return fmt.Errorf("apply recording completion event: %w", err)
 			}
@@ -148,8 +148,8 @@ func (repository *EventRepository) List(ctx context.Context, deviceID, eventType
 		SELECT e.id::text, d.device_sn, e.event_type, e.boot_id, e.event_seq,
 		       e.monotonic_ms, COALESCE(e.time_quality,''), COALESCE(e.time_source,''),
 		       e.occurred_at, e.received_at, e.data
-		FROM device_events e JOIN devices d ON d.id=e.device_id
-		WHERE e.device_id=$1 AND ($2='' OR e.event_type=$2)
+		FROM device_events e JOIN device_registry d ON d.id=e.device_registry_id
+		WHERE e.device_registry_id=$1 AND ($2='' OR e.event_type=$2)
 		ORDER BY e.received_at DESC, e.id DESC LIMIT $3
 	`, deviceID, eventType, limit)
 	if err != nil {

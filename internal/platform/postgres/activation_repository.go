@@ -24,7 +24,7 @@ func NewActivationRepository(pool *pgxpool.Pool) (*ActivationRepository, error) 
 
 func (repository *ActivationRepository) Create(ctx context.Context, record activation.Record) error {
 	_, err := repository.pool.Exec(ctx, `
-		INSERT INTO activations (
+		INSERT INTO device_activations (
 			id, internal_app_id, binding_external_user_id, method, status,
 			code_hash, idempotency_key, request_hash, expires_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
@@ -55,7 +55,7 @@ func (repository *ActivationRepository) FindByID(ctx context.Context, id string)
 func (repository *ActivationRepository) FindByIdempotency(ctx context.Context, internalAppID, key string) (activation.Record, error) {
 	var id string
 	if err := repository.pool.QueryRow(ctx, `
-		SELECT id::text FROM activations WHERE internal_app_id=$1 AND idempotency_key=$2
+		SELECT id::text FROM device_activations WHERE internal_app_id=$1 AND idempotency_key=$2
 	`, internalAppID, key).Scan(&id); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return activation.Record{}, activation.ErrActivationNotFound
@@ -78,8 +78,8 @@ func (repository *ActivationRepository) ReservePreparation(
 	var expiresAt time.Time
 	if err := transaction.QueryRow(ctx, `
 		SELECT a.status, a.method, a.expires_at, COALESCE(s.csr_pem, '')
-		FROM activations a
-		LEFT JOIN activation_sessions s ON s.activation_id=a.id
+		FROM device_activations a
+		LEFT JOIN device_activation_sessions s ON s.device_activation_id=a.id
 		WHERE a.id=$1
 		FOR UPDATE OF a
 	`, activationID).Scan(&status, &method, &expiresAt, &existingCSR); err != nil {
@@ -91,21 +91,21 @@ func (repository *ActivationRepository) ReservePreparation(
 	switch activation.Status(status) {
 	case activation.StatusPending:
 		if _, err := transaction.Exec(ctx, `
-			INSERT INTO devices (id, device_sn, thing_name, pid, status)
+			INSERT INTO device_registry (id, device_sn, thing_name, pid, status)
 			VALUES ($1,$2,$2,'feeder-x1','provisioning')
 		`, deviceInternalID, deviceSN); err != nil {
 			return activation.Record{}, fmt.Errorf("reserve device identity: %w", err)
 		}
 		csrHash := sha256.Sum256([]byte(csrPEM))
 		if _, err := transaction.Exec(ctx, `
-			INSERT INTO activation_sessions (
-				id, activation_id, session_external_id, method, status, csr_pem, csr_sha256, expires_at
+			INSERT INTO device_activation_sessions (
+				id, device_activation_id, session_external_id, method, status, csr_pem, csr_sha256, expires_at
 			) VALUES ($1::uuid,$1::uuid,$1::text,$2,'pending',$3,$4,$5)
 		`, activationID, method, csrPEM, csrHash[:], expiresAt); err != nil {
 			return activation.Record{}, fmt.Errorf("reserve activation session: %w", err)
 		}
 		if _, err := transaction.Exec(ctx, `
-			UPDATE activations SET status='activating', device_id=$2, updated_at=now() WHERE id=$1
+			UPDATE device_activations SET status='activating', device_registry_id=$2, updated_at=now() WHERE id=$1
 		`, activationID, deviceInternalID); err != nil {
 			return activation.Record{}, fmt.Errorf("mark activation provisioning: %w", err)
 		}
@@ -142,7 +142,7 @@ func (repository *ActivationRepository) CompletePreparation(
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 	commandTag, err := transaction.Exec(ctx, `
-		UPDATE activations SET status='installing', updated_at=now()
+		UPDATE device_activations SET status='installing', updated_at=now()
 		WHERE id=$1 AND status='activating'
 	`, activationID)
 	if err != nil {
@@ -152,15 +152,15 @@ func (repository *ActivationRepository) CompletePreparation(
 		return activation.Record{}, activation.ErrActivationAlreadyPrepared
 	}
 	if _, err := transaction.Exec(ctx, `
-		UPDATE devices SET certificate_id=$2, aws_iot_endpoint=$3, updated_at=now()
-		WHERE id=(SELECT device_id FROM activations WHERE id=$1)
+		UPDATE device_registry SET certificate_id=$2, aws_iot_endpoint=$3, updated_at=now()
+		WHERE id=(SELECT device_registry_id FROM device_activations WHERE id=$1)
 	`, activationID, installation.CertificateID, installation.Endpoint); err != nil {
 		return activation.Record{}, fmt.Errorf("store device certificate reference: %w", err)
 	}
 	if _, err := transaction.Exec(ctx, `
-		UPDATE activation_sessions
+		UPDATE device_activation_sessions
 		SET status='prepared', certificate_pem=$2, installation_nonce=$3, updated_at=now()
-		WHERE activation_id=$1
+		WHERE device_activation_id=$1
 	`, activationID, installation.Certificate, installation.ProofNonce); err != nil {
 		return activation.Record{}, fmt.Errorf("store installation challenge: %w", err)
 	}
@@ -177,16 +177,16 @@ func (repository *ActivationRepository) FailPreparation(ctx context.Context, act
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 	if _, err := transaction.Exec(ctx, `
-		UPDATE devices SET status='revoked', updated_at=now()
-		WHERE id=(SELECT device_id FROM activations WHERE id=$1)
+		UPDATE device_registry SET status='revoked', updated_at=now()
+		WHERE id=(SELECT device_registry_id FROM device_activations WHERE id=$1)
 	`, activationID); err != nil {
 		return fmt.Errorf("revoke failed preparation device: %w", err)
 	}
-	if _, err := transaction.Exec(ctx, `UPDATE activation_sessions SET status='failed', updated_at=now() WHERE activation_id=$1`, activationID); err != nil {
+	if _, err := transaction.Exec(ctx, `UPDATE device_activation_sessions SET status='failed', updated_at=now() WHERE device_activation_id=$1`, activationID); err != nil {
 		return fmt.Errorf("fail activation session: %w", err)
 	}
 	if _, err := transaction.Exec(ctx, `
-		UPDATE activations SET status='failed', failure_code=$2, updated_at=now() WHERE id=$1
+		UPDATE device_activations SET status='failed', failure_code=$2, updated_at=now() WHERE id=$1
 	`, activationID, failureCode); err != nil {
 		return fmt.Errorf("fail activation: %w", err)
 	}
@@ -204,23 +204,23 @@ func (repository *ActivationRepository) CompleteActivation(ctx context.Context, 
 	defer func() { _ = transaction.Rollback(ctx) }()
 	var deviceID, internalAppID, externalUserID string
 	if err := transaction.QueryRow(ctx, `
-		UPDATE activations SET status='activated', updated_at=now()
+		UPDATE device_activations SET status='activated', updated_at=now()
 		WHERE id=$1 AND status='installing'
-		RETURNING device_id::text, internal_app_id, binding_external_user_id
+		RETURNING device_registry_id::text, internal_app_id, binding_external_user_id
 	`, activationID).Scan(&deviceID, &internalAppID, &externalUserID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return activation.Record{}, activation.ErrActivationAlreadyPrepared
 		}
 		return activation.Record{}, fmt.Errorf("complete activation: %w", err)
 	}
-	if _, err := transaction.Exec(ctx, `UPDATE devices SET status='active', updated_at=now() WHERE id=$1`, deviceID); err != nil {
+	if _, err := transaction.Exec(ctx, `UPDATE device_registry SET status='active', updated_at=now() WHERE id=$1`, deviceID); err != nil {
 		return activation.Record{}, fmt.Errorf("activate device record: %w", err)
 	}
-	if _, err := transaction.Exec(ctx, `UPDATE activation_sessions SET status='confirmed', updated_at=now() WHERE activation_id=$1`, activationID); err != nil {
+	if _, err := transaction.Exec(ctx, `UPDATE device_activation_sessions SET status='confirmed', updated_at=now() WHERE device_activation_id=$1`, activationID); err != nil {
 		return activation.Record{}, fmt.Errorf("confirm activation session: %w", err)
 	}
 	if _, err := transaction.Exec(ctx, `
-		INSERT INTO bindings (id, device_id, internal_app_id, binding_external_user_id, status)
+		INSERT INTO device_bindings (id, device_registry_id, internal_app_id, binding_external_user_id, status)
 		VALUES ($1,$2,$3,$4,'active')
 	`, bindingID, deviceID, internalAppID, externalUserID); err != nil {
 		var postgresError *pgconn.PgError
@@ -239,9 +239,9 @@ func (repository *ActivationRepository) ListDevices(ctx context.Context, interna
 	rows, err := repository.pool.Query(ctx, `
 		SELECT d.device_sn, a.id::text, d.aws_iot_endpoint, b.binding_external_user_id, 'provisioned',
 		       d.presence_online, d.last_seen_at
-		FROM bindings b
-		JOIN devices d ON d.id=b.device_id
-		JOIN activations a ON a.device_id=d.id AND a.status='activated'
+		FROM device_bindings b
+		JOIN device_registry d ON d.id=b.device_registry_id
+		JOIN device_activations a ON a.device_registry_id=d.id AND a.status='activated'
 		WHERE b.internal_app_id=$1 AND ($2='' OR b.binding_external_user_id=$2) AND b.status='active'
 		ORDER BY d.device_sn
 	`, internalAppID, externalUserID)
@@ -274,13 +274,13 @@ func loadActivationRecord(ctx context.Context, querier rowQuerier, id string, fo
 	query := `
 		SELECT a.id::text, a.internal_app_id, a.binding_external_user_id, a.method, a.status,
 		       a.code_hash, a.idempotency_key, a.request_hash, a.expires_at,
-		       COALESCE(a.device_id::text, ''), COALESCE(d.device_sn, ''),
+		       COALESCE(a.device_registry_id::text, ''), COALESCE(d.device_sn, ''),
 		       COALESCE(s.csr_pem, ''), COALESCE(d.certificate_id, ''),
 		       COALESCE(s.certificate_pem, ''), COALESCE(d.aws_iot_endpoint, ''),
 		       COALESCE(s.installation_nonce, ''), COALESCE(a.failure_code, '')
-		FROM activations a
-		LEFT JOIN devices d ON d.id=a.device_id
-		LEFT JOIN activation_sessions s ON s.activation_id=a.id
+		FROM device_activations a
+		LEFT JOIN device_registry d ON d.id=a.device_registry_id
+		LEFT JOIN device_activation_sessions s ON s.device_activation_id=a.id
 		WHERE a.id=$1
 		ORDER BY s.created_at DESC
 		LIMIT 1`

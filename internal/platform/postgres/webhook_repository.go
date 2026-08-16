@@ -104,7 +104,7 @@ func insertWebhookDelivery(
 		nullableErrorCode = errorCode
 	}
 	if _, err := transaction.Exec(ctx, `
-		INSERT INTO webhook_deliveries (id, outbox_id, attempt, status_code, error_code)
+		INSERT INTO webhook_deliveries (id, webhook_outbox_id, attempt, status_code, error_code)
 		VALUES ($1,$2,$3,$4,$5)
 	`, deliveryID, job.ID, job.Attempts, statusCode, nullableErrorCode); err != nil {
 		return fmt.Errorf("record webhook delivery: %w", err)

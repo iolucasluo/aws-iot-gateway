@@ -4,6 +4,7 @@
 [`rules/ai-项目规则索引.md`](rules/ai-项目规则索引.md) 加载命中的规则。
 
 - `rules/Go开发规范.md`：包职责、错误处理和持久化边界。
+- `rules/数据库设计规范.md`：窄域 schema、FK/索引/trigger 命名和 migration 管理门禁。
 - `rules/HTTP与Activation契约.md`：HTTP 路由、认证和 activation 状态机。
 - `rules/安全边界.md`：凭据、设备密钥、用户隔离和 AWS 权限边界。
 - `rules/测试与验证.md`：Go 测试、静态检查和交付证据。

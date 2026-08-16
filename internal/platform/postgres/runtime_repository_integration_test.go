@@ -3,11 +3,9 @@ package postgres
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/device"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/events"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/media"
@@ -15,16 +13,8 @@ import (
 )
 
 func TestRuntimeRepositoriesPersistCommandMediaEventAndWebhookOutbox(t *testing.T) {
-	databaseURL := os.Getenv("TEST_POSTGRES_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_POSTGRES_URL is not configured")
-	}
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, databaseURL)
-	if err != nil {
-		t.Fatalf("pgxpool.New() error = %v", err)
-	}
-	t.Cleanup(pool.Close)
+	pool := newIsolatedMigrationPool(t, ctx)
 	if err := ApplyMigrations(ctx, pool); err != nil {
 		t.Fatalf("ApplyMigrations() error = %v", err)
 	}
@@ -34,13 +24,13 @@ func TestRuntimeRepositoriesPersistCommandMediaEventAndWebhookOutbox(t *testing.
 		deviceSN  = "fdr-20000000000000000000000000000001"
 	)
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO devices (id, device_sn, thing_name, pid, certificate_id, status)
+		INSERT INTO device_registry (id, device_sn, thing_name, pid, certificate_id, status)
 		VALUES ($1,$2,$2,'feeder-x1','certificate-runtime-test','active')
 	`, deviceID, deviceSN); err != nil {
 		t.Fatalf("insert device: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO bindings (id, device_id, internal_app_id, binding_external_user_id, status)
+		INSERT INTO device_bindings (id, device_registry_id, internal_app_id, binding_external_user_id, status)
 		VALUES ($1,$2,'livpet-staging','runtime-user','active')
 	`, bindingID, deviceID); err != nil {
 		t.Fatalf("insert binding: %v", err)
@@ -98,7 +88,7 @@ func TestRuntimeRepositoriesPersistCommandMediaEventAndWebhookOutbox(t *testing.
 	var presenceOnline bool
 	var presenceUpdatedAt, lastSeenAt time.Time
 	if err := pool.QueryRow(ctx, `
-		SELECT presence_online, presence_updated_at, last_seen_at FROM devices WHERE id=$1
+		SELECT presence_online, presence_updated_at, last_seen_at FROM device_registry WHERE id=$1
 	`, deviceID).Scan(&presenceOnline, &presenceUpdatedAt, &lastSeenAt); err != nil {
 		t.Fatalf("read device presence: %v", err)
 	}
@@ -148,7 +138,7 @@ func TestRuntimeRepositoriesPersistCommandMediaEventAndWebhookOutbox(t *testing.
 	var deliveryStatus int
 	if err := pool.QueryRow(ctx, `
 		SELECT o.status, d.status_code
-		FROM webhook_outbox o JOIN webhook_deliveries d ON d.outbox_id=o.id
+		FROM webhook_outbox o JOIN webhook_deliveries d ON d.webhook_outbox_id=o.id
 		WHERE o.id=$1
 	`, job.ID).Scan(&outboxStatus, &deliveryStatus); err != nil {
 		t.Fatalf("read webhook delivery: %v", err)

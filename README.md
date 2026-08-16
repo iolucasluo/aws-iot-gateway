@@ -64,8 +64,9 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 并按原 `commands.results[]` 格式将结果重新标记为 `factory_reset`；非零/缺失 ACK、关闭 `wait_ack`
 或在批量命令中夹带该生命周期操作都会 fail closed，绑定保持有效。旧 `reset_wifi`、
 `factory_reset(scope=wifi)` 以及缺失显式 scope 的 `factory_reset` 均返回 `400 invalid_request`，不会
-下发 MQTT；更换网络必须使用 ACK-based `recommission(runtime)`。`schedule`、`feed_log`、`settings`
-等不改变设备运行身份的 scope 继续走普通设备命令路径。
+下发 MQTT；设备移交必须使用 ACK-based `recommission(runtime)`。物理恢复出厂后仍由原绑定用户换网
+时使用下述预签名恢复路径，不释放 binding。`schedule`、`feed_log`、`settings` 等不改变设备运行
+身份的 scope 继续走普通设备命令路径。
 
 物理按键恢复出厂只清除设备本地 Wi-Fi 与用户数据，不释放 binding，也不删除 `device_sn` 或 AWS IoT
 运行身份。原绑定用户重新配网时，App 将上述 `network-reconfiguration-authorizations` 请求连同该
@@ -73,7 +74,9 @@ binding 的 `X-Device-Token` 预签名后交给设备；请求 body 包含 `bind
 `wifi_credentials_sha256`，不上传 Wi-Fi 明文。Gateway 必须把前者与 active binding 精确比较；摘要
 固定为四个字段的 versioned length-prefixed 字节串的 SHA-256 小写 hex。字段顺序为 domain
 `ExploreX-Bound-WiFi-Reconfiguration-v1`、`device_sn`、`wifi_ssid`、`wifi_password`；每个字段先编码
-为 UTF-8，再在前面写 4 字节无符号大端字节长度。App 与设备都必须拒绝包含 U+0000 的字段。设备
+为 UTF-8，再在前面写 4 字节无符号大端字节长度。`device_sn` 使用受限可打印 ASCII；SSID/密码拒绝
+C0 控制字符（U+0000–U+001F）和 DEL（U+007F），密码只允许空值、8–63-byte passphrase 或
+64-byte hex PSK。设备
 临时联网并原样转发，Gateway 只有在 HMAC、nonce、时效、外部用户 ID 和 device token 均属于当前
 active binding 时返回授权；该接口不创建 activation、不改 binding。跨语言 known-answer：`device_sn` =
 `fdr-00000000000000000000000000000001`、SSID = `Lab-WiFi`、password = `demo-pass` 时摘要为

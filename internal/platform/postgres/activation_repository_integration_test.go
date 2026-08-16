@@ -9,11 +9,9 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
-	"os"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/activation"
 )
 
@@ -27,16 +25,8 @@ func (persistentProvisioner) Provision(_ context.Context, deviceSN, _ string) (a
 }
 
 func TestActivationRepositorySurvivesServiceRestartAndCreatesBinding(t *testing.T) {
-	databaseURL := os.Getenv("TEST_POSTGRES_URL")
-	if databaseURL == "" {
-		t.Skip("TEST_POSTGRES_URL is not configured")
-	}
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, databaseURL)
-	if err != nil {
-		t.Fatalf("pgxpool.New() error = %v", err)
-	}
-	t.Cleanup(pool.Close)
+	pool := newIsolatedMigrationPool(t, ctx)
 	if err := ApplyMigrations(ctx, pool); err != nil {
 		t.Fatalf("ApplyMigrations() error = %v", err)
 	}
@@ -107,7 +97,7 @@ func TestActivationRepositorySurvivesServiceRestartAndCreatesBinding(t *testing.
 	}
 
 	var storedCodeHash []byte
-	if err := pool.QueryRow(ctx, `SELECT code_hash FROM activations WHERE id=$1`, created.ID).Scan(&storedCodeHash); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT code_hash FROM device_activations WHERE id=$1`, created.ID).Scan(&storedCodeHash); err != nil {
 		t.Fatalf("read code hash: %v", err)
 	}
 	if len(storedCodeHash) != sha256.Size || string(storedCodeHash) == created.Code {

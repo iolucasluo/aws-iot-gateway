@@ -23,8 +23,8 @@ func (repository *CommandRepository) Create(ctx context.Context, command device.
 		requestID = command.RequestID
 	}
 	if _, err := repository.pool.Exec(ctx, `
-		INSERT INTO commands (
-			id, device_id, internal_app_id, session_id, request_id, command, status, created_at
+		INSERT INTO device_commands (
+			id, device_registry_id, internal_app_id, session_id, request_id, command, status, created_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 	`, command.ID, command.DeviceID, command.InternalAppID, command.SessionID, requestID,
 		command.Payload, command.Status, command.CreatedAt); err != nil {
@@ -44,7 +44,7 @@ func (repository *CommandRepository) Complete(
 		errorValue = errorCode
 	}
 	commandTag, err := repository.pool.Exec(ctx, `
-		UPDATE commands
+		UPDATE device_commands
 		SET status=$2::varchar, ack=$3, error_code=$4,
 		    completed_at=CASE WHEN $2::varchar IN ('acked','failed','timed_out') THEN now() ELSE NULL END
 		WHERE id=$1

@@ -28,13 +28,15 @@ pending -> activating -> installing -> finalizing -> activated
 
 - 拒绝未知 JSON 字段、畸形 percent escape、超限 body、过期/重放 nonce 和错误 method。
 - `reset_wifi`、`factory_reset(scope=wifi)` 和缺失显式 scope 的 `factory_reset` 必须在 MQTT publish
-  前以 `400 invalid_request` 拒绝；换网只能走 ACK-based `recommission(runtime)`，防止设备运行身份
-  与 Gateway binding/token 分裂。
+  前以 `400 invalid_request` 拒绝；设备移交走 ACK-based `recommission(runtime)`。物理恢复出厂后
+  仍由原绑定用户换网时必须走下一条预签名授权路径，防止设备运行身份与 Gateway binding/token 分裂。
 - 物理按键恢复出厂不等于解绑：设备保留运行身份与 binding，但清除 Wi-Fi 和用户数据。重新写入 Wi-Fi
   必须转发原绑定 App 预签名的 `network-reconfiguration-authorizations` 请求，并同时通过 HMAC v1、
   nonce/时效、`binding_external_user_id` 精确比较和该 binding 的 `X-Device-Token`；body 只能携带
   Wi-Fi 凭据摘要，不能上传明文。摘要字段依次为 domain、device_sn、wifi_ssid、wifi_password；每个
-  UTF-8 字段前置 4 字节无符号大端长度，App 与设备均拒绝 U+0000，最后取 SHA-256 小写 hex。
+  UTF-8 字段前置 4 字节无符号大端长度，最后取 SHA-256 小写 hex。`device_sn` 使用受限可打印 ASCII；
+  App 与设备对 SSID/密码均拒绝 C0 控制字符和 DEL，密码只允许空值、8–63-byte passphrase 或
+  64-byte hex PSK。
 - 稳定业务错误沿用兼容扁平格式 `{ "error_code": "...", "message": "...", "error": "..." }`，
   不得返回 AWS/SQL/Redis 内部错误。
 - token、code、secret、CSR 私钥和设备私钥不得进入响应之外的日志；Gateway 永不接收 operational private key。

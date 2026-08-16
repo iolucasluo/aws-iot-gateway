@@ -11,10 +11,11 @@
 
 | 任务信号 | 必读规则 | 主要事实源 |
 |---|---|---|
-| Go 实现、重构、配置加载、PostgreSQL/Redis | `Go开发规范.md`、`测试与验证.md` | `cmd/`、`internal/`、`migrations/`、`.env.example` |
+| Go 实现、重构、配置加载、Redis | `Go开发规范.md`、`测试与验证.md` | `cmd/`、`internal/`、`.env.example` |
+| PostgreSQL、repository SQL、表/FK/索引/trigger 或 migration | `数据库设计规范.md`、`Go开发规范.md`、`测试与验证.md` | `migrations/`、`internal/platform/postgres/` |
 | HTTP 路由、JSON、状态码、activation 或设备目录 | `HTTP与Activation契约.md`、`测试与验证.md` | `internal/httpapi/`、`internal/activation/` |
 | token、CSR、certificate、installation proof、用户隔离或 AWS IAM | `安全边界.md`、`HTTP与Activation契约.md` | `internal/activation/`、`internal/awsiot/` |
-| App / 固件跨仓协议变化 | 全部四份规则 | App consumer、Anyka commissioning 契约 |
+| App / 固件跨仓协议变化 | 全部五份规则 | App consumer、Anyka commissioning 契约 |
 
 ## 仓库边界
 

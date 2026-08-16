@@ -40,7 +40,8 @@ func ApplyMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 	sort.Slice(entries, func(left, right int) bool { return entries[left].Name() < entries[right].Name() })
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") ||
+			strings.HasSuffix(entry.Name(), ".down.sql") {
 			continue
 		}
 		var applied bool
