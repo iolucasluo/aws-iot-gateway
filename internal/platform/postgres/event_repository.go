@@ -102,7 +102,7 @@ func (repository *EventRepository) Store(ctx context.Context, event events.Event
 	if internalAppID != "" {
 		deliveryHash := sha256.Sum256([]byte(internalAppID + "\n" + event.ID))
 		deliveryID := hex.EncodeToString(deliveryHash[:])
-		payload, webhookEventType := buildWebhookPayload(internalAppID, deliveryID, event)
+		payload, webhookEventType := buildWebhookPayload(deliveryID, event)
 		outboxID, err := postgresUUID()
 		if err != nil {
 			return fmt.Errorf("generate webhook outbox id: %w", err)
@@ -121,7 +121,7 @@ func (repository *EventRepository) Store(ctx context.Context, event events.Event
 	return nil
 }
 
-func buildWebhookPayload(internalAppID, deliveryID string, event events.Event) (map[string]any, string) {
+func buildWebhookPayload(deliveryID string, event events.Event) (map[string]any, string) {
 	webhookEventType := event.EventType
 	webhookData := event.Data
 	if event.EventType == "feed_done" {
@@ -132,7 +132,7 @@ func buildWebhookPayload(internalAppID, deliveryID string, event events.Event) (
 	}
 	payload := map[string]any{
 		"delivery_id": deliveryID, "event_id": event.ID, "event_type": webhookEventType,
-		"device_sn": event.DeviceSN, "pid": "feeder-x1", "project_id": internalAppID,
+		"device_sn": event.DeviceSN, "pid": "feeder-x1",
 		"ts": event.ReceivedAt.Unix(), "received_at": event.ReceivedAt.UTC().Format(time.RFC3339Nano),
 		"boot_id": event.BootID, "event_seq": event.EventSeq, "monotonic_ms": event.MonotonicMS,
 		"time_quality": event.TimeQuality, "time_source": event.TimeSource, "data": webhookData,

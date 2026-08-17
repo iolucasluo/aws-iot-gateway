@@ -117,8 +117,11 @@ func TestRuntimeRepositoriesPersistCommandMediaEventAndWebhookOutbox(t *testing.
 		t.Fatalf("read webhook outbox: %v", err)
 	}
 	var webhook map[string]any
-	if err := json.Unmarshal(payload, &webhook); err != nil || webhook["project_id"] != "livpet-staging" || webhook["pid"] != "feeder-x1" {
+	if err := json.Unmarshal(payload, &webhook); err != nil || webhook["pid"] != "feeder-x1" {
 		t.Fatalf("webhook payload = %#v, %v", webhook, err)
+	}
+	if _, found := webhook["project_id"]; found {
+		t.Fatalf("webhook payload must not expose platform project metadata: %#v", webhook)
 	}
 	webhookRepository, err := NewWebhookRepository(pool)
 	if err != nil {
