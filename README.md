@@ -55,6 +55,10 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 
 设备子路由覆盖 detail、shadow、commands、schedules、events、streams、snapshots、recordings 和 feed-audio。Bearer `/v1/activations`、`/v1/devices` 和旧 `/v1/device-activations/{id}/*` 已从 router 删除。完整目标路由和阶段验收快照见根仓 `docs/branches/.archived/wicgeechan/2026-08-17/2026-08-13-internal-aws-api-implementation-plan.md`；当前未完成项见 `docs/branches/iot-flash-develop-internal-aws-follow-ups.md`。
 
+设备登记、activation、binding、reset、MQTT 事件与媒体的代码反向工程流程图见
+[`docs/flows/目录说明.md`](docs/flows/目录说明.md)。每个场景单独成篇；它们不恢复旧 IoT 平台的
+Project、IDevID、Factory、RMA 或 OTA 语义。
+
 `recommission` 只接受 `reset_scope=runtime|all`：默认 `runtime` 仅清理 Wi-Fi 与运行身份，`all`
 还清理设备本地用户数据。两种 scope 都必须先取得设备 ACK，Gateway 才撤销 token、释放 binding
 并进入旧运行证书禁用流程；离线、超时、未知 scope 或 ACK 失败均保持 binding 有效。
