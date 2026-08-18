@@ -24,22 +24,23 @@ type InternalApp struct {
 }
 
 type Config struct {
-	ListenAddress         string
-	Environment           string
-	DatabaseURL           string
-	RedisURL              string
-	AWSRegion             string
-	DevicePolicyName      string
-	IoTTopicPrefix        string
-	IoTCredentialEndpoint string
-	IoTRoleAlias          string
-	IoTShadowName         string
-	IngestQueueURL        string
-	KVSChannelPrefix      string
-	S3MediaBucket         string
-	TimeBootstrapKeyID    string
-	TimeBootstrapKMSKeyID string
-	InternalApps          []InternalApp
+	ListenAddress              string
+	Environment                string
+	DatabaseURL                string
+	RedisURL                   string
+	AWSRegion                  string
+	DevicePolicyName           string
+	IoTTopicPrefix             string
+	IoTCredentialEndpoint      string
+	IoTRoleAlias               string
+	IoTShadowName              string
+	IngestQueueURL             string
+	KVSChannelPrefix           string
+	S3MediaBucket              string
+	TimeBootstrapKeyID         string
+	TimeBootstrapKMSKeyID      string
+	InternalApps               []InternalApp
+	DirectACKSubscriberEnabled bool
 }
 
 func LoadConfig(getenv func(string) string) (Config, error) {
@@ -47,25 +48,35 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	directACKSubscriberEnabled, err := parseOptionalBool(
+		"AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED", getenv("AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED"),
+	)
+	if err != nil {
+		return Config{}, err
+	}
 	config := Config{
-		ListenAddress:         valueOr(getenv("GATEWAY_LISTEN_ADDRESS"), ":14080"),
-		Environment:           valueOr(getenv("GATEWAY_ENVIRONMENT"), "development"),
-		DatabaseURL:           databaseURL,
-		RedisURL:              strings.TrimSpace(getenv("REDIS_URL")),
-		AWSRegion:             strings.TrimSpace(getenv("AWS_REGION")),
-		DevicePolicyName:      strings.TrimSpace(getenv("AWS_IOT_DEVICE_POLICY_NAME")),
-		IoTTopicPrefix:        strings.TrimSpace(getenv("AWS_IOT_TOPIC_PREFIX")),
-		IoTCredentialEndpoint: strings.TrimSpace(getenv("AWS_IOT_CREDENTIAL_PROVIDER_ENDPOINT")),
-		IoTRoleAlias:          strings.TrimSpace(getenv("AWS_IOT_ROLE_ALIAS")),
-		IoTShadowName:         strings.TrimSpace(getenv("AWS_IOT_SHADOW_NAME")),
-		IngestQueueURL:        strings.TrimSpace(getenv("AWS_IOT_INGEST_QUEUE_URL")),
-		KVSChannelPrefix:      strings.TrimSpace(getenv("AWS_KVS_CHANNEL_PREFIX")),
-		S3MediaBucket:         strings.TrimSpace(getenv("AWS_S3_MEDIA_BUCKET")),
-		TimeBootstrapKeyID:    strings.TrimSpace(getenv("TIME_BOOTSTRAP_KEY_ID")),
-		TimeBootstrapKMSKeyID: strings.TrimSpace(getenv("TIME_BOOTSTRAP_KMS_KEY_ID")),
+		ListenAddress:              valueOr(getenv("GATEWAY_LISTEN_ADDRESS"), ":14080"),
+		Environment:                valueOr(getenv("GATEWAY_ENVIRONMENT"), "development"),
+		DatabaseURL:                databaseURL,
+		RedisURL:                   strings.TrimSpace(getenv("REDIS_URL")),
+		AWSRegion:                  strings.TrimSpace(getenv("AWS_REGION")),
+		DevicePolicyName:           strings.TrimSpace(getenv("AWS_IOT_DEVICE_POLICY_NAME")),
+		IoTTopicPrefix:             strings.TrimSpace(getenv("AWS_IOT_TOPIC_PREFIX")),
+		IoTCredentialEndpoint:      strings.TrimSpace(getenv("AWS_IOT_CREDENTIAL_PROVIDER_ENDPOINT")),
+		IoTRoleAlias:               strings.TrimSpace(getenv("AWS_IOT_ROLE_ALIAS")),
+		IoTShadowName:              strings.TrimSpace(getenv("AWS_IOT_SHADOW_NAME")),
+		IngestQueueURL:             strings.TrimSpace(getenv("AWS_IOT_INGEST_QUEUE_URL")),
+		KVSChannelPrefix:           strings.TrimSpace(getenv("AWS_KVS_CHANNEL_PREFIX")),
+		S3MediaBucket:              strings.TrimSpace(getenv("AWS_S3_MEDIA_BUCKET")),
+		TimeBootstrapKeyID:         strings.TrimSpace(getenv("TIME_BOOTSTRAP_KEY_ID")),
+		TimeBootstrapKMSKeyID:      strings.TrimSpace(getenv("TIME_BOOTSTRAP_KMS_KEY_ID")),
+		DirectACKSubscriberEnabled: directACKSubscriberEnabled,
 	}
 	if !validEnvironment(config.Environment) {
 		return Config{}, fmt.Errorf("GATEWAY_ENVIRONMENT must be development, staging, or production")
+	}
+	if config.DirectACKSubscriberEnabled && config.Environment != "development" {
+		return Config{}, fmt.Errorf("AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED is allowed only when GATEWAY_ENVIRONMENT=development")
 	}
 	if config.AWSRegion == "" || config.DevicePolicyName == "" || config.IoTTopicPrefix == "" ||
 		config.IoTCredentialEndpoint == "" || config.IoTRoleAlias == "" || config.IoTShadowName == "" {
@@ -122,6 +133,18 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	return config, nil
+}
+
+func parseOptionalBool(name, value string) (bool, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s must be true or false", name)
+	}
+	return parsed, nil
 }
 
 func loadDatabaseURL(getenv func(string) string) (string, error) {

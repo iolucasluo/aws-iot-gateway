@@ -85,6 +85,19 @@ func (service *IngestService) Handle(ctx context.Context, payload []byte) error 
 	if err := json.Unmarshal(payload, &message); err != nil {
 		return fmt.Errorf("decode IoT ingest message: %w", err)
 	}
+	return service.handleMessage(ctx, message)
+}
+
+func (service *IngestService) HandleMQTT(ctx context.Context, topic string, payload []byte) error {
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		return fmt.Errorf("decode MQTT message: %w", err)
+	}
+	message["topic"] = topic
+	return service.handleMessage(ctx, message)
+}
+
+func (service *IngestService) handleMessage(ctx context.Context, message map[string]any) error {
 	topic, ok := message["topic"].(string)
 	if !ok || topic == "" {
 		return fmt.Errorf("IoT ingest message has no topic")
