@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -15,13 +16,14 @@ import (
 const commandACKTimeout = 10 * time.Second
 
 var (
-	ErrInvalidInput   = errors.New("invalid device operation input")
-	ErrACKTimeout     = errors.New("device ack timeout")
-	ErrDeviceOffline  = errors.New("device offline")
-	ErrDeviceBusy     = errors.New("device busy")
-	ErrDeviceJammed   = errors.New("device jammed")
-	ErrPublishFailed  = errors.New("device command publish failed")
-	topicPrefixRegexp = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`)
+	ErrInvalidInput          = errors.New("invalid device operation input")
+	ErrACKTimeout            = errors.New("device ack timeout")
+	ErrDeviceOffline         = errors.New("device offline")
+	ErrDeviceBusy            = errors.New("device busy")
+	ErrDeviceJammed          = errors.New("device jammed")
+	ErrPublishFailed         = errors.New("device command publish failed")
+	ErrInvalidDeviceResponse = errors.New("invalid device response")
+	topicPrefixRegexp        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`)
 )
 
 type CommandInput struct {
@@ -54,6 +56,16 @@ type CommandResult struct {
 
 type SendCommandsResult struct {
 	Results []CommandResult `json:"results"`
+}
+
+type PTZStatus struct {
+	Pan            int64   `json:"pan"`
+	Tilt           int64   `json:"tilt"`
+	LimitH         int64   `json:"limit_h"`
+	LimitV         int64   `json:"limit_v"`
+	PanNormalized  float64 `json:"pan_normalized"`
+	TiltNormalized float64 `json:"tilt_normalized"`
+	Moving         bool    `json:"moving"`
 }
 
 type Publisher interface {
@@ -104,6 +116,19 @@ func (service *Service) GetShadow(ctx context.Context, deviceSN string) (any, er
 		return nil, fmt.Errorf("decode AWS IoT shadow: %w", err)
 	}
 	return result, nil
+}
+
+func (service *Service) GetPTZStatus(ctx context.Context, internalAppID, deviceID, deviceSN string) (PTZStatus, error) {
+	result, err := service.SendCommands(ctx, internalAppID, deviceID, deviceSN, []CommandInput{{
+		Code: "ptz", Value: json.RawMessage(`{"op":"get_position"}`),
+	}}, true)
+	if err != nil {
+		return PTZStatus{}, err
+	}
+	if len(result.Results) != 1 || result.Results[0].Status != "success" {
+		return PTZStatus{}, ErrInvalidDeviceResponse
+	}
+	return parsePTZStatus(result.Results[0].Data, result.Results[0].CommandID)
 }
 
 func (service *Service) SendCommands(
@@ -172,7 +197,11 @@ func (service *Service) SendCommands(
 			}
 			return SendCommandsResult{}, err
 		}
-		code, _ := numericCode(ack["code"])
+		code, ok := numericCode(ack["code"])
+		if !ok {
+			_ = service.repository.Complete(ctx, commandID, "failed", ack, "invalid_device_response")
+			return SendCommandsResult{}, ErrInvalidDeviceResponse
+		}
 		switch code {
 		case -2:
 			_ = service.repository.Complete(ctx, commandID, "failed", ack, "device_busy")
@@ -196,6 +225,60 @@ func (service *Service) SendCommands(
 		}
 	}
 	return SendCommandsResult{Results: results}, nil
+}
+
+func parsePTZStatus(data map[string]any, expectedSessionID string) (PTZStatus, error) {
+	if data == nil || data["action"] != "ptz" || data["op"] != "get_position" ||
+		data["session_id"] != expectedSessionID {
+		return PTZStatus{}, ErrInvalidDeviceResponse
+	}
+	code, ok := numericCode(data["code"])
+	if !ok || code != 0 {
+		return PTZStatus{}, ErrInvalidDeviceResponse
+	}
+	pan, panOK := exactInteger(data["pan"])
+	tilt, tiltOK := exactInteger(data["tilt"])
+	limitH, limitHOK := exactInteger(data["limit_h"])
+	limitV, limitVOK := exactInteger(data["limit_v"])
+	panNormalized, panNormalizedOK := numericFloat(data["pan_normalized"])
+	tiltNormalized, tiltNormalizedOK := numericFloat(data["tilt_normalized"])
+	moving, movingOK := data["moving"].(bool)
+	if !panOK || !tiltOK || !limitHOK || !limitVOK || limitH <= 0 || limitV <= 0 ||
+		!panNormalizedOK || !tiltNormalizedOK || panNormalized < -1 || panNormalized > 1 ||
+		tiltNormalized < -1 || tiltNormalized > 1 || !movingOK {
+		return PTZStatus{}, ErrInvalidDeviceResponse
+	}
+	return PTZStatus{
+		Pan: pan, Tilt: tilt, LimitH: limitH, LimitV: limitV,
+		PanNormalized: panNormalized, TiltNormalized: tiltNormalized, Moving: moving,
+	}, nil
+}
+
+func exactInteger(value any) (int64, bool) {
+	return numericCode(value)
+}
+
+func numericFloat(value any) (float64, bool) {
+	var number float64
+	switch typed := value.(type) {
+	case float64:
+		number = typed
+	case float32:
+		number = float64(typed)
+	case int:
+		number = float64(typed)
+	case int64:
+		number = float64(typed)
+	case json.Number:
+		parsed, err := typed.Float64()
+		if err != nil {
+			return 0, false
+		}
+		number = parsed
+	default:
+		return 0, false
+	}
+	return number, !math.IsNaN(number) && !math.IsInf(number, 0)
 }
 
 func commandPayload(input CommandInput, sessionID string) (map[string]any, error) {
@@ -235,6 +318,12 @@ func marshalWithoutHTMLEscape(value any) ([]byte, error) {
 func numericCode(value any) (int64, bool) {
 	switch code := value.(type) {
 	case float64:
+		const minInt64Float = -9223372036854775808.0
+		const maxInt64ExclusiveFloat = 9223372036854775808.0
+		if math.IsNaN(code) || math.IsInf(code, 0) || math.Trunc(code) != code ||
+			code < minInt64Float || code >= maxInt64ExclusiveFloat {
+			return 0, false
+		}
 		return int64(code), true
 	case int:
 		return int64(code), true

@@ -139,6 +139,7 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		operation = parts[1]
 	}
 	recognized := (operation == "detail" && request.Method == http.MethodGet) ||
+		(operation == "status" && request.Method == http.MethodGet) ||
 		(operation == "shadow" && request.Method == http.MethodGet) ||
 		(operation == "commands" && request.Method == http.MethodPost) ||
 		(operation == "schedules" && request.Method == http.MethodPut) ||
@@ -212,6 +213,20 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 			return true
 		}
 		writeJSON(writer, http.StatusOK, shadow)
+		return true
+	case "status":
+		if s.device == nil {
+			writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "device service is unavailable")
+			return true
+		}
+		status, err := s.device.GetPTZStatus(
+			request.Context(), principal.InternalAppID, ownedBinding.DeviceID, ownedBinding.DeviceSN,
+		)
+		if err != nil {
+			writeDeviceError(writer, err)
+			return true
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"ptz": status})
 		return true
 	case "events":
 		if s.events == nil {
@@ -931,6 +946,8 @@ func writeDeviceError(writer http.ResponseWriter, err error) {
 		writeError(writer, http.StatusConflict, "device_jammed", "device is jammed")
 	case errors.Is(err, devicemodule.ErrPublishFailed):
 		writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "device command could not be published")
+	case errors.Is(err, devicemodule.ErrInvalidDeviceResponse):
+		writeError(writer, http.StatusBadGateway, "invalid_device_response", "device response is invalid")
 	default:
 		writeError(writer, http.StatusInternalServerError, "internal_error", "internal server error")
 	}
