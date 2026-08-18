@@ -104,6 +104,31 @@ AWS_REGION=ap-east-1 \
 | Anyka / Linux | Contract directory | pack script 写入 immutable release env、CA 和每个 `<kid>.der` | KMS key、CloudFormation access |
 | aws-iot-demo-app | 无 | 保持自己的 Gateway origin + HMAC 配置 | CA/SPKI bootstrap trust Contract |
 
+Dell 是 Taixin 的受控 build host，不是第四个配置 producer。正式 build 必须显式指定已发布的
+公开目录：
+
+```sh
+docs/coding-rules/skills/txw82x-firmware-flash/scripts/txw82x_remote_clean_package.sh \
+  build-import --contract /absolute/path/to/device-bootstrap-contract
+```
+
+wrapper 在 Mac 与 Dell 双重校验 Contract，只在远端本次 build 内渲染 generated header，退出时
+删除 checkout 中的生成文件；远端 job 保留公开 Contract 与 receipt，receipt 记录
+`contract.json` SHA-256。不要在 Dell 预置 header，也不要传输 AWS profile、KMS authority 或
+local signer PEM。
+
+## Publisher test
+
+Contract publisher 的静态边界只有一个测试入口：
+
+```sh
+sh deploy/device-bootstrap/tests/test_contract_publishers.sh
+```
+
+`deploy/local/test_local_compose_contract.sh` 仍只验证 local PostgreSQL/Redis compose；
+`deploy/staging/test_*.sh` 仍只验证 staging stack、policy 与 smoke 行为，它们不是 Contract
+publisher 的重复测试。
+
 消费者的校验必须拒绝：未知/secret 字段、文件 SHA 不匹配、目录逃逸、非 P-256 SPKI、重复 `kid`、release 环境 HTTP，以及 development Contract 被用于 release build。
 
 ## 轮换与回滚

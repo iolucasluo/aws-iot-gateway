@@ -126,7 +126,11 @@ then retire the old key only after supported device releases no longer need it.
   keyring entry as `config/time-bootstrap/<kid>.der`.
 - Taixin renders the Contract into an ignored generated C header and embeds the
   CA and keyring in the firmware image. Dell receives the Contract but no AWS
-  authority.
+  authority: the formal build input is
+  `txw82x_remote_clean_package.sh build-import --contract <absolute-contract-directory>`.
+  Dell validates it again, renders a temporary generated header, and records
+  `contract.json` SHA-256 in its receipt; it never relies on a pre-installed
+  local header.
 - `aws-iot-demo-app` does not consume this Contract. It keeps its own Gateway
   origin plus HMAC configuration boundary.
 
