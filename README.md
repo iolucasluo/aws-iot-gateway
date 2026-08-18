@@ -47,6 +47,7 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 | `POST /api/v1/openapi/devices/token` | 内部 App backend | HMAC v1 |
 | `POST /api/v1/openapi/devices/unbind/{device_token}` | 内部 App backend | HMAC v1 |
 | `POST /api/v1/openapi/devices/recommission/{device_token}` | 内部 App backend | HMAC v1 |
+| `GET /api/v1/openapi/devices/{device_sn}/status` | 内部 App backend | HMAC v1 + `X-Device-Token` |
 | `/api/v1/openapi/devices/{device_sn}/*` | 内部 App backend | HMAC v1 + `X-Device-Token` |
 | `POST /api/v1/openapi/devices/{device_sn}/network-reconfiguration-authorizations` | 已绑定设备换网转发 | HMAC v1 + `X-Device-Token` |
 | `POST /api/v1/device-activations/session/prepare-installation` | 设备 | activation code |
@@ -71,6 +72,16 @@ Project、IDevID、Factory、RMA 或 OTA 语义。
 下发 MQTT；设备移交必须使用 ACK-based `recommission(runtime)`。物理恢复出厂后仍由原绑定用户换网
 时使用下述预签名恢复路径，不释放 binding。`schedule`、`feed_log`、`settings` 等不改变设备运行
 身份的 scope 继续走普通设备命令路径。
+
+PTZ 控制沿用 `commands`：指定坐标使用
+`{"code":"ptz","value":{"op":"move_to","pan_normalized":0.45,"tilt_normalized":-0.25}}`，
+两轴归一化范围均为 `[-1,1]`，Gateway 不换算为设备步数。`wait_ack=false` 返回 HTTP 202 和
+`accepted`，只表示命令已发布，不能解释为电机运动完成；`wait_ack=true` 才返回设备 ACK 结果。实时位置由
+`GET /api/v1/openapi/devices/{device_sn}/status` 查询，Gateway 固定生成
+`{"action":"ptz","op":"get_position","session_id":"..."}` 并等待对应 res topic ACK。响应包含
+整数 `pan/tilt/limit_h/limit_v`、范围 `[-1,1]` 的归一化坐标和 JSON boolean `moving`。Gateway
+校验 action、op、session、零值 code 和全部字段，但不保存或自行累加 PTZ 坐标；协议字段非法时返回
+`502 invalid_device_response`，离线/超时和 busy/jammed 继续沿用现有设备错误映射。
 
 物理按键恢复出厂只清除设备本地 Wi-Fi 与用户数据，不释放 binding，也不删除 `device_sn` 或 AWS IoT
 运行身份。原绑定用户重新配网时，App 将上述 `network-reconfiguration-authorizations` 请求连同该
