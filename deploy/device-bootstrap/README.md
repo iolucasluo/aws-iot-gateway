@@ -23,8 +23,8 @@ Gateway deployment owner
 ```
 
 当前尚未量产，`local` 和 `staging` 都是供多仓库硬件联调的**共享环境**。因此这两个环境的
-Contract 是经过评审的环境输入，发布位置固定为 `deploy/<environment>/device-bootstrap-contract/`；硬件只
-从该 Git 资产复制。个人临时 LAN 地址、个人私钥和临时候选输出不属于它们。环境尚未具备稳定 endpoint
+Contract 是经过评审的环境输入，发布位置固定为
+`deploy/device-bootstrap/contracts/<environment>/`；硬件只从该 Git 资产复制。个人临时 LAN 地址、个人私钥和临时候选输出不属于它们。环境尚未具备稳定 endpoint
 和 signer 时，不创建伪造的 Contract；见 `deploy/local/README.md`。
 
 生成脚本统一位于 `deploy/device-bootstrap/scripts/`，且只能写入调用者明确指定的、尚不存在的绝对
@@ -34,8 +34,8 @@ artifact，而不是把生产信任根提交到开发仓。
 
 | 环境 | Gateway 生成命令 | 默认输出目录 | 签名私钥/Cloud authority |
 | --- | --- | --- | --- |
-| `development` | `deploy/device-bootstrap/scripts/render-local-contract.sh --out <new-dir>` | `deploy/local/device-bootstrap-contract/`（Git 提交） | 仅共享 local 环境 owner 的 owner-only PEM |
-| `staging` | `deploy/device-bootstrap/scripts/render-staging-contract.sh --out <new-dir>` | `deploy/staging/device-bootstrap-contract/`（Git 提交） | 仅 Gateway release owner 的 AWS profile；只读取 CF Outputs 与 KMS 公钥 |
+| `development` | `deploy/device-bootstrap/scripts/render-local-contract.sh --out <new-dir>` | `deploy/device-bootstrap/contracts/development/`（Git 提交） | 仅共享 local 环境 owner 的 owner-only PEM |
+| `staging` | `deploy/device-bootstrap/scripts/render-staging-contract.sh --out <new-dir>` | `deploy/device-bootstrap/contracts/staging/`（Git 提交） | 仅 Gateway release owner 的 AWS profile；只读取 CF Outputs 与 KMS 公钥 |
 | `production` | 使用同一 CLI 的 `aws-release --environment production`，由正式生产发布流程封装 | 正式 release artifact store | 生产 release authority |
 
 候选输出目录一旦存在，脚本会拒绝覆盖。这是为了避免在不知道谁正在使用旧 Contract 时静默替换信任根。需要新值时，发布者创建新的候选目录，验证后人工更新 Git 中的环境目录；不要让硬件 build 或生成脚本自动覆盖它。
@@ -76,7 +76,7 @@ export GATEWAY_DEVICE_BOOTSTRAP_PRIVATE_KEY="$PWD/.local/device-bootstrap/$USER/
   --out /tmp/device-bootstrap-contract-local-next
 ```
 
-检查候选目录后，由发布者人工更新 `deploy/local/device-bootstrap-contract/` 并与 Gateway 变更一同提交。这里的 host 必须是团队设备均可达的稳定地址；不要把某台 Mac 的临时 DHCP IP 提交进去。Contract 只含 public SPKI 和 endpoint；复制不泄露该 PEM private key。
+检查候选目录后，由发布者人工更新 `deploy/device-bootstrap/contracts/development/` 并与 Gateway 变更一同提交。这里的 host 必须是团队设备均可达的稳定地址；不要把某台 Mac 的临时 DHCP IP 提交进去。Contract 只含 public SPKI 和 endpoint；复制不泄露该 PEM private key。
 
 ## Staging：CloudFormation + KMS Contract
 
@@ -92,7 +92,7 @@ AWS_REGION=ap-east-1 \
   --out /tmp/device-bootstrap-contract-staging-next
 ```
 
-检查候选目录后，由发布者人工更新 `deploy/staging/device-bootstrap-contract/` 并提交。Taixin/Anyka/Dell 只复制该公开目录，绝不需要 AWS profile、CloudFormation access 或 KMS access。
+检查候选目录后，由发布者人工更新 `deploy/device-bootstrap/contracts/staging/` 并提交。Taixin/Anyka/Dell 只复制该公开目录，绝不需要 AWS profile、CloudFormation access 或 KMS access。
 
 当前 staging API Gateway execute endpoint 使用 `trust-roots/AmazonRootCA1.pem`。其 SHA-256 fingerprint 是 `8E:CD:E6:88:4F:3D:87:B1:12:5B:A3:1A:C3:FC:B1:3D:70:16:DE:7F:57:CC:90:4F:E1:CB:97:C6:AE:98:19:6E`。生产若改用自定义域名/CA，必须先提交并评审新的信任根资产和产物路径；禁止从临时网络连接捕获 CA。
 

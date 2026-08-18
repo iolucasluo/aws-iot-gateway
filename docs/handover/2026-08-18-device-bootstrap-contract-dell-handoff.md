@@ -6,7 +6,7 @@
 消费者只读取公开 Contract；它们不得读取 Gateway runtime `.env`、AWS profile、KMS
 权限或 local signer private key。
 
-- staging 已发布并提交：`deploy/staging/device-bootstrap-contract/`。
+- staging 已发布并提交：`deploy/device-bootstrap/contracts/staging/`。
 - local **尚未发布**：当前没有团队设备可达的稳定 Gateway hostname/reserved address，且
   Gateway 仓也没有已配置的 shared local signer。不能提交开发者笔记本 DHCP 地址或空
   Contract。

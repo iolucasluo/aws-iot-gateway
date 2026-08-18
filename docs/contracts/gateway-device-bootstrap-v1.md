@@ -80,8 +80,8 @@ staging Contracts, once their stable environment inputs exist, are versioned
 environment inputs in this repository:
 
 ```text
-deploy/local/device-bootstrap-contract/
-deploy/staging/device-bootstrap-contract/
+deploy/device-bootstrap/contracts/development/
+deploy/device-bootstrap/contracts/staging/
 ```
 
 The exporter scripts live under `deploy/device-bootstrap/scripts/` and require

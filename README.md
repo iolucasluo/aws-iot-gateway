@@ -125,9 +125,9 @@ go run ./cmd/aws-iot-gateway
 ```
 
 需要让真实 Taixin/Anyka 硬件访问 Gateway 时，不要在各硬件仓手写 endpoint、CA 或 time SPKI。共享
-`local` 与 `staging` 环境的公开 `Gateway Device Bootstrap Contract` 发布位置分别是
-`deploy/local/device-bootstrap-contract/` 与 `deploy/staging/device-bootstrap-contract/`；硬件构建只复制
-存在且经审核的目录。Gateway owner 从本地 signer 或已部署 CloudFormation/KMS 的**公开** Outputs 生成候选
+`development`（local/LAN）与 `staging` 环境的公开 `Gateway Device Bootstrap Contract` 发布位置分别是
+`deploy/device-bootstrap/contracts/development/` 与
+`deploy/device-bootstrap/contracts/staging/`；硬件构建只复制存在且经审核的目录。Gateway owner 从本地 signer 或已部署 CloudFormation/KMS 的**公开** Outputs 生成候选
 目录，再人工审核、替换并提交环境 Contract；Dell 和硬件仓不需要 AWS authority。命令、环境变量、轮换和回滚见
 [deploy/device-bootstrap/README.md](deploy/device-bootstrap/README.md)，格式和消费者校验规则见
 [docs/contracts/gateway-device-bootstrap-v1.md](docs/contracts/gateway-device-bootstrap-v1.md)。

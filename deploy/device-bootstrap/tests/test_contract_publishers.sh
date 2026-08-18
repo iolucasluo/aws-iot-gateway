@@ -4,9 +4,16 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 LOCAL_SCRIPT="$ROOT/deploy/device-bootstrap/scripts/render-local-contract.sh"
 STAGING_SCRIPT="$ROOT/deploy/device-bootstrap/scripts/render-staging-contract.sh"
+PUBLISHED_CONTRACTS="$ROOT/deploy/device-bootstrap/contracts"
+STAGING_CONTRACT="$PUBLISHED_CONTRACTS/staging"
 
 test -f "$LOCAL_SCRIPT"
 test -f "$STAGING_SCRIPT"
+test -f "$STAGING_CONTRACT/contract.json"
+test -f "$STAGING_CONTRACT/gateway-ca.pem"
+test -d "$STAGING_CONTRACT/time-bootstrap"
+test ! -e "$ROOT/deploy/local/device-bootstrap-contract"
+test ! -e "$ROOT/deploy/staging/device-bootstrap-contract"
 
 python3 - "$LOCAL_SCRIPT" "$STAGING_SCRIPT" <<'PY'
 from pathlib import Path
