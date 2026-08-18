@@ -1,6 +1,9 @@
 # Device Bootstrap Contract / Dell 构建交接（2026-08-18）
 
-## 当前状态
+## 2026-08-18 审计快照
+
+本节记录当日观测，不代表 Dell 的实时 checkout 状态。任何远端构建前都必须重新核对
+Dell checkout 的 commit、clean 状态与下面列出的当前 Contract 事实源。
 
 `Gateway Device Bootstrap Contract v1` 的唯一 producer 是 `aws-iot-gateway`。硬件
 消费者只读取公开 Contract；它们不得读取 Gateway runtime `.env`、AWS profile、KMS
@@ -10,7 +13,7 @@
 - local **尚未发布**：当前没有团队设备可达的稳定 Gateway hostname/reserved address，且
   Gateway 仓也没有已配置的 shared local signer。不能提交开发者笔记本 DHCP 地址或空
   Contract。
-- Dell 当前选定的 firmware root 是旧 detached commit `ee34a9b47682ea594cd7e10d130a33ba1446f30e`；
+- 2026-08-18 观测到 Dell 选定的 firmware root 是旧 detached commit `ee34a9b47682ea594cd7e10d130a33ba1446f30e`；
   它没有 tracked loader、generated header 或 Contract，不能作为 Gateway 已接入构建的
   证据。
 - 本文档只交接代码、文档和验证边界；**未执行** Dell clean build、Contract 传输、CKLink
@@ -28,11 +31,11 @@ Gateway Git environment directory
   -> clean package + receipt with Contract SHA-256
 ```
 
-正式入口将使用：
+从 `<Workspace>` 以当前已发布的 staging Contract 运行正式入口：
 
 ```bash
 docs/coding-rules/skills/txw82x-firmware-flash/scripts/txw82x_remote_clean_package.sh \
-  build-import --contract /absolute/path/to/device-bootstrap-contract
+  build-import --contract "$PWD/aws-iot-gateway/deploy/device-bootstrap/contracts/staging"
 ```
 
 `--contract` 必须是公开 Contract 目录，不接受 JSON 单文件、header、私钥或 AWS
@@ -61,8 +64,8 @@ checkout 中的生成文件。公开 Contract 和 build log 保留在 job 目录
 - staging Contract 只能用于明确选择 staging 的构建，不能改名为 local。
 - Dell 可以接收公开 Contract，但不能得到 AWS profile、KMS authority、Gateway private key、
   device credential、activation code、Wi-Fi password 或 token。
-- 正式远端构建仍要求本机与 Dell checkout 为同一 clean commit；本次实现完成后，必须由
-  用户另行授权 build，并先将 Dell checkout 同步到该 commit。
+- 正式远端构建仍要求本机与 Dell checkout 为同一 clean commit；具体远端状态以本次重新
+  核对结果为准，必须由用户另行授权 build，并先将 Dell checkout 同步到该 commit。
 - 烧录、擦除、复位和运行验证都是独立授权，本文档不构成硬件操作授权。
 
 ## 验证记录
