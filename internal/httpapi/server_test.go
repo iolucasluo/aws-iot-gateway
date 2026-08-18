@@ -814,7 +814,9 @@ type httpBindingRepository struct {
 }
 
 type httpPublisher struct {
-	calls int
+	calls   int
+	topic   string
+	payload []byte
 }
 
 type httpRecommissioner struct {
@@ -830,8 +832,10 @@ func (recommissioner *httpRecommissioner) Reset(_ context.Context, _ binding.Bin
 	return recommissioner.receipt, recommissioner.err
 }
 
-func (publisher *httpPublisher) Publish(context.Context, string, []byte) error {
+func (publisher *httpPublisher) Publish(_ context.Context, topic string, payload []byte) error {
 	publisher.calls++
+	publisher.topic = topic
+	publisher.payload = append([]byte(nil), payload...)
 	return nil
 }
 
@@ -839,6 +843,16 @@ type httpACKWaiter struct{}
 
 func (httpACKWaiter) Wait(_ context.Context, _ string, sessionID string, _ time.Duration) (map[string]any, error) {
 	return map[string]any{"session_id": sessionID, "code": float64(0)}, nil
+}
+
+type httpPTZACKWaiter struct{}
+
+func (httpPTZACKWaiter) Wait(_ context.Context, _ string, sessionID string, _ time.Duration) (map[string]any, error) {
+	return map[string]any{
+		"action": "ptz", "session_id": sessionID, "code": float64(0), "op": "get_position",
+		"pan": float64(1800), "tilt": float64(-500), "limit_h": float64(4000), "limit_v": float64(2000),
+		"pan_normalized": 0.45, "tilt_normalized": -0.25, "moving": true,
+	}, nil
 }
 
 type httpCommandRepository struct{}
@@ -968,4 +982,47 @@ func (repository *httpBindingRepository) ReleaseBinding(_ context.Context, bindi
 	released := repository.binding
 	repository.binding.Active = false
 	return released, nil
+}
+
+func TestInternalAPIDeviceStatusQueriesPTZThroughGateway(t *testing.T) {
+	t.Parallel()
+	now := time.UnixMilli(1_718_000_000_000)
+	bindingRepository := &httpBindingRepository{binding: binding.Binding{
+		ID: "018f0000-0000-7000-8000-000000000002", DeviceID: "018f0000-0000-7000-8000-000000000001",
+		DeviceSN: "fdr-00000000000000000000000000000001", InternalAppID: "livpet-staging", Active: true,
+	}}
+	bindingService := binding.NewService(bindingRepository, func() (string, error) { return "device-token-status", nil }, func() time.Time { return now }, nil)
+	if _, err := bindingService.IssueToken(context.Background(), "livpet-staging", bindingRepository.binding.DeviceSN); err != nil {
+		t.Fatalf("IssueToken() error = %v", err)
+	}
+	publisher := &httpPublisher{}
+	deviceService := devicemodule.NewService(publisher, httpPTZACKWaiter{}, &httpCommandRepository{},
+		"aws-iot-gateway-staging", func() (string, error) { return "session-status", nil })
+	handler := newSignedTestHandler(t, activation.NewService(), now, Dependencies{Binding: bindingService, Device: deviceService})
+	path := "/api/v1/openapi/devices/" + bindingRepository.binding.DeviceSN + "/status"
+	request := signedInternalRequest(t, now, "nonce-device-status", http.MethodGet, path, nil)
+	request.Header.Set("X-Device-Token", "device-token-status")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		PTZ devicemodule.PTZStatus `json:"ptz"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.PTZ.Pan != 1800 || payload.PTZ.Tilt != -500 || !payload.PTZ.Moving {
+		t.Fatalf("payload = %#v", payload)
+	}
+	var command map[string]any
+	if err := json.Unmarshal(publisher.payload, &command); err != nil {
+		t.Fatalf("decode command: %v", err)
+	}
+	if command["action"] != "ptz" || command["op"] != "get_position" || command["session_id"] != "session-status" {
+		t.Fatalf("command = %#v", command)
+	}
 }
