@@ -5,7 +5,7 @@
   "gateway": {
     "base_url": "https://c0hwf2qbj9.execute-api.ap-east-1.amazonaws.com",
     "ca_pem_file": "gateway-ca.pem",
-    "ca_pem_sha256": "2c43952ee9e000ff2acc4e2ed0897c0a72ad5fa72c3d934e81741cbd54f05bd1"
+    "ca_pem_sha256": "56ae01e6773bdaec4bfb216d4005adb06e4f680bd8bfb8be4c683ce921681897"
   },
   "time_bootstrap": {
     "url": "http://aws-io-Publi-CbZTozBpxeJP-1672547848.ap-east-1.elb.amazonaws.com/api/v1/device-time/bootstrap",
