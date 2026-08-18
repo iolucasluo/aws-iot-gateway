@@ -144,7 +144,7 @@ func (service *Service) Confirm(ctx context.Context, input ConfirmInput) (Activa
 	if err != nil {
 		return Activation{}, err
 	}
-	if err := service.authorize(record, input.Code, record.Activation.Method); err != nil {
+	if err := service.authorizeConfirmation(record, input.Code); err != nil {
 		return Activation{}, err
 	}
 	if record.Installation.ActivationID == "" || record.CSRPEM == "" {
@@ -210,11 +210,21 @@ func (service *Service) ListDevicesForBinding(ctx context.Context, internalAppID
 }
 
 func (service *Service) authorize(record Record, code string, expectedMethod Method) error {
+	if record.Activation.Method != expectedMethod || sha256.Sum256([]byte(code)) != record.CodeHash {
+		return ErrActivationUnauthorized
+	}
 	if !service.now().Before(record.Activation.ExpiresAt) {
 		return ErrActivationExpired
 	}
-	if record.Activation.Method != expectedMethod || sha256.Sum256([]byte(code)) != record.CodeHash {
+	return nil
+}
+
+func (service *Service) authorizeConfirmation(record Record, code string) error {
+	if record.Activation.Method == "" || sha256.Sum256([]byte(code)) != record.CodeHash {
 		return ErrActivationUnauthorized
+	}
+	if record.Activation.Status != StatusActivated && !service.now().Before(record.Activation.ExpiresAt) {
+		return ErrActivationExpired
 	}
 	return nil
 }
