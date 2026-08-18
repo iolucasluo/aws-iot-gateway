@@ -175,6 +175,57 @@ func TestConfirmRequiresProofFromTheOperationalPrivateKey(t *testing.T) {
 	}
 }
 
+func TestConfirmRetriesAnActivatedInstallationAfterActivationExpiry(t *testing.T) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, privateKey)
+	if err != nil {
+		t.Fatalf("CreateCertificateRequest() error = %v", err)
+	}
+	csrPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}))
+
+	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	service := NewServiceWith(fakeProvisioner{})
+	service.now = func() time.Time { return now }
+	created, err := service.Create(context.Background(), testCreateInput(MethodQR))
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	installation, err := service.Prepare(context.Background(), PrepareInput{
+		ActivationID:   created.ID,
+		Code:           created.Code,
+		CSRPEM:         csrPEM,
+		ExpectedMethod: MethodQR,
+	})
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	digest := sha256.Sum256([]byte(installationProofMessage(created.ID, installation.ProofNonce)))
+	proof, err := ecdsa.SignASN1(rand.Reader, privateKey, digest[:])
+	if err != nil {
+		t.Fatalf("SignASN1() error = %v", err)
+	}
+	input := ConfirmInput{
+		ActivationID: created.ID,
+		Code:         created.Code,
+		Proof:        base64.RawURLEncoding.EncodeToString(proof),
+	}
+	if _, err := service.Confirm(context.Background(), input); err != nil {
+		t.Fatalf("initial Confirm() error = %v", err)
+	}
+
+	now = created.ExpiresAt.Add(time.Second)
+	retried, err := service.Confirm(context.Background(), input)
+	if err != nil {
+		t.Fatalf("expired retry Confirm() error = %v, want activated idempotent result", err)
+	}
+	if retried.Status != StatusActivated || retried.Code != "" {
+		t.Fatalf("expired retry Confirm() = %#v, want activated metadata without code", retried)
+	}
+}
+
 func TestListDevicesForUserShowsOnlyActivatedInstallations(t *testing.T) {
 	service := NewServiceWith(fakeProvisioner{})
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
