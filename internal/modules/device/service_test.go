@@ -88,6 +88,7 @@ func TestSendCommandsMapsBusyAndOfflineWithoutPretendingSuccess(t *testing.T) {
 	}{
 		{name: "busy", ack: map[string]any{"session_id": "session-1", "code": float64(-2)}, want: ErrDeviceBusy},
 		{name: "offline", err: ErrACKTimeout, want: ErrDeviceOffline},
+		{name: "fractional code", ack: map[string]any{"session_id": "session-1", "code": 0.5}, want: ErrInvalidDeviceResponse},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			service := NewService(&publisherStub{}, ackWaiterStub{ack: testCase.ack, err: testCase.err}, &commandRepositoryStub{},
@@ -100,15 +101,79 @@ func TestSendCommandsMapsBusyAndOfflineWithoutPretendingSuccess(t *testing.T) {
 	}
 }
 
-func TestSendCommandsWithoutACKReturnsAcceptedResult(t *testing.T) {
+func TestSendPTZMoveToWithoutACKPassesNormalizedTargetAndReturnsAcceptedNotCompleted(t *testing.T) {
 	t.Parallel()
-	service := NewService(&publisherStub{}, ackWaiterStub{err: errors.New("must not wait")}, &commandRepositoryStub{},
+	publisher := &publisherStub{}
+	repository := &commandRepositoryStub{}
+	service := NewService(publisher, ackWaiterStub{err: errors.New("must not wait")}, repository,
 		"aws-iot-gateway-staging", func() (string, error) { return "session-1", nil })
-	result, err := service.SendCommands(context.Background(), "livpet-staging", "device-id", "fdr-0001", []CommandInput{{Code: "led", Value: json.RawMessage(`true`)}}, false)
+	result, err := service.SendCommands(context.Background(), "livpet-staging", "device-id", "fdr-0001", []CommandInput{{
+		Code: "ptz", Value: json.RawMessage(`{"op":"move_to","pan_normalized":0.45,"tilt_normalized":-0.25}`),
+	}}, false)
 	if err != nil {
 		t.Fatalf("SendCommands() error = %v", err)
 	}
-	if result.Results[0].Status != "accepted" {
+	if len(result.Results) != 1 || result.Results[0].Status != "accepted" || result.Results[0].Code != "ptz" {
 		t.Fatalf("result = %#v", result)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(publisher.payload, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload["action"] != "ptz" || payload["op"] != "move_to" || payload["session_id"] != "session-1" ||
+		payload["pan_normalized"] != 0.45 || payload["tilt_normalized"] != -0.25 {
+		t.Fatalf("payload = %#v", payload)
+	}
+	if len(repository.commands) != 1 || repository.commands[0].Status != "published" {
+		t.Fatalf("commands = %#v", repository.commands)
+	}
+}
+
+func TestGetPTZStatusPublishesFixedQueryAndReturnsValidatedDeviceState(t *testing.T) {
+	t.Parallel()
+	publisher := &publisherStub{}
+	repository := &commandRepositoryStub{}
+	service := NewService(publisher, ackWaiterStub{ack: map[string]any{
+		"action": "ptz", "session_id": "session-ptz", "code": float64(0), "op": "get_position",
+		"pan": float64(1800), "tilt": float64(-500), "limit_h": float64(4000), "limit_v": float64(2000),
+		"pan_normalized": 0.45, "tilt_normalized": -0.25, "moving": true,
+	}}, repository, "aws-iot-gateway-staging", func() (string, error) { return "session-ptz", nil })
+
+	status, err := service.GetPTZStatus(context.Background(), "livpet-staging", "device-id", "fdr-0001")
+	if err != nil {
+		t.Fatalf("GetPTZStatus() error = %v", err)
+	}
+	if status.Pan != 1800 || status.Tilt != -500 || status.LimitH != 4000 || status.LimitV != 2000 ||
+		status.PanNormalized != 0.45 || status.TiltNormalized != -0.25 || !status.Moving {
+		t.Fatalf("status = %#v", status)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(publisher.payload, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload["action"] != "ptz" || payload["op"] != "get_position" || payload["session_id"] != "session-ptz" || len(payload) != 3 {
+		t.Fatalf("payload = %#v", payload)
+	}
+}
+
+func TestGetPTZStatusRejectsMalformedDeviceACK(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name string
+		ack  map[string]any
+	}{
+		{name: "missing moving", ack: map[string]any{"action": "ptz", "session_id": "session-ptz", "code": float64(0), "op": "get_position", "pan": float64(0), "tilt": float64(0), "limit_h": float64(1), "limit_v": float64(1), "pan_normalized": 0.0, "tilt_normalized": 0.0}},
+		{name: "normalized out of range", ack: map[string]any{"action": "ptz", "session_id": "session-ptz", "code": float64(0), "op": "get_position", "pan": float64(0), "tilt": float64(0), "limit_h": float64(1), "limit_v": float64(1), "pan_normalized": 1.1, "tilt_normalized": 0.0, "moving": false}},
+		{name: "fractional steps", ack: map[string]any{"action": "ptz", "session_id": "session-ptz", "code": float64(0), "op": "get_position", "pan": 0.5, "tilt": float64(0), "limit_h": float64(1), "limit_v": float64(1), "pan_normalized": 0.0, "tilt_normalized": 0.0, "moving": false}},
+		{name: "integer overflow", ack: map[string]any{"action": "ptz", "session_id": "session-ptz", "code": float64(0), "op": "get_position", "pan": 9223372036854775808.0, "tilt": float64(0), "limit_h": float64(1), "limit_v": float64(1), "pan_normalized": 0.0, "tilt_normalized": 0.0, "moving": false}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			service := NewService(&publisherStub{}, ackWaiterStub{ack: testCase.ack}, &commandRepositoryStub{},
+				"aws-iot-gateway-staging", func() (string, error) { return "session-ptz", nil })
+			_, err := service.GetPTZStatus(context.Background(), "livpet-staging", "device-id", "fdr-0001")
+			if !errors.Is(err, ErrInvalidDeviceResponse) {
+				t.Fatalf("GetPTZStatus() error = %v, want %v", err, ErrInvalidDeviceResponse)
+			}
+		})
 	}
 }
