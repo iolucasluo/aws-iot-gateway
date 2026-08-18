@@ -10,6 +10,9 @@ Dell checkout 的 commit、clean 状态与下面列出的当前 Contract 事实�
 权限或 local signer private key。
 
 - staging 已发布并提交：`deploy/device-bootstrap/contracts/staging/`。
+- 2026-08-18 已以 Gateway `.env.cwj` 中的非敏感 profile/region 运行 staging exporter 的只读候选导出；候选
+  与已提交的完整 Contract 相同。因此没有覆盖 `gateway-ca.pem`、`time-staging-g1.der` 或 `contract.json`，也没有
+  发生 AWS resource mutation。
 - local **尚未发布**：当前没有团队设备可达的稳定 Gateway hostname/reserved address，且
   Gateway 仓也没有已配置的 shared local signer。不能提交开发者笔记本 DHCP 地址或空
   Contract。
@@ -31,11 +34,13 @@ Gateway Git environment directory
   -> clean package + receipt with Contract SHA-256
 ```
 
-从 `<Workspace>` 以当前已发布的 staging Contract 运行正式入口：
+正式入口必须从 **Taixin 聚合仓**运行，因为 `txw82x_remote_clean_package.sh` 属于该仓；Gateway 聚合仓
+不包含此 build-host skill。传入的 Contract 则是已 checkout 的 Gateway public directory：
 
 ```bash
+cd /Volumes/Expansion/Documents/taixin-multirepo-workspace
 docs/coding-rules/skills/txw82x-firmware-flash/scripts/txw82x_remote_clean_package.sh \
-  build-import --contract "$PWD/aws-iot-gateway/deploy/device-bootstrap/contracts/staging"
+  build-import --contract /absolute/path/to/aws-iot-gateway/deploy/device-bootstrap/contracts/staging
 ```
 
 `--contract` 必须是公开 Contract 目录，不接受 JSON 单文件、header、私钥或 AWS
@@ -44,6 +49,23 @@ credentials。脚本在本机和 Dell 都通过固件 renderer 校验 Contract�
 checkout 中的生成文件。公开 Contract 和 build log 保留在 job 目录用于审计，receipt 记录
 `contract.json` 的 SHA-256。`contract.json` 已包含 CA 与每个 SPKI 的 SHA-256，因此其摘要
 绑定了完整的已校验 Contract。
+
+## 已知 Dell/R730 构建路径（2026-08-18）
+
+本次由操作者提供的 Dell firmware root 是：
+
+```text
+/mnt/taixin-build-benchmark/taixin-clean-build-20260806-e0134d0/taixin-82x-workspace/TXW82x_FPV-v2.7.0.7
+```
+
+成功的受控构建应从该 firmware root 的 canonical output 读取 APP，而不是根目录临时 bin：
+
+```text
+/mnt/taixin-build-benchmark/taixin-clean-build-20260806-e0134d0/taixin-82x-workspace/TXW82x_FPV-v2.7.0.7/project/output/APP.bin
+```
+
+路径存在不等于该 checkout 已可作为证据。远端 build 前仍必须重新确认该 root 的 commit、clean 状态、
+preflight、输入 Contract digest 和生成的 build receipt；本次没有执行 SSH build、读取该远端 APP、烧录或串口验证。
 
 ## 实施切片
 
