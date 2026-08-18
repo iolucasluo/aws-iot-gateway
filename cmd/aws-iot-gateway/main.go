@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -25,6 +27,7 @@ import (
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awskms"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awskvs"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awss3"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/localsigner"
 	gatewaypostgres "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/postgres"
 	redisstore "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/redis"
 	gatewayruntime "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/runtime"
@@ -74,9 +77,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("load AWS configuration: %v", err)
 	}
-	timeSigner, err := awskms.NewSigner(ctx, kms.NewFromConfig(awsConfig), config.TimeBootstrapKMSKeyID)
+	timeSigner, err := newTimeBootstrapSigner(ctx, config, kms.NewFromConfig(awsConfig))
 	if err != nil {
-		log.Fatalf("configure signed time KMS signer: %v", err)
+		log.Fatalf("configure signed time signer: %v", err)
 	}
 	timeService, err := timebootstrap.NewService(
 		config.TimeBootstrapKeyID, timeSigner, time.Now, timebootstrap.NewSystemClockHealth(time.Now),
@@ -174,5 +177,16 @@ func main() {
 	log.Printf("aws-iot-gateway listening on %s", config.ListenAddress)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("serve gateway: %v", err)
+	}
+}
+
+func newTimeBootstrapSigner(ctx context.Context, config gatewayruntime.Config, kmsAPI awskms.API) (crypto.Signer, error) {
+	switch config.TimeBootstrapSigner {
+	case "local":
+		return localsigner.Load(config.TimeBootstrapLocalPrivateKeyPath)
+	case "aws-kms":
+		return awskms.NewSigner(ctx, kmsAPI, config.TimeBootstrapKMSKeyID)
+	default:
+		return nil, fmt.Errorf("unsupported time bootstrap signer %q", config.TimeBootstrapSigner)
 	}
 }

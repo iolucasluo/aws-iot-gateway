@@ -11,6 +11,7 @@ Deployment order:
 3. Create/update the internal-app secret from a local file using `aws secretsmanager create-secret --secret-string file://...`.
 4. Deploy `deploy/cloudformation/staging.yaml` with the image URI, secret ARN, and account credential-provider endpoint.
 5. Wait for both ECS services to stabilize, then verify `/healthz`, signed `/api/v1/openapi/*`, and the `TimeBootstrapURL` stack output.
+6. Run `AWS_PROFILE=explorex-staging-hk AWS_REGION=ap-east-1 ./deploy/device-bootstrap/scripts/render-staging-contract.sh --out /tmp/device-bootstrap-contract-staging-next`. Review the candidate, then manually replace and commit `deploy/staging/device-bootstrap-contract/`. Taixin/Anyka/Dell copy that public Git directory; do not give their build hosts AWS credentials or the KMS signing authority.
 
 After a deployment, run the owner-side HMAC v1 smoke from the Gateway repository:
 

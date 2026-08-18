@@ -21,6 +21,9 @@ require("kms:GetPublicKey" in body and "kms:Sign" in body,
 require(body.count("Name: TIME_BOOTSTRAP_KEY_ID") == 2 and
         body.count("Name: TIME_BOOTSTRAP_KMS_KEY_ID") == 2,
         "shared strict config requires signer identifiers in API and worker tasks")
+require(body.count("Name: TIME_BOOTSTRAP_SIGNER") == 2 and
+        body.count("Value: aws-kms") >= 2,
+        "staging API and worker tasks must explicitly select the aws-kms signer")
 require("PublicTimeLoadBalancer:" in body and "Scheme: internet-facing" in body and
         "PublicTimeRoute:" in body, "staging must expose the signed bootstrap over public HTTP")
 require("/api/v1/device-time/bootstrap" in body and "Type: fixed-response" in body,

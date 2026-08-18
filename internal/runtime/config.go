@@ -24,22 +24,24 @@ type InternalApp struct {
 }
 
 type Config struct {
-	ListenAddress         string
-	Environment           string
-	DatabaseURL           string
-	RedisURL              string
-	AWSRegion             string
-	DevicePolicyName      string
-	IoTTopicPrefix        string
-	IoTCredentialEndpoint string
-	IoTRoleAlias          string
-	IoTShadowName         string
-	IngestQueueURL        string
-	KVSChannelPrefix      string
-	S3MediaBucket         string
-	TimeBootstrapKeyID    string
-	TimeBootstrapKMSKeyID string
-	InternalApps          []InternalApp
+	ListenAddress                    string
+	Environment                      string
+	DatabaseURL                      string
+	RedisURL                         string
+	AWSRegion                        string
+	DevicePolicyName                 string
+	IoTTopicPrefix                   string
+	IoTCredentialEndpoint            string
+	IoTRoleAlias                     string
+	IoTShadowName                    string
+	IngestQueueURL                   string
+	KVSChannelPrefix                 string
+	S3MediaBucket                    string
+	TimeBootstrapKeyID               string
+	TimeBootstrapSigner              string
+	TimeBootstrapKMSKeyID            string
+	TimeBootstrapLocalPrivateKeyPath string
+	InternalApps                     []InternalApp
 }
 
 func LoadConfig(getenv func(string) string) (Config, error) {
@@ -48,21 +50,23 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	config := Config{
-		ListenAddress:         valueOr(getenv("GATEWAY_LISTEN_ADDRESS"), ":14080"),
-		Environment:           valueOr(getenv("GATEWAY_ENVIRONMENT"), "development"),
-		DatabaseURL:           databaseURL,
-		RedisURL:              strings.TrimSpace(getenv("REDIS_URL")),
-		AWSRegion:             strings.TrimSpace(getenv("AWS_REGION")),
-		DevicePolicyName:      strings.TrimSpace(getenv("AWS_IOT_DEVICE_POLICY_NAME")),
-		IoTTopicPrefix:        strings.TrimSpace(getenv("AWS_IOT_TOPIC_PREFIX")),
-		IoTCredentialEndpoint: strings.TrimSpace(getenv("AWS_IOT_CREDENTIAL_PROVIDER_ENDPOINT")),
-		IoTRoleAlias:          strings.TrimSpace(getenv("AWS_IOT_ROLE_ALIAS")),
-		IoTShadowName:         strings.TrimSpace(getenv("AWS_IOT_SHADOW_NAME")),
-		IngestQueueURL:        strings.TrimSpace(getenv("AWS_IOT_INGEST_QUEUE_URL")),
-		KVSChannelPrefix:      strings.TrimSpace(getenv("AWS_KVS_CHANNEL_PREFIX")),
-		S3MediaBucket:         strings.TrimSpace(getenv("AWS_S3_MEDIA_BUCKET")),
-		TimeBootstrapKeyID:    strings.TrimSpace(getenv("TIME_BOOTSTRAP_KEY_ID")),
-		TimeBootstrapKMSKeyID: strings.TrimSpace(getenv("TIME_BOOTSTRAP_KMS_KEY_ID")),
+		ListenAddress:                    valueOr(getenv("GATEWAY_LISTEN_ADDRESS"), ":14080"),
+		Environment:                      valueOr(getenv("GATEWAY_ENVIRONMENT"), "development"),
+		DatabaseURL:                      databaseURL,
+		RedisURL:                         strings.TrimSpace(getenv("REDIS_URL")),
+		AWSRegion:                        strings.TrimSpace(getenv("AWS_REGION")),
+		DevicePolicyName:                 strings.TrimSpace(getenv("AWS_IOT_DEVICE_POLICY_NAME")),
+		IoTTopicPrefix:                   strings.TrimSpace(getenv("AWS_IOT_TOPIC_PREFIX")),
+		IoTCredentialEndpoint:            strings.TrimSpace(getenv("AWS_IOT_CREDENTIAL_PROVIDER_ENDPOINT")),
+		IoTRoleAlias:                     strings.TrimSpace(getenv("AWS_IOT_ROLE_ALIAS")),
+		IoTShadowName:                    strings.TrimSpace(getenv("AWS_IOT_SHADOW_NAME")),
+		IngestQueueURL:                   strings.TrimSpace(getenv("AWS_IOT_INGEST_QUEUE_URL")),
+		KVSChannelPrefix:                 strings.TrimSpace(getenv("AWS_KVS_CHANNEL_PREFIX")),
+		S3MediaBucket:                    strings.TrimSpace(getenv("AWS_S3_MEDIA_BUCKET")),
+		TimeBootstrapKeyID:               strings.TrimSpace(getenv("TIME_BOOTSTRAP_KEY_ID")),
+		TimeBootstrapSigner:              valueOr(getenv("TIME_BOOTSTRAP_SIGNER"), "aws-kms"),
+		TimeBootstrapKMSKeyID:            strings.TrimSpace(getenv("TIME_BOOTSTRAP_KMS_KEY_ID")),
+		TimeBootstrapLocalPrivateKeyPath: strings.TrimSpace(getenv("TIME_BOOTSTRAP_LOCAL_PRIVATE_KEY_PATH")),
 	}
 	if !validEnvironment(config.Environment) {
 		return Config{}, fmt.Errorf("GATEWAY_ENVIRONMENT must be development, staging, or production")
@@ -97,8 +101,30 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`).MatchString(config.TimeBootstrapKeyID) {
 		return Config{}, fmt.Errorf("TIME_BOOTSTRAP_KEY_ID is required and must be a safe COSE kid")
 	}
-	if config.TimeBootstrapKMSKeyID == "" || len(config.TimeBootstrapKMSKeyID) > 2048 || strings.ContainsAny(config.TimeBootstrapKMSKeyID, "\r\n") {
-		return Config{}, fmt.Errorf("TIME_BOOTSTRAP_KMS_KEY_ID is required and invalid")
+	switch config.TimeBootstrapSigner {
+	case "local":
+		if config.Environment != "development" {
+			return Config{}, fmt.Errorf("TIME_BOOTSTRAP_SIGNER=local is allowed only for development")
+		}
+		if config.TimeBootstrapLocalPrivateKeyPath == "" ||
+			strings.ContainsAny(config.TimeBootstrapLocalPrivateKeyPath, "\r\n") {
+			return Config{}, fmt.Errorf("TIME_BOOTSTRAP_LOCAL_PRIVATE_KEY_PATH is required and invalid for local signer")
+		}
+		if config.TimeBootstrapKMSKeyID != "" {
+			return Config{}, fmt.Errorf("TIME_BOOTSTRAP_KMS_KEY_ID must be empty for local signer")
+		}
+	case "aws-kms":
+		if config.Environment == "development" {
+			return Config{}, fmt.Errorf("TIME_BOOTSTRAP_SIGNER=aws-kms is not allowed for development")
+		}
+		if config.TimeBootstrapKMSKeyID == "" || len(config.TimeBootstrapKMSKeyID) > 2048 || strings.ContainsAny(config.TimeBootstrapKMSKeyID, "\r\n") {
+			return Config{}, fmt.Errorf("TIME_BOOTSTRAP_KMS_KEY_ID is required and invalid for aws-kms signer")
+		}
+		if config.TimeBootstrapLocalPrivateKeyPath != "" {
+			return Config{}, fmt.Errorf("TIME_BOOTSTRAP_LOCAL_PRIVATE_KEY_PATH must be empty for aws-kms signer")
+		}
+	default:
+		return Config{}, fmt.Errorf("TIME_BOOTSTRAP_SIGNER must be local or aws-kms")
 	}
 	if err := validateServiceURL("DATABASE_URL", config.DatabaseURL, "postgres", "postgresql"); err != nil {
 		return Config{}, err
