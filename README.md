@@ -1,8 +1,8 @@
 # aws-iot-gateway
 
-`aws-iot-gateway` 是 LivPet 和内部 Demo App 共用的 **Internal AWS API**。它拥有用户激活、全局唯一绑定、设备运行身份和受限设备操作；不实现 Developer、Project、Product、Factory、tenant、IDevID、RMA 或平台 OTA。
+`aws-iot-gateway` 是 LivPet 和内部 Demo App 共用的 **Internal AWS API**。它拥有用户激活、全局唯一绑定、设备运行身份和受限设备操作；`products` 仅作为受控的只读激活目录，不实现 Developer、Project、Product CRUD/owner、Factory、tenant、IDevID、RMA 或平台 OTA。
 
-`/api/v1/openapi/*` 中的 `openapi` 只是 LivPet wire compatibility，产品和代码语义均使用 internal app。固定 PID 是 `feeder-x1`。
+`/api/v1/openapi/*` 中的 `openapi` 只是 LivPet wire compatibility，产品和代码语义均使用 internal app。App 必须先读取受控产品目录并在创建 activation 时显式提交 active PID；Gateway 不再默认 `feeder-x1`。
 
 ## 认证与隔离
 
@@ -40,6 +40,7 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 | --- | --- | --- |
 | `GET /healthz` | 运行检查 | 无 |
 | `POST /api/v1/device-time/bootstrap` | 无可信 RTC 的设备 | 公共窄路由；COSE 验签后可信 |
+| `GET /api/v1/openapi/device-products` | 内部 App backend | HMAC v1；只读 active 产品目录 |
 | `POST /api/v1/openapi/device-activations` | 内部 App backend | HMAC v1 |
 | `GET /api/v1/openapi/device-activations/{id}` | 内部 App backend | HMAC v1 |
 | `POST /api/v1/openapi/device-activations/{id}/sessions` | LivPet commissioning 兼容路径 | HMAC v1 |
@@ -60,6 +61,10 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 version 或 timestamp；Gateway 只返回已校验的 `state.reported` 设备投影。投影至少包含非空
 `sn`、非空 `pid` 和 JSON boolean `online`，缺失或类型错误时 fail closed 为
 `503 device_service_unavailable`。Wi-Fi MAC 字段固定为 `wifi_mac`。
+
+设备冷启动的公开 Contract → signed-time → 严格 TLS 接入闭环，以及登记、activation、binding、reset、MQTT
+事件与媒体的代码反向工程流程图见 [`docs/flows/目录说明.md`](docs/flows/目录说明.md)。每个场景单独成篇；
+它们不恢复旧 IoT 平台的 Project、IDevID、Factory、RMA 或 OTA 语义。
 
 `recommission` 只接受 `reset_scope=runtime|all`：默认 `runtime` 仅清理 Wi-Fi 与运行身份，`all`
 还清理设备本地用户数据。两种 scope 都必须先取得设备 ACK，Gateway 才撤销 token、释放 binding
@@ -124,6 +129,14 @@ set -a
 set +a
 go run ./cmd/aws-iot-gateway
 ```
+
+需要让真实 Taixin/Anyka 硬件访问 Gateway 时，不要在各硬件仓手写 endpoint、CA 或 time SPKI。共享
+`development`（local/LAN）与 `staging` 环境的公开 `Gateway Device Bootstrap Contract` 发布位置分别是
+`deploy/device-bootstrap/contracts/development/` 与
+`deploy/device-bootstrap/contracts/staging/`；硬件构建只复制存在且经审核的目录。Gateway owner 从本地 signer 或已部署 CloudFormation/KMS 的**公开** Outputs 生成候选
+目录，再人工审核、替换并提交环境 Contract；Dell 和硬件仓不需要 AWS authority。命令、环境变量、轮换和回滚见
+[deploy/device-bootstrap/README.md](deploy/device-bootstrap/README.md)，格式和消费者校验规则见
+[docs/contracts/gateway-device-bootstrap-v1.md](docs/contracts/gateway-device-bootstrap-v1.md)。
 
 本地真机命令使用 `wait_ack=true` 时，可在 `development` 环境显式设置
 `AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED=true`。API 将通过当前 AWS 标准凭据链使用 MQTT over

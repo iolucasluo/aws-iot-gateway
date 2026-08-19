@@ -37,7 +37,7 @@ func TestActivationRepositorySurvivesServiceRestartAndCreatesBinding(t *testing.
 	service := activation.NewServiceWithRepository(persistentProvisioner{}, repository)
 	created, err := service.Create(ctx, activation.CreateInput{
 		InternalAppID: "livpet-staging", BindingExternalUserID: "user-persistent",
-		IdempotencyKey: "persistent-operation", Method: activation.MethodBLE,
+		IdempotencyKey: "persistent-operation", Method: activation.MethodBLE, PID: "minion-cam-x1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -76,7 +76,7 @@ func TestActivationRepositorySurvivesServiceRestartAndCreatesBinding(t *testing.
 	if err != nil {
 		t.Fatalf("Confirm() after restart error = %v", err)
 	}
-	if confirmed.Status != activation.StatusActivated || confirmed.DeviceSN != installation.DeviceID {
+	if confirmed.Status != activation.StatusActivated || confirmed.DeviceSN != installation.DeviceID || confirmed.PID != "minion-cam-x1" {
 		t.Fatalf("confirmed = %#v", confirmed)
 	}
 	presenceRepository, err := NewEventRepository(pool)
@@ -91,7 +91,7 @@ func TestActivationRepositorySurvivesServiceRestartAndCreatesBinding(t *testing.
 	if err != nil {
 		t.Fatalf("ListDevicesForBinding() error = %v", err)
 	}
-	if len(devices) != 1 || devices[0].ID != installation.DeviceID || !devices[0].Online ||
+	if len(devices) != 1 || devices[0].ID != installation.DeviceID || devices[0].PID != "minion-cam-x1" || !devices[0].Online ||
 		devices[0].LastSeenAt == nil || !devices[0].LastSeenAt.Equal(presenceAt) {
 		t.Fatalf("devices = %#v", devices)
 	}

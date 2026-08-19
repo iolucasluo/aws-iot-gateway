@@ -25,7 +25,8 @@ AWS adapter 不决定用户授权或 activation 状态。
 - PostgreSQL 是业务权威存储；不得新增 JSON 文件或 Redis 业务状态。activation code/device token 只存 hash。
 - 配置必须显式校验。缺少 PostgreSQL、Redis、AWS region、device policy 或 internal app map 时启动失败；
   不增加静默默认 credential、账号或远端 endpoint。
-- application 不依赖 HTTP/AWS/PostgreSQL driver；保持 Go 格式，不引入 tenant/Project/Product/Factory 平台抽象。
+- application 不依赖 HTTP/AWS/PostgreSQL driver；保持 Go 格式。`products` 仅是 activation 的最小只读目录，
+  不引入 tenant/Project/Product CRUD/owner/Factory 平台抽象。
 
 ## 变更同步
 

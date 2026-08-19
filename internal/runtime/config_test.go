@@ -51,6 +51,55 @@ func TestLoadConfigRequiresCompleteTimeBootstrapSigner(t *testing.T) {
 	}
 }
 
+func TestLoadConfigAllowsDevelopmentLocalTimeBootstrapSigner(t *testing.T) {
+	t.Parallel()
+
+	env := validEnvironmentMap()
+	env["GATEWAY_ENVIRONMENT"] = "development"
+	env["TIME_BOOTSTRAP_SIGNER"] = "local"
+	env["TIME_BOOTSTRAP_LOCAL_PRIVATE_KEY_PATH"] = ".local/time-bootstrap/private.pem"
+	delete(env, "TIME_BOOTSTRAP_KMS_KEY_ID")
+
+	config, err := LoadConfig(func(key string) string { return env[key] })
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if config.TimeBootstrapSigner != "local" ||
+		config.TimeBootstrapLocalPrivateKeyPath != ".local/time-bootstrap/private.pem" ||
+		config.TimeBootstrapKMSKeyID != "" {
+		t.Fatalf("time bootstrap local config = %#v", config)
+	}
+}
+
+func TestLoadConfigRejectsTimeBootstrapSignerOutsideItsEnvironment(t *testing.T) {
+	t.Parallel()
+
+	for name, mutate := range map[string]func(map[string]string){
+		"development KMS": func(env map[string]string) {
+			env["GATEWAY_ENVIRONMENT"] = "development"
+			env["TIME_BOOTSTRAP_SIGNER"] = "aws-kms"
+		},
+		"staging local": func(env map[string]string) {
+			env["TIME_BOOTSTRAP_SIGNER"] = "local"
+			env["TIME_BOOTSTRAP_LOCAL_PRIVATE_KEY_PATH"] = ".local/time-bootstrap/private.pem"
+			delete(env, "TIME_BOOTSTRAP_KMS_KEY_ID")
+		},
+		"local without private key": func(env map[string]string) {
+			env["GATEWAY_ENVIRONMENT"] = "development"
+			env["TIME_BOOTSTRAP_SIGNER"] = "local"
+			delete(env, "TIME_BOOTSTRAP_KMS_KEY_ID")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := validEnvironmentMap()
+			mutate(env)
+			if _, err := LoadConfig(func(key string) string { return env[key] }); err == nil {
+				t.Fatal("LoadConfig() error = nil, want signer/environment rejection")
+			}
+		})
+	}
+}
+
 func TestLoadConfigRejectsLegacyBearerMap(t *testing.T) {
 	t.Parallel()
 
@@ -177,6 +226,9 @@ func TestLoadConfigAllowsDirectACKSubscriberOnlyInDevelopment(t *testing.T) {
 
 	development := validEnvironmentMap()
 	development["GATEWAY_ENVIRONMENT"] = "development"
+	development["TIME_BOOTSTRAP_SIGNER"] = "local"
+	development["TIME_BOOTSTRAP_LOCAL_PRIVATE_KEY_PATH"] = ".local/time-bootstrap/private.pem"
+	delete(development, "TIME_BOOTSTRAP_KMS_KEY_ID")
 	development["AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED"] = "true"
 	config, err := LoadConfig(func(key string) string { return development[key] })
 	if err != nil {
