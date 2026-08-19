@@ -44,7 +44,7 @@ type Config struct {
 }
 
 func LoadConfig(getenv func(string) string) (Config, error) {
-	databaseURL, err := loadDatabaseURL(getenv)
+	databaseURL, err := LoadDatabaseURL(getenv)
 	if err != nil {
 		return Config{}, err
 	}
@@ -171,7 +171,7 @@ func parseOptionalBool(name, value string) (bool, error) {
 	return parsed, nil
 }
 
-func loadDatabaseURL(getenv func(string) string) (string, error) {
+func LoadDatabaseURL(getenv func(string) string) (string, error) {
 	if databaseURL := strings.TrimSpace(getenv("DATABASE_URL")); databaseURL != "" {
 		return databaseURL, nil
 	}

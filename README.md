@@ -127,8 +127,15 @@ docker compose --env-file .env.cwj -f deploy/local/compose.yaml up -d --wait
 set -a
 . ./.env.cwj
 set +a
+go run ./cmd/aws-iot-gateway-db-seed
 go run ./cmd/aws-iot-gateway
 ```
+
+`aws-iot-gateway-db-seed` 是 development/staging 的显式一次性初始化命令：它先幂等执行 migration，再事务执行
+`db/seeds/`，当前写入 `feeder-x1` 和 `minion-cam-x1`。API/worker 启动不会自动 seed；漏掉该步骤时产品目录为空、
+activation 必然返回 `product_unavailable`。该命令拒绝空环境和 `production`。详细边界见
+[db/seeds/README.md](db/seeds/README.md)，staging 一次性 ECS 执行方式见
+[deploy/staging/README.md](deploy/staging/README.md)。
 
 需要让真实 Taixin/Anyka 硬件访问 Gateway 时，不要在各硬件仓手写 endpoint、CA 或 time SPKI。共享
 `development`（local/LAN）与 `staging` 环境的公开 `Gateway Device Bootstrap Contract` 发布位置分别是

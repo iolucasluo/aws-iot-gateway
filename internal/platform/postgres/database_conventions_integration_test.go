@@ -240,11 +240,7 @@ func newIsolatedMigrationPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 
 func applyProductSeeds(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	seed, err := os.ReadFile("../../../db/seeds/001_products.sql")
-	if err != nil {
-		t.Fatalf("read product seed: %v", err)
-	}
-	if _, err := pool.Exec(ctx, string(seed)); err != nil {
+	if err := ApplySeeds(ctx, pool); err != nil {
 		t.Fatalf("apply product seed: %v", err)
 	}
 }

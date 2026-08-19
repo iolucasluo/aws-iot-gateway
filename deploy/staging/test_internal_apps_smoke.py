@@ -16,6 +16,21 @@ SPEC.loader.exec_module(SMOKE)
 
 
 class HMACV1SmokeContractTest(unittest.TestCase):
+    def test_expected_product_catalog_requires_both_seeded_pids(self):
+        SMOKE.require_expected_products(
+            {
+                "products": [
+                    {"pid": "feeder-x1", "name": "Feeder X1"},
+                    {"pid": "minion-cam-x1", "name": "Minion Cam X1"},
+                ]
+            }
+        )
+
+        with self.assertRaisesRegex(SMOKE.SmokeError, "product catalog"):
+            SMOKE.require_expected_products(
+                {"products": [{"pid": "feeder-x1", "name": "Feeder X1"}]}
+            )
+
     def test_build_signed_headers_matches_livpet_hmac_v1_known_answer(self):
         body = (
             b'{"wait_ack":true,"commands":[{"code":"feed",'
