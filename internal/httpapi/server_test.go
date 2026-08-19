@@ -116,17 +116,24 @@ func TestInternalAPIListsActiveDeviceProducts(t *testing.T) {
 		t.Fatalf("catalog status = %d, want 200: %s", response.Code, response.Body.String())
 	}
 	var payload struct {
-		Products []struct {
-			PID  string `json:"pid"`
-			Name string `json:"name"`
-		} `json:"products"`
+		Products []map[string]json.RawMessage `json:"products"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode catalog: %v", err)
 	}
-	if len(payload.Products) != 2 || payload.Products[0].PID == "" || payload.Products[0].Name == "" ||
-		payload.Products[1].PID == "" || payload.Products[1].Name == "" {
+	if len(payload.Products) != 2 {
 		t.Fatalf("catalog products = %#v, want two named products", payload.Products)
+	}
+	for _, product := range payload.Products {
+		if _, found := product["pid"]; !found {
+			t.Fatalf("product wire keys = %#v, want lowercase pid", product)
+		}
+		if _, found := product["name"]; !found {
+			t.Fatalf("product wire keys = %#v, want lowercase name", product)
+		}
+		if _, found := product["PID"]; found {
+			t.Fatalf("product wire keys = %#v, must not expose Go field names", product)
+		}
 	}
 }
 
