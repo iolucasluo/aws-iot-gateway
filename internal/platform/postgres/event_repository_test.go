@@ -15,7 +15,7 @@ func TestWebhookPayloadPreservesLivPetUnixSecondContract(t *testing.T) {
 		ID: "event-1", DeviceSN: "fdr-1", EventType: "feed_done",
 		OccurredAt: &occurredAt, ReceivedAt: receivedAt,
 		Data: map[string]any{"portions": float64(2), "trigger": "app"},
-	})
+	}, "minion-cam-x1")
 	if eventType != "feeding_done" || payload["event_type"] != "feeding_done" {
 		t.Fatalf("webhook event type = %q payload=%#v", eventType, payload)
 	}
@@ -29,7 +29,7 @@ func TestWebhookPayloadPreservesLivPetUnixSecondContract(t *testing.T) {
 	if _, found := payload["project_id"]; found {
 		t.Fatalf("webhook payload must not expose platform project metadata: %#v", payload)
 	}
-	if payload["pid"] != "feeder-x1" {
+	if payload["pid"] != "minion-cam-x1" {
 		t.Fatalf("webhook compatibility fields = %#v", payload)
 	}
 }
@@ -40,7 +40,7 @@ func TestWebhookPayloadOmitsUnknownDeviceOccurrenceButKeepsDeliveryTime(t *testi
 	payload, eventType := buildWebhookPayload("delivery-1", events.Event{
 		ID: "event-1", DeviceSN: "fdr-1", EventType: "motion_detected",
 		ReceivedAt: receivedAt, Data: map[string]any{},
-	})
+	}, "feeder-x1")
 	if eventType != "motion_detected" {
 		t.Fatalf("webhook event type = %q", eventType)
 	}

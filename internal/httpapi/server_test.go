@@ -24,7 +24,7 @@ func TestInternalAPICreatesAndPollsHMACActivation(t *testing.T) {
 
 	now := time.UnixMilli(1_718_000_000_000)
 	handler := newSignedTestHandler(t, activation.NewService(), now)
-	createBody := []byte(`{"method":"ble","binding_external_user_id":"livpet-user-42","idempotency_key":"operation-1"}`)
+	createBody := []byte(`{"method":"ble","pid":"feeder-x1","binding_external_user_id":"livpet-user-42","idempotency_key":"operation-1"}`)
 	create := signedInternalRequest(t, now, "nonce-create-00001", http.MethodPost, "/api/v1/openapi/device-activations", createBody)
 	createResponse := httptest.NewRecorder()
 	handler.ServeHTTP(createResponse, create)
@@ -104,6 +104,60 @@ func TestInternalAPIPreservesSelectedMinionPIDAcrossActivationLifecycle(t *testi
 	}
 }
 
+func TestInternalAPIListsActiveDeviceProducts(t *testing.T) {
+	t.Parallel()
+
+	now := time.UnixMilli(1_718_000_000_000)
+	handler := newSignedTestHandler(t, activation.NewService(), now)
+	request := signedInternalRequest(t, now, "nonce-product-catalog", http.MethodGet, "/api/v1/openapi/device-products", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("catalog status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Products []struct {
+			PID  string `json:"pid"`
+			Name string `json:"name"`
+		} `json:"products"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode catalog: %v", err)
+	}
+	if len(payload.Products) != 2 || payload.Products[0].PID == "" || payload.Products[0].Name == "" ||
+		payload.Products[1].PID == "" || payload.Products[1].Name == "" {
+		t.Fatalf("catalog products = %#v, want two named products", payload.Products)
+	}
+}
+
+func TestInternalAPIRejectsUnknownProductPID(t *testing.T) {
+	t.Parallel()
+
+	now := time.UnixMilli(1_718_000_000_000)
+	handler := newSignedTestHandler(t, activation.NewService(), now)
+	body := []byte(`{"method":"ble","pid":"unknown-x1","binding_external_user_id":"livpet-user-42","idempotency_key":"unknown-product-1"}`)
+	request := signedInternalRequest(t, now, "nonce-product-unknown", http.MethodPost, "/api/v1/openapi/device-activations", body)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(`"error_code":"product_unavailable"`)) {
+		t.Fatalf("unknown product = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestInternalAPIRequiresExplicitProductPID(t *testing.T) {
+	t.Parallel()
+
+	now := time.UnixMilli(1_718_000_000_000)
+	handler := newSignedTestHandler(t, activation.NewService(), now)
+	body := []byte(`{"method":"ble","binding_external_user_id":"livpet-user-42","idempotency_key":"missing-product-1"}`)
+	request := signedInternalRequest(t, now, "nonce-product-missing", http.MethodPost, "/api/v1/openapi/device-activations", body)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(`"error_code":"invalid_request"`)) {
+		t.Fatalf("missing product = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestInternalAPIRemovesLegacyBearerRoutes(t *testing.T) {
 	t.Parallel()
 
@@ -125,7 +179,7 @@ func TestInternalAPIReturnsStableIdempotencyConflictCode(t *testing.T) {
 
 	now := time.UnixMilli(1_718_000_000_000)
 	handler := newSignedTestHandler(t, activation.NewService(), now)
-	body := []byte(`{"method":"qr","binding_external_user_id":"user-1","idempotency_key":"same-operation"}`)
+	body := []byte(`{"method":"qr","pid":"feeder-x1","binding_external_user_id":"user-1","idempotency_key":"same-operation"}`)
 	first := signedInternalRequest(t, now, "nonce-idem-first1", http.MethodPost, "/api/v1/openapi/device-activations", body)
 	firstResponse := httptest.NewRecorder()
 	handler.ServeHTTP(firstResponse, first)
@@ -713,7 +767,7 @@ func TestDevicePrepareUsesCompatibilityDeviceActivationPath(t *testing.T) {
 	service := activation.NewServiceWith(testProvisioner{})
 	created, err := service.Create(context.Background(), activation.CreateInput{
 		InternalAppID: "livpet-staging", BindingExternalUserID: "user-42",
-		IdempotencyKey: "operation-qr", Method: activation.MethodQR,
+		IdempotencyKey: "operation-qr", Method: activation.MethodQR, PID: "feeder-x1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -756,7 +810,7 @@ func TestLivPetActivationCreateAcceptsLegacyCommissioningEnvelope(t *testing.T) 
 	t.Parallel()
 	now := time.UnixMilli(1_718_000_000_000)
 	handler := newSignedTestHandler(t, activation.NewService(), now)
-	body := []byte(`{"method":"ble","session_id":"session-1","client_hello_cbor":"client","device_hello_cbor":"device","binding_external_user_id":"user-1","idempotency_key":"idem-legacy-1"}`)
+	body := []byte(`{"method":"ble","pid":"feeder-x1","session_id":"session-1","client_hello_cbor":"client","device_hello_cbor":"device","binding_external_user_id":"user-1","idempotency_key":"idem-legacy-1"}`)
 	request := signedInternalRequest(t, now, "nonce-legacy-create", http.MethodPost, "/api/v1/openapi/device-activations", body)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)

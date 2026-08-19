@@ -5,7 +5,8 @@
 - `GET /healthz` 无认证，只证明进程存活。
 - `/api/v1/openapi/*` 全部使用 `ExploreX-OpenAPI-HMAC-v1`；`openapi` 仅为 LivPet 路径兼容。
 - 设备安装端点位于 `/api/v1/device-activations/*`，使用短时一次性 activation code 和 operational-key installation proof。
-- Bearer `/v1/*`、开发者 JWT、登录、Project/Product/credential CRUD 均不存在。
+- Bearer `/v1/*`、开发者 JWT、登录、Project/Product/credential CRUD 均不存在。`GET /api/v1/openapi/device-products`
+  是 HMAC 保护的只读激活目录，不是产品管理 API。
 
 HMAC 必须绑定 api key、20 位 timestamp、nonce、method、canonical path/query 和精确 body hash。Redis 原子消费 nonce；缺失 replay storage 时返回 503。签名 body 上限 1 MiB，JSON handler 可以设置更窄上限。
 
@@ -16,7 +17,9 @@ pending -> activating -> installing -> finalizing -> activated
                                       \-> failed/expired/cancelled
 ```
 
-- create 绑定可信 `internal_app_id` principal、`binding_external_user_id`、method 和 idempotency key。
+- create 绑定可信 `internal_app_id` principal、`binding_external_user_id`、method、显式 PID 和 idempotency key。
+- 调用方先读取 `GET /api/v1/openapi/device-products`，只能提交当前 `products.status='active'` 的 PID；缺失 PID
+  返回 `400 invalid_request`，未知或 disabled PID 返回 `400 product_unavailable`，不提供默认 PID 或 method/PID fallback。
 - activation code 为 256 bit 随机值，只在创建响应出现，持久化只保存 SHA-256。
 - Gateway 首次 prepare 生成随机 `device_sn`；AWS ThingName、MQTT client ID 和设备运行 ID 使用同值。
 - QR prepare 只接受 QR activation；session prepare 只接受显式 AP/BLE method，不跨 method fallback。

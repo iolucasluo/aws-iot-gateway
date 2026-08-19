@@ -22,7 +22,7 @@ func NewBindingRepository(pool *pgxpool.Pool) (*BindingRepository, error) {
 
 func (repository *BindingRepository) FindActiveBinding(ctx context.Context, internalAppID, deviceSN string) (binding.Binding, error) {
 	return scanBinding(repository.pool.QueryRow(ctx, `
-		SELECT b.id::text, d.id::text, d.device_sn, b.internal_app_id,
+		SELECT b.id::text, d.id::text, d.device_sn, d.pid, b.internal_app_id,
 		       b.binding_external_user_id, COALESCE(d.certificate_id, ''), b.status='active'
 		FROM device_bindings b
 		JOIN device_registry d ON d.id=b.device_registry_id
@@ -47,7 +47,7 @@ func (repository *BindingRepository) ValidateToken(
 	deviceSN string,
 ) (binding.Binding, error) {
 	return scanBinding(repository.pool.QueryRow(ctx, `
-		SELECT b.id::text, d.id::text, d.device_sn, b.internal_app_id,
+		SELECT b.id::text, d.id::text, d.device_sn, d.pid, b.internal_app_id,
 		       b.binding_external_user_id, COALESCE(d.certificate_id, ''), b.status='active'
 		FROM device_tokens t
 		JOIN device_bindings b ON b.id=t.device_binding_id
@@ -59,7 +59,7 @@ func (repository *BindingRepository) ValidateToken(
 
 func (repository *BindingRepository) FindBindingByToken(ctx context.Context, tokenHash [32]byte) (binding.Binding, error) {
 	return scanBinding(repository.pool.QueryRow(ctx, `
-		SELECT b.id::text, d.id::text, d.device_sn, b.internal_app_id,
+		SELECT b.id::text, d.id::text, d.device_sn, d.pid, b.internal_app_id,
 		       b.binding_external_user_id, COALESCE(d.certificate_id, ''), b.status='active'
 		FROM device_tokens t
 		JOIN device_bindings b ON b.id=t.device_binding_id
@@ -76,7 +76,7 @@ func (repository *BindingRepository) ReleaseBinding(ctx context.Context, binding
 	defer func() { _ = transaction.Rollback(ctx) }()
 
 	released, err := scanBinding(transaction.QueryRow(ctx, `
-		SELECT b.id::text, d.id::text, d.device_sn, b.internal_app_id,
+		SELECT b.id::text, d.id::text, d.device_sn, d.pid, b.internal_app_id,
 		       b.binding_external_user_id, COALESCE(d.certificate_id, ''), b.status='active'
 		FROM device_bindings b JOIN device_registry d ON d.id=b.device_registry_id
 		WHERE b.id=$1 AND b.status='active'
@@ -125,7 +125,7 @@ type bindingRow interface{ Scan(...any) error }
 func scanBinding(row bindingRow) (binding.Binding, error) {
 	var result binding.Binding
 	if err := row.Scan(
-		&result.ID, &result.DeviceID, &result.DeviceSN, &result.InternalAppID,
+		&result.ID, &result.DeviceID, &result.DeviceSN, &result.PID, &result.InternalAppID,
 		&result.BindingExternalUserID, &result.CertificateID, &result.Active,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

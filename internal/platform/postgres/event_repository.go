@@ -57,13 +57,13 @@ func (repository *EventRepository) Store(ctx context.Context, event events.Event
 		return fmt.Errorf("begin device event ingest: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
-	var deviceID, internalAppID string
+	var deviceID, internalAppID, pid string
 	if err := transaction.QueryRow(ctx, `
-		SELECT d.id::text, COALESCE(b.internal_app_id, '')
+		SELECT d.id::text, COALESCE(b.internal_app_id, ''), d.pid
 		FROM device_registry d
 		LEFT JOIN device_bindings b ON b.device_registry_id=d.id AND b.status='active'
 		WHERE d.device_sn=$1
-	`, event.DeviceSN).Scan(&deviceID, &internalAppID); err != nil {
+	`, event.DeviceSN).Scan(&deviceID, &internalAppID, &pid); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("ingest event for unknown device")
 		}
@@ -102,7 +102,7 @@ func (repository *EventRepository) Store(ctx context.Context, event events.Event
 	if internalAppID != "" {
 		deliveryHash := sha256.Sum256([]byte(internalAppID + "\n" + event.ID))
 		deliveryID := hex.EncodeToString(deliveryHash[:])
-		payload, webhookEventType := buildWebhookPayload(deliveryID, event)
+		payload, webhookEventType := buildWebhookPayload(deliveryID, event, pid)
 		outboxID, err := postgresUUID()
 		if err != nil {
 			return fmt.Errorf("generate webhook outbox id: %w", err)
@@ -121,7 +121,7 @@ func (repository *EventRepository) Store(ctx context.Context, event events.Event
 	return nil
 }
 
-func buildWebhookPayload(deliveryID string, event events.Event) (map[string]any, string) {
+func buildWebhookPayload(deliveryID string, event events.Event, pid string) (map[string]any, string) {
 	webhookEventType := event.EventType
 	webhookData := event.Data
 	if event.EventType == "feed_done" {
@@ -132,7 +132,7 @@ func buildWebhookPayload(deliveryID string, event events.Event) (map[string]any,
 	}
 	payload := map[string]any{
 		"delivery_id": deliveryID, "event_id": event.ID, "event_type": webhookEventType,
-		"device_sn": event.DeviceSN, "pid": "feeder-x1",
+		"device_sn": event.DeviceSN, "pid": pid,
 		"ts": event.ReceivedAt.Unix(), "received_at": event.ReceivedAt.UTC().Format(time.RFC3339Nano),
 		"boot_id": event.BootID, "event_seq": event.EventSeq, "monotonic_ms": event.MonotonicMS,
 		"time_quality": event.TimeQuality, "time_source": event.TimeSource, "data": webhookData,

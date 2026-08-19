@@ -96,6 +96,8 @@ func (s server) serveInternalApp(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	switch {
+	case request.Method == http.MethodGet && request.URL.Path == "/api/v1/openapi/device-products":
+		s.listActiveProducts(writer, request)
 	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/openapi/device-activations":
 		s.createActivation(writer, request)
 	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/openapi/devices/list":
@@ -198,7 +200,7 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		return true
 	case "detail":
 		writeJSON(writer, http.StatusOK, map[string]any{
-			"device_sn": ownedBinding.DeviceSN, "pid": "feeder-x1", "status": "provisioned",
+			"device_sn": ownedBinding.DeviceSN, "pid": ownedBinding.PID, "status": "provisioned",
 			"binding_external_user_id": ownedBinding.BindingExternalUserID,
 		})
 		return true
@@ -600,7 +602,7 @@ func (s server) createActivation(writer http.ResponseWriter, request *http.Reque
 		Method                string `json:"method"`
 		BindingExternalUserID string `json:"binding_external_user_id"`
 		IdempotencyKey        string `json:"idempotency_key"`
-		PID                   string `json:"pid,omitempty"`
+		PID                   string `json:"pid"`
 		SessionID             string `json:"session_id,omitempty"`
 		ClientHelloCBOR       string `json:"client_hello_cbor,omitempty"`
 		DeviceHelloCBOR       string `json:"device_hello_cbor,omitempty"`
@@ -608,19 +610,26 @@ func (s server) createActivation(writer http.ResponseWriter, request *http.Reque
 	if !decodeJSON(writer, request, &body) {
 		return
 	}
-	if body.PID != "" && body.PID != "feeder-x1" {
-		writeError(writer, http.StatusBadRequest, "invalid_request", "pid must be feeder-x1")
-		return
-	}
 	created, err := s.activation.Create(request.Context(), activation.CreateInput{
 		InternalAppID: principal.InternalAppID, BindingExternalUserID: body.BindingExternalUserID,
-		IdempotencyKey: body.IdempotencyKey, Method: activation.Method(body.Method),
+		IdempotencyKey: body.IdempotencyKey, Method: activation.Method(body.Method), PID: body.PID,
 	})
 	if err != nil {
 		writeActivationError(writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusCreated, activationResponse{Activation: created, IncludeCode: true})
+}
+
+func (s server) listActiveProducts(writer http.ResponseWriter, request *http.Request) {
+	products, err := s.activation.ListActiveProducts(request.Context())
+	if err != nil {
+		writeActivationError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, struct {
+		Products []activation.Product `json:"products"`
+	}{Products: products})
 }
 
 func (s server) createActivationSession(writer http.ResponseWriter, request *http.Request, activationID string) {
@@ -713,7 +722,7 @@ func (s server) listDevices(writer http.ResponseWriter, request *http.Request) {
 			lastSeenAt = device.LastSeenAt.UTC().Format(time.RFC3339)
 		}
 		response = append(response, map[string]any{
-			"device_sn": device.ID, "pid": "feeder-x1", "status": device.Status,
+			"device_sn": device.ID, "pid": device.PID, "status": device.Status,
 			"nickname": "", "is_subscription": false,
 			"activation_id": device.ActivationID, "aws_iot_endpoint": device.Endpoint,
 			"binding_external_user_id": device.BindingExternalUserID,
@@ -831,7 +840,7 @@ func (s server) prepareDevice(writer http.ResponseWriter, request *http.Request,
 		"device_id": installation.DeviceID, "thing_name": installation.DeviceID,
 		"certificate_id":  installation.CertificateID,
 		"certificate_pem": installation.Certificate, "aws_iot_endpoint": installation.Endpoint,
-		"installation_nonce": installation.ProofNonce, "pid": "feeder-x1",
+		"installation_nonce": installation.ProofNonce, "pid": installation.PID,
 		"aws_region":                  s.deviceRuntime.AWSRegion,
 		"aws_iot_credential_endpoint": s.deviceRuntime.CredentialEndpoint,
 		"aws_iot_role_alias":          s.deviceRuntime.RoleAlias,
@@ -889,7 +898,7 @@ func (response activationResponse) MarshalJSON() ([]byte, error) {
 	value := payload{
 		ActivationID: response.Activation.ID, Method: string(response.Activation.Method),
 		Status: status, ExpiresAt: response.Activation.ExpiresAt, Activated: activated,
-		DeviceSN: response.Activation.DeviceSN, PID: "feeder-x1",
+		DeviceSN: response.Activation.DeviceSN, PID: response.Activation.PID,
 	}
 	if response.IncludeCode {
 		value.ActivationCode = response.Activation.Code
@@ -982,6 +991,8 @@ func writeActivationError(writer http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, activation.ErrInvalidInput):
 		writeError(writer, http.StatusBadRequest, "invalid_request", "request is invalid")
+	case errors.Is(err, activation.ErrProductUnavailable):
+		writeError(writer, http.StatusBadRequest, "product_unavailable", "product is unavailable for activation")
 	case errors.Is(err, activation.ErrActivationNotFound):
 		writeError(writer, http.StatusNotFound, "activation_not_found", "activation was not found")
 	case errors.Is(err, activation.ErrActivationUnauthorized), errors.Is(err, activation.ErrInstallationProofInvalid):

@@ -10,8 +10,6 @@ import (
 	"strings"
 )
 
-const FixedPID = "feeder-x1"
-
 var internalAppIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{2,63}$`)
 
 type InternalApp struct {
