@@ -137,6 +137,23 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure event repository: %v", err)
 	}
+	if config.DirectACKSubscriberEnabled {
+		ingestService, err := events.NewIngestService(config.IoTTopicPrefix, ackStore, eventRepository)
+		if err != nil {
+			log.Fatalf("configure direct MQTT ACK ingest: %v", err)
+		}
+		ackSubscriber, err := awsiot.NewDirectACKSubscriber(awsiot.DirectACKSubscriberConfig{
+			Endpoint: *dataEndpoint.EndpointAddress, Region: config.AWSRegion,
+			TopicPrefix: config.IoTTopicPrefix, Credentials: awsConfig.Credentials, Handler: ingestService,
+		})
+		if err != nil {
+			log.Fatalf("configure direct MQTT ACK subscriber: %v", err)
+		}
+		if err := ackSubscriber.Start(ctx); err != nil {
+			log.Fatalf("start direct MQTT ACK subscriber: %v", err)
+		}
+		defer ackSubscriber.Close()
+	}
 	kvsClient, err := awskvs.NewClient(awsConfig, config.AWSRegion)
 	if err != nil {
 		log.Fatalf("configure AWS KVS: %v", err)

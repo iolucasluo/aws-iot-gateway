@@ -42,10 +42,17 @@ type Config struct {
 	TimeBootstrapKMSKeyID            string
 	TimeBootstrapLocalPrivateKeyPath string
 	InternalApps                     []InternalApp
+	DirectACKSubscriberEnabled       bool
 }
 
 func LoadConfig(getenv func(string) string) (Config, error) {
 	databaseURL, err := loadDatabaseURL(getenv)
+	if err != nil {
+		return Config{}, err
+	}
+	directACKSubscriberEnabled, err := parseOptionalBool(
+		"AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED", getenv("AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED"),
+	)
 	if err != nil {
 		return Config{}, err
 	}
@@ -67,9 +74,13 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		TimeBootstrapSigner:              valueOr(getenv("TIME_BOOTSTRAP_SIGNER"), "aws-kms"),
 		TimeBootstrapKMSKeyID:            strings.TrimSpace(getenv("TIME_BOOTSTRAP_KMS_KEY_ID")),
 		TimeBootstrapLocalPrivateKeyPath: strings.TrimSpace(getenv("TIME_BOOTSTRAP_LOCAL_PRIVATE_KEY_PATH")),
+		DirectACKSubscriberEnabled:       directACKSubscriberEnabled,
 	}
 	if !validEnvironment(config.Environment) {
 		return Config{}, fmt.Errorf("GATEWAY_ENVIRONMENT must be development, staging, or production")
+	}
+	if config.DirectACKSubscriberEnabled && config.Environment != "development" {
+		return Config{}, fmt.Errorf("AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED is allowed only when GATEWAY_ENVIRONMENT=development")
 	}
 	if config.AWSRegion == "" || config.DevicePolicyName == "" || config.IoTTopicPrefix == "" ||
 		config.IoTCredentialEndpoint == "" || config.IoTRoleAlias == "" || config.IoTShadowName == "" {
@@ -148,6 +159,18 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	return config, nil
+}
+
+func parseOptionalBool(name, value string) (bool, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s must be true or false", name)
+	}
+	return parsed, nil
 }
 
 func loadDatabaseURL(getenv func(string) string) (string, error) {

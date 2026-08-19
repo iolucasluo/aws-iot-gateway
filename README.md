@@ -132,6 +132,12 @@ go run ./cmd/aws-iot-gateway
 [deploy/device-bootstrap/README.md](deploy/device-bootstrap/README.md)，格式和消费者校验规则见
 [docs/contracts/gateway-device-bootstrap-v1.md](docs/contracts/gateway-device-bootstrap-v1.md)。
 
+本地真机命令使用 `wait_ack=true` 时，可在 `development` 环境显式设置
+`AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED=true`。API 将通过当前 AWS 标准凭据链使用 MQTT over
+WebSocket 订阅 `cmd/<AWS_IOT_TOPIC_PREFIX>/+/res`，并把 ACK 写入本机 Redis；该模式不读取共享
+staging SQS，也不会替代 staging 的 IoT Rule/event-worker。`staging` 和 `production` 环境启用此开关
+会启动失败。运行身份需要目标 topic 的 `iot:Connect`、`iot:Subscribe` 和 `iot:Receive` 权限。
+
 测试：
 
 ```sh
