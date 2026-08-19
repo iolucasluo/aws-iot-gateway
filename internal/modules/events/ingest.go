@@ -94,6 +94,14 @@ func (service *IngestService) HandleMQTT(ctx context.Context, topic string, payl
 		return fmt.Errorf("decode MQTT message: %w", err)
 	}
 	message["topic"] = topic
+	parts := strings.Split(topic, "/")
+	if len(parts) == 4 && parts[0] == "dt" && parts[1] == service.namespace &&
+		(parts[3] == "status" || parts[3] == "lwt") {
+		// Direct MQTT payloads do not pass through the IoT Rule that adds
+		// timestamp(). Use the authenticated Gateway receipt time instead of a
+		// device-controlled field so presence ordering cannot be forged.
+		message["received_at_ms"] = float64(time.Now().UTC().UnixMilli())
+	}
 	return service.handleMessage(ctx, message)
 }
 

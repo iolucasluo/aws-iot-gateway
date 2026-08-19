@@ -17,6 +17,24 @@ func TestDirectACKTopicUsesExactNamespace(t *testing.T) {
 	}
 }
 
+func TestDirectIngestTopicsIncludeACKStatusAndLWT(t *testing.T) {
+	t.Parallel()
+	want := []string{
+		"cmd/aws-iot-gateway-staging/+/res",
+		"dt/aws-iot-gateway-staging/+/status",
+		"dt/aws-iot-gateway-staging/+/lwt",
+	}
+	got := directIngestTopics("aws-iot-gateway-staging")
+	if len(got) != len(want) {
+		t.Fatalf("directIngestTopics() = %#v", got)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("directIngestTopics()[%d] = %q, want %q", index, got[index], want[index])
+		}
+	}
+}
+
 func TestDirectACKTopicPrefixMustBeOneMQTTSegment(t *testing.T) {
 	t.Parallel()
 	for _, prefix := range []string{"", "nested/prefix", "prefix/+", "prefix/#", " leading", "trailing "} {
