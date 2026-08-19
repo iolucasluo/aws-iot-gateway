@@ -6,14 +6,38 @@ LOCAL_SCRIPT="$ROOT/deploy/device-bootstrap/scripts/render-local-contract.sh"
 STAGING_SCRIPT="$ROOT/deploy/device-bootstrap/scripts/render-staging-contract.sh"
 PUBLISHED_CONTRACTS="$ROOT/deploy/device-bootstrap/contracts"
 STAGING_CONTRACT="$PUBLISHED_CONTRACTS/staging"
+CWJ_CONTRACT="$PUBLISHED_CONTRACTS/cwj"
 
 test -f "$LOCAL_SCRIPT"
 test -f "$STAGING_SCRIPT"
 test -f "$STAGING_CONTRACT/contract.json"
 test -f "$STAGING_CONTRACT/gateway-ca.pem"
 test -d "$STAGING_CONTRACT/time-bootstrap"
+test -f "$CWJ_CONTRACT/contract.json"
+test -d "$CWJ_CONTRACT/time-bootstrap"
+test ! -e "$CWJ_CONTRACT/gateway-ca.pem"
 test ! -e "$ROOT/deploy/local/device-bootstrap-contract"
 test ! -e "$ROOT/deploy/staging/device-bootstrap-contract"
+git -C "$ROOT" check-ignore -q .local/device-bootstrap/cwj/time-bootstrap-private.pem
+
+python3 - "$CWJ_CONTRACT/contract.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+contract = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if contract.get("environment") != "development":
+    raise SystemExit("cwj Contract must be a development Contract")
+if contract.get("gateway") != {"base_url": "http://192.168.11.146:14080"}:
+    raise SystemExit("cwj Contract must use the local HTTP Gateway origin only")
+if contract.get("time_bootstrap", {}).get("url") != "http://192.168.11.146:14080/api/v1/device-time/bootstrap":
+    raise SystemExit("cwj Contract must use the local time-bootstrap endpoint")
+if contract.get("provenance") != {"signer_backend": "local"}:
+    raise SystemExit("cwj Contract must use only the local signer provenance")
+keys = contract.get("time_bootstrap", {}).get("keys")
+if not isinstance(keys, list) or len(keys) != 1 or keys[0].get("kid") != "time-cwj-g1":
+    raise SystemExit("cwj Contract must publish exactly the cwj local time key")
+PY
 
 python3 - "$LOCAL_SCRIPT" "$STAGING_SCRIPT" <<'PY'
 from pathlib import Path

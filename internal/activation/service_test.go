@@ -328,6 +328,7 @@ func testCreateInput(method Method) CreateInput {
 	return CreateInput{
 		InternalAppID: "livpet-staging", BindingExternalUserID: "user-42",
 		IdempotencyKey: "operation-1-" + string(method), Method: method,
+		PID: "feeder-x1",
 	}
 }
 

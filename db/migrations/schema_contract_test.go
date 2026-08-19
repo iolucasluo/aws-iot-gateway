@@ -11,6 +11,7 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 	initial := readMigration(t, "001_initial.sql")
 
 	for _, table := range []string{
+		"products",
 		"device_registry",
 		"device_activations",
 		"device_activation_sessions",
@@ -45,6 +46,7 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 	}
 
 	for _, table := range []string{
+		"products",
 		"device_registry",
 		"device_activations",
 		"device_activation_sessions",
@@ -70,6 +72,8 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 		"device_registry_id uuid",
 		"device_binding_id uuid",
 		"presence_online boolean NOT NULL DEFAULT false",
+		"CONSTRAINT device_registry_pid_fkey FOREIGN KEY (pid) REFERENCES products(pid)",
+		"CONSTRAINT device_activations_pid_fkey FOREIGN KEY (pid) REFERENCES products(pid)",
 		"updated_at timestamptz NOT NULL DEFAULT now()",
 		"COMMENT ON TABLE device_schedules",
 	} {
@@ -82,7 +86,6 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 		"CREATE TABLE bindings (",
 		"CREATE TABLE projects (",
 		"developer_accounts",
-		"products",
 		"factory_batches",
 		"idevid",
 		"rma",

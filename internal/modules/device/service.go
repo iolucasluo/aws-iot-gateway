@@ -111,11 +111,21 @@ func (service *Service) GetShadow(ctx context.Context, deviceSN string) (any, er
 	if err != nil {
 		return nil, err
 	}
-	var result any
-	if err := json.Unmarshal(payload, &result); err != nil {
+	var envelope struct {
+		State struct {
+			Reported map[string]any `json:"reported"`
+		} `json:"state"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
 		return nil, fmt.Errorf("decode AWS IoT shadow: %w", err)
 	}
-	return result, nil
+	sn, snOK := envelope.State.Reported["sn"].(string)
+	pid, pidOK := envelope.State.Reported["pid"].(string)
+	_, onlineOK := envelope.State.Reported["online"].(bool)
+	if !snOK || strings.TrimSpace(sn) == "" || !pidOK || strings.TrimSpace(pid) == "" || !onlineOK {
+		return nil, fmt.Errorf("decode AWS IoT shadow: reported projection is invalid")
+	}
+	return envelope.State.Reported, nil
 }
 
 func (service *Service) GetPTZStatus(ctx context.Context, internalAppID, deviceID, deviceSN string) (PTZStatus, error) {

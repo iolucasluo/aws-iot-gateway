@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -185,7 +186,7 @@ func (subscriber *DirectACKSubscriber) connect(ctx context.Context) (mqtt.Client
 	options.SetDefaultPublishHandler(func(_ mqtt.Client, message mqtt.Message) {
 		payload := append([]byte(nil), message.Payload()...)
 		if err := subscriber.config.Handler.HandleMQTT(ctx, message.Topic(), payload); err != nil {
-			subscriber.logger.Printf("direct MQTT ACK rejected topic=%s: %v", message.Topic(), err)
+			subscriber.logger.Printf("direct MQTT ingest rejected topic=%s: %v", message.Topic(), err)
 		}
 	})
 
@@ -198,17 +199,21 @@ func (subscriber *DirectACKSubscriber) connect(ctx context.Context) (mqtt.Client
 	if err := connectToken.Error(); err != nil {
 		return nil, nil, fmt.Errorf("connect direct MQTT ACK subscriber: %w", err)
 	}
-	topic := directACKTopic(subscriber.config.TopicPrefix)
-	subscribeToken := client.Subscribe(topic, 1, nil)
+	topics := directIngestTopics(subscriber.config.TopicPrefix)
+	filters := make(map[string]byte, len(topics))
+	for _, topic := range topics {
+		filters[topic] = 1
+	}
+	subscribeToken := client.SubscribeMultiple(filters, nil)
 	if !subscribeToken.WaitTimeout(directACKConnectTimeout) {
 		client.Disconnect(250)
-		return nil, nil, fmt.Errorf("subscribe direct MQTT ACK topic: timeout")
+		return nil, nil, fmt.Errorf("subscribe direct MQTT ingest topics: timeout")
 	}
 	if err := subscribeToken.Error(); err != nil {
 		client.Disconnect(250)
-		return nil, nil, fmt.Errorf("subscribe direct MQTT ACK topic: %w", err)
+		return nil, nil, fmt.Errorf("subscribe direct MQTT ingest topics: %w", err)
 	}
-	subscriber.logger.Printf("direct MQTT ACK subscriber connected topic=%s", topic)
+	subscriber.logger.Printf("direct MQTT ingest subscriber connected topics=%s", strings.Join(topics, ","))
 	return client, lost, nil
 }
 
@@ -220,6 +225,14 @@ func (subscriber *DirectACKSubscriber) setClient(client mqtt.Client) {
 
 func directACKTopic(topicPrefix string) string {
 	return "cmd/" + topicPrefix + "/+/res"
+}
+
+func directIngestTopics(topicPrefix string) []string {
+	return []string{
+		directACKTopic(topicPrefix),
+		"dt/" + topicPrefix + "/+/status",
+		"dt/" + topicPrefix + "/+/lwt",
+	}
 }
 
 func validDirectACKTopicPrefix(topicPrefix string) bool {

@@ -29,6 +29,7 @@ type Binding struct {
 	ID                    string
 	DeviceID              string
 	DeviceSN              string
+	PID                   string
 	InternalAppID         string
 	BindingExternalUserID string
 	CertificateID         string

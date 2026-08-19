@@ -7,12 +7,40 @@ import (
 )
 
 type MemoryRepository struct {
-	mu      sync.Mutex
-	records map[string]Record
+	mu       sync.Mutex
+	records  map[string]Record
+	products map[string]Product
 }
 
 func NewMemoryRepository() *MemoryRepository {
-	return &MemoryRepository{records: make(map[string]Record)}
+	return &MemoryRepository{
+		records: make(map[string]Record),
+		products: map[string]Product{
+			"feeder-x1":     {PID: "feeder-x1", Name: "Feeder X1"},
+			"minion-cam-x1": {PID: "minion-cam-x1", Name: "Minion Cam X1"},
+		},
+	}
+}
+
+func (repository *MemoryRepository) FindActiveProduct(_ context.Context, pid string) (Product, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	product, found := repository.products[pid]
+	if !found {
+		return Product{}, ErrProductUnavailable
+	}
+	return product, nil
+}
+
+func (repository *MemoryRepository) ListActiveProducts(_ context.Context) ([]Product, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	products := make([]Product, 0, len(repository.products))
+	for _, product := range repository.products {
+		products = append(products, product)
+	}
+	sort.Slice(products, func(left, right int) bool { return products[left].PID < products[right].PID })
+	return products, nil
 }
 
 func (repository *MemoryRepository) Create(_ context.Context, record Record) error {
@@ -134,7 +162,7 @@ func (repository *MemoryRepository) ListDevices(_ context.Context, internalAppID
 			continue
 		}
 		devices = append(devices, Device{
-			ID: record.Installation.DeviceID, ActivationID: record.Activation.ID, Endpoint: record.Installation.Endpoint,
+			ID: record.Installation.DeviceID, ActivationID: record.Activation.ID, PID: record.Activation.PID, Endpoint: record.Installation.Endpoint,
 			BindingExternalUserID: record.Activation.BindingExternalUserID, Status: "provisioned",
 		})
 	}

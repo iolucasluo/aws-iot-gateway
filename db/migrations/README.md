@@ -1,7 +1,8 @@
 # aws-iot-gateway PostgreSQL migrations
 
-`db/migrations/` 是 Gateway schema 的唯一权威源。这里只保留用户 activation、全局设备绑定、运行身份、设备控制、
-事件、媒体和 outbox；没有 Developer、Project、Product、Factory、IDevID、RMA、tenant 或平台 OTA 表。
+本目录是 Gateway schema 的唯一权威源。这里只保留用户 activation、全局设备绑定、运行身份、设备控制、
+事件、媒体和 outbox。`products` 是 Gateway schema 自有的只读激活目录，不是旧 IoT 平台的 Product 域；没有
+Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或平台 OTA 表。
 
 ## 文件与执行约定
 
@@ -13,10 +14,11 @@
 - `001_initial.sql` 必须保持 Gateway 窄域业务边界，同时继承 explorex-api 的精确表/FK/索引命名、
   `updated_at` trigger、数据库硬约束与 schema contract test 规范。
 
-## 当前 schema 快照（16 张业务表）
+## 当前 schema 快照（17 张业务表）
 
 | 表 | 用途 | PK | 主要 FK / 删除语义 |
 |---|---|---|---|
+| `products` | 只读激活产品目录（PID、名称、active/disabled） | `id` | 被 registry/activation 以 PID RESTRICT 引用 |
 | `device_registry` | 设备运行权威记录、ThingName、证书与 presence | `id` | — |
 | `device_activations` | internal app 用户激活 saga | `id` | `device_registry_id → device_registry`（nullable, RESTRICT） |
 | `device_activation_sessions` | activation 安装 session | `id` | `device_activation_id → device_activations`（CASCADE） |

@@ -156,3 +156,24 @@ func TestIngestHandlesDirectMQTTCommandACK(t *testing.T) {
 		t.Fatalf("ACK retained transport topic: %#v", sink.ack)
 	}
 }
+
+func TestIngestUsesGatewayReceiptTimeForDirectMQTTPresence(t *testing.T) {
+	t.Parallel()
+
+	repository := &presenceRepositoryStub{}
+	service, err := NewIngestService("aws-iot-gateway-staging", &ackSinkStub{}, repository)
+	if err != nil {
+		t.Fatalf("NewIngestService() error = %v", err)
+	}
+	beforeMS := time.Now().UTC().UnixMilli()
+	if err := service.HandleMQTT(context.Background(),
+		"dt/aws-iot-gateway-staging/fdr-direct/status", []byte(`{"online":true,"received_at_ms":1}`)); err != nil {
+		t.Fatalf("HandleMQTT() error = %v", err)
+	}
+	afterMS := time.Now().UTC().UnixMilli()
+	if repository.deviceSN != "fdr-direct" || !repository.online ||
+		repository.observedAt.UnixMilli() < beforeMS || repository.observedAt.UnixMilli() > afterMS {
+		t.Fatalf("presence = %q/%t/%s, want gateway receipt time in [%d,%d]ms",
+			repository.deviceSN, repository.online, repository.observedAt, beforeMS, afterMS)
+	}
+}

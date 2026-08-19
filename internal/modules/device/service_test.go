@@ -20,6 +20,15 @@ func (publisher *publisherStub) Publish(_ context.Context, topic string, payload
 	return publisher.err
 }
 
+type shadowPublisherStub struct {
+	publisherStub
+	shadow []byte
+}
+
+func (publisher *shadowPublisherStub) GetShadow(context.Context, string) ([]byte, error) {
+	return append([]byte(nil), publisher.shadow...), publisher.err
+}
+
 type ackWaiterStub struct {
 	ack map[string]any
 	err error
@@ -75,6 +84,48 @@ func TestSendCommandsPreservesLivPetPayloadAndResponseShape(t *testing.T) {
 	}
 	if len(repository.commands) != 1 || repository.commands[0].Status != "acked" {
 		t.Fatalf("commands = %#v", repository.commands)
+	}
+}
+
+func TestGetShadowReturnsReportedProjectionWithoutAWSMetadata(t *testing.T) {
+	t.Parallel()
+	publisher := &shadowPublisherStub{shadow: []byte(`{
+		"state":{"reported":{"sn":"fdr-0001","pid":"feeder-x1","wifi_mac":"48:a4:fd:7d:6f:0b","online":true}},
+		"metadata":{"reported":{"online":{"timestamp":1787121756}}},
+		"version":156,"timestamp":1787121756
+	}`)}
+	service := NewService(publisher, ackWaiterStub{}, &commandRepositoryStub{},
+		"aws-iot-gateway-staging", func() (string, error) { return "session-1", nil })
+
+	shadow, err := service.GetShadow(context.Background(), "fdr-0001")
+	if err != nil {
+		t.Fatalf("GetShadow() error = %v", err)
+	}
+	projection, ok := shadow.(map[string]any)
+	if !ok {
+		t.Fatalf("GetShadow() = %#v, want reported projection", shadow)
+	}
+	if projection["sn"] != "fdr-0001" || projection["wifi_mac"] != "48:a4:fd:7d:6f:0b" || projection["online"] != true {
+		t.Fatalf("reported projection = %#v", projection)
+	}
+	if _, leaked := projection["state"]; leaked {
+		t.Fatalf("reported projection leaked AWS envelope: %#v", projection)
+	}
+}
+
+func TestGetShadowRejectsIncompleteReportedProjection(t *testing.T) {
+	t.Parallel()
+	for _, payload := range []string{
+		`{"state":{}}`,
+		`{"state":{"reported":{"sn":"fdr-0001","pid":"feeder-x1"}}}`,
+		`{"state":{"reported":{"sn":"","pid":"feeder-x1","online":true}}}`,
+	} {
+		publisher := &shadowPublisherStub{shadow: []byte(payload)}
+		service := NewService(publisher, ackWaiterStub{}, &commandRepositoryStub{},
+			"aws-iot-gateway-staging", func() (string, error) { return "session-1", nil })
+		if _, err := service.GetShadow(context.Background(), "fdr-0001"); err == nil {
+			t.Fatalf("GetShadow() accepted %s", payload)
+		}
 	}
 }
 
