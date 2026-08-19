@@ -1,18 +1,24 @@
 package migrations
 
 import (
+	"fmt"
 	"io/fs"
 	"testing"
 )
 
-func TestOnlySquashedInitialMigrationRemains(t *testing.T) {
+func TestMigrationLayoutKeepsInitialAndForwardCompatibilityPair(t *testing.T) {
 	t.Parallel()
 
 	entries, err := fs.ReadDir(Files, ".")
 	if err != nil {
 		t.Fatalf("read embedded migrations: %v", err)
 	}
-	if len(entries) != 1 || entries[0].IsDir() || entries[0].Name() != "001_initial.sql" {
-		t.Fatalf("migration files = %v, want only 001_initial.sql at the migration root", migrationNames(entries))
+	want := []string{
+		"001_initial.sql",
+		"002_legacy_product_catalog.down.sql",
+		"002_legacy_product_catalog.up.sql",
+	}
+	if got := migrationNames(entries); len(got) != len(want) || fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("migration files = %v, want %v", got, want)
 	}
 }

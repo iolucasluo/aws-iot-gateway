@@ -172,7 +172,7 @@ func TestSquashedInitialSchemaEnforcesDatabaseConventions(t *testing.T) {
 	}
 }
 
-func TestApplyMigrationsRecordsOnlySquashedInitial(t *testing.T) {
+func TestApplyMigrationsRecordsInitialAndForwardCompatibilityMigration(t *testing.T) {
 	ctx := context.Background()
 	pool := newIsolatedMigrationPool(t, ctx)
 	if err := ApplyMigrations(ctx, pool); err != nil {
@@ -195,7 +195,7 @@ func TestApplyMigrationsRecordsOnlySquashedInitial(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate migration names: %v", err)
 	}
-	want := []string{"001_initial.sql"}
+	want := []string{"001_initial.sql", "002_legacy_product_catalog.up.sql"}
 	if fmt.Sprint(appliedNames) != fmt.Sprint(want) {
 		t.Fatalf("applied migrations = %v, want %v", appliedNames, want)
 	}

@@ -13,8 +13,10 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或�
   `gateway_schema_migrations`；`.down.sql` 永不自动执行。
 - `001_initial.sql` 必须保持 Gateway 窄域业务边界，同时继承 explorex-api 的精确表/FK/索引命名、
   `updated_at` trigger、数据库硬约束与 schema contract test 规范。
-- migration 只定义 schema，不写产品数据；development/staging 的两条 active PID 由
-  `aws-iot-gateway-db-seed` 显式执行 `../seeds/001_products.sql` 初始化。
+- migration 通常只定义 schema，不写产品数据；development/staging 的两条 active PID 由
+  `aws-iot-gateway-db-seed` 显式执行 `../seeds/001_products.sql` 初始化。唯一例外是 `002` 在识别到旧版
+  pre-production `001_initial.sql` 时回填其历史上唯一合法的 `feeder-x1`，以便在不删除旧 activation/registry
+  数据的前提下建立 PID 外键；fresh schema 不执行该数据回填。
 
 ## 当前 schema 快照（17 张业务表）
 
@@ -47,3 +49,6 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或�
 - `001_initial`：原 `001-004` 的 pre-production squash。包含窄域 Internal AWS API、设备 MQTT
   heartbeat/LWT presence、运行证书撤销补偿 outbox、精确表/FK/索引命名、统一 `set_updated_at()`
   trigger，以及 `device_bindings.binding_external_user_id` 的 23514 不可变 trigger。
+- `002_legacy_product_catalog`：只对已登记旧版 `001_initial.sql` 且缺少 `device_activations.pid` 的 schema
+  生效；创建最小产品目录、回填旧 activation PID、移除 registry 的隐式默认 PID，并建立 registry/activation
+  到 `products(pid)` 的 RESTRICT 外键。fresh schema 为 no-op；为避免丢失历史数据，不提供自动 down。

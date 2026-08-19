@@ -99,6 +99,34 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 	}
 }
 
+func TestLegacyProductCatalogMigrationIsScopedAndNonDestructive(t *testing.T) {
+	t.Parallel()
+	migration := readMigration(t, "002_legacy_product_catalog.up.sql")
+
+	for _, fragment := range []string{
+		"legacy_activation_schema",
+		"CREATE TABLE IF NOT EXISTS products",
+		"ALTER COLUMN pid DROP DEFAULT",
+		"ADD COLUMN pid varchar(64)",
+		"WHERE activation.pid IS NULL",
+		"device_registry_pid_fkey",
+		"device_activations_pid_fkey",
+		"ON DELETE RESTRICT",
+	} {
+		requireMigrationContains(t, migration, fragment)
+	}
+	for _, forbidden := range []string{
+		"DROP TABLE",
+		"TRUNCATE",
+		"DELETE FROM",
+		"DROP COLUMN",
+	} {
+		if strings.Contains(strings.ToUpper(migration), forbidden) {
+			t.Errorf("compatibility migration contains destructive fragment %q", forbidden)
+		}
+	}
+}
+
 func migrationNames(entries []fs.DirEntry) []string {
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
