@@ -6,18 +6,16 @@
     "base_url": "http://192.168.11.146:14080"
   },
   "time_bootstrap": {
-    "url": "http://aws-io-Publi-CbZTozBpxeJP-1672547848.ap-east-1.elb.amazonaws.com/api/v1/device-time/bootstrap",
+    "url": "http://192.168.11.146:14080/api/v1/device-time/bootstrap",
     "keys": [
       {
-        "kid": "time-staging-g1",
-        "spki_der_file": "time-bootstrap/time-staging-g1.der",
-        "sha256": "dd7609d27d18b07d96082cd6426f9d09d8c33f03e8e146d2f2919ceb3337bd01"
+        "kid": "time-cwj-g1",
+        "spki_der_file": "time-bootstrap/time-cwj-g1.der",
+        "sha256": "9b3ba0556b2f3b70ba44e16f3a51ea35bacbf52a34d21f5a28e2ab1aee6e1d0c"
       }
     ]
   },
   "provenance": {
-    "signer_backend": "aws-kms",
-    "source_stack": "aws-iot-gateway-development",
-    "kms_key_arn": "arn:aws:kms:ap-east-1:135359468083:key/e04e0e60-e9fe-49a8-beb5-85b278d384cb"
+    "signer_backend": "local"
   }
 }
