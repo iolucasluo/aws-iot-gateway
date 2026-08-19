@@ -12,10 +12,10 @@
 | 任务信号 | 必读规则 | 主要事实源 |
 |---|---|---|
 | Go 实现、重构、配置加载、Redis | `Go开发规范.md`、`测试与验证.md` | `cmd/`、`internal/`、`.env.example` |
-| PostgreSQL、repository SQL、表/FK/索引/trigger 或 migration | `数据库设计规范.md`、`Go开发规范.md`、`测试与验证.md` | `migrations/`、`internal/platform/postgres/` |
+| PostgreSQL、repository SQL、表/FK/索引/trigger 或 migration | `数据库设计规范.md`、`Go开发规范.md`、`测试与验证.md` | `db/migrations/`、`internal/platform/postgres/` |
 | HTTP 路由、JSON、状态码、activation 或设备目录 | `HTTP与Activation契约.md`、`测试与验证.md` | `internal/httpapi/`、`internal/activation/` |
 | token、CSR、certificate、installation proof、用户隔离或 AWS IAM | `安全边界.md`、`HTTP与Activation契约.md` | `internal/activation/`、`internal/awsiot/` |
-| 既有 activation、binding、reset、MQTT、事件或媒体流程 | [`../../flows/目录说明.md`](../../flows/目录说明.md) 与对应单篇 flow；再读本表命中的契约规则 | `internal/`、`migrations/`、`cmd/event-worker/` |
+| 既有 activation、binding、reset、MQTT、事件或媒体流程 | [`../../flows/目录说明.md`](../../flows/目录说明.md) 与对应单篇 flow；再读本表命中的契约规则 | `internal/`、`db/migrations/`、`cmd/event-worker/` |
 | App / 固件跨仓协议变化 | 全部五份规则、[`../../contracts/gateway-device-bootstrap-v1.md`](../../contracts/gateway-device-bootstrap-v1.md) | App consumer、Anyka commissioning 契约、`deploy/device-bootstrap/README.md` |
 
 ## 仓库边界

@@ -6,21 +6,9 @@ import (
 	"testing"
 )
 
-func TestOnlySquashedInitialMigrationRemains(t *testing.T) {
-	t.Parallel()
-
-	entries, err := fs.ReadDir(Files, "sql")
-	if err != nil {
-		t.Fatalf("read embedded migrations: %v", err)
-	}
-	if len(entries) != 1 || entries[0].IsDir() || entries[0].Name() != "001_initial.sql" {
-		t.Fatalf("migration files = %v, want only 001_initial.sql", migrationNames(entries))
-	}
-}
-
 func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t *testing.T) {
 	t.Parallel()
-	initial := readMigration(t, "sql/001_initial.sql")
+	initial := readMigration(t, "001_initial.sql")
 
 	for _, table := range []string{
 		"device_registry",

@@ -9,7 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/migrations"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/db/migrations"
 )
 
 const migrationAdvisoryLockID int64 = 7_114_920_042_026_081_300
@@ -34,7 +34,7 @@ func ApplyMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	`); err != nil {
 		return fmt.Errorf("create schema migration registry: %w", err)
 	}
-	entries, err := fs.ReadDir(migrations.Files, "sql")
+	entries, err := fs.ReadDir(migrations.Files, ".")
 	if err != nil {
 		return fmt.Errorf("read embedded migrations: %w", err)
 	}
@@ -53,7 +53,7 @@ func ApplyMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		if applied {
 			continue
 		}
-		migrationSQL, err := migrations.Files.ReadFile("sql/" + entry.Name())
+		migrationSQL, err := migrations.Files.ReadFile(entry.Name())
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", entry.Name(), err)
 		}

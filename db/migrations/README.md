@@ -1,6 +1,6 @@
 # aws-iot-gateway PostgreSQL migrations
 
-本目录是 Gateway schema 的唯一权威源。这里只保留用户 activation、全局设备绑定、运行身份、设备控制、
+`db/migrations/` 是 Gateway schema 的唯一权威源。这里只保留用户 activation、全局设备绑定、运行身份、设备控制、
 事件、媒体和 outbox；没有 Developer、Project、Product、Factory、IDevID、RMA、tenant 或平台 OTA 表。
 
 ## 文件与执行约定
