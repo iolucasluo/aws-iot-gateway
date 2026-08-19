@@ -63,6 +63,47 @@ func TestInternalAPICreatesAndPollsHMACActivation(t *testing.T) {
 	}
 }
 
+func TestInternalAPIPreservesSelectedMinionPIDAcrossActivationLifecycle(t *testing.T) {
+	t.Parallel()
+
+	now := time.UnixMilli(1_718_000_000_000)
+	handler := newSignedTestHandler(t, activation.NewService(), now)
+	createBody := []byte(`{"method":"ble","pid":"minion-cam-x1","binding_external_user_id":"livpet-user-42","idempotency_key":"minion-operation-1"}`)
+	create := signedInternalRequest(t, now, "nonce-minion-create", http.MethodPost, "/api/v1/openapi/device-activations", createBody)
+	createResponse := httptest.NewRecorder()
+	handler.ServeHTTP(createResponse, create)
+	if createResponse.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201: %s", createResponse.Code, createResponse.Body.String())
+	}
+	var created struct {
+		ActivationID string `json:"activation_id"`
+		PID          string `json:"pid"`
+	}
+	if err := json.Unmarshal(createResponse.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.ActivationID == "" || created.PID != "minion-cam-x1" {
+		t.Fatalf("create response = %#v, want minion-cam-x1", created)
+	}
+
+	pollPath := "/api/v1/openapi/device-activations/" + created.ActivationID
+	poll := signedInternalRequest(t, now, "nonce-minion-poll", http.MethodGet, pollPath, nil)
+	pollResponse := httptest.NewRecorder()
+	handler.ServeHTTP(pollResponse, poll)
+	if pollResponse.Code != http.StatusOK {
+		t.Fatalf("poll status = %d, want 200: %s", pollResponse.Code, pollResponse.Body.String())
+	}
+	var observed struct {
+		PID string `json:"pid"`
+	}
+	if err := json.Unmarshal(pollResponse.Body.Bytes(), &observed); err != nil {
+		t.Fatalf("decode poll response: %v", err)
+	}
+	if observed.PID != "minion-cam-x1" {
+		t.Fatalf("poll pid = %q, want minion-cam-x1", observed.PID)
+	}
+}
+
 func TestInternalAPIRemovesLegacyBearerRoutes(t *testing.T) {
 	t.Parallel()
 
