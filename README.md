@@ -56,10 +56,6 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 
 设备子路由覆盖 detail、shadow、commands、schedules、events、streams、snapshots、recordings 和 feed-audio。Bearer `/v1/activations`、`/v1/devices` 和旧 `/v1/device-activations/{id}/*` 已从 router 删除。完整目标路由和阶段验收快照见根仓 `docs/branches/.archived/wicgeechan/2026-08-17/2026-08-13-internal-aws-api-implementation-plan.md`；当前未完成项见 `docs/branches/iot-flash-develop-internal-aws-follow-ups.md`。
 
-设备冷启动的公开 Contract → signed-time → 严格 TLS 接入闭环，以及登记、activation、binding、reset、MQTT
-事件与媒体的代码反向工程流程图见 [`docs/flows/目录说明.md`](docs/flows/目录说明.md)。每个场景单独成篇；
-它们不恢复旧 IoT 平台的 Project、IDevID、Factory、RMA 或 OTA 语义。
-
 `recommission` 只接受 `reset_scope=runtime|all`：默认 `runtime` 仅清理 Wi-Fi 与运行身份，`all`
 还清理设备本地用户数据。两种 scope 都必须先取得设备 ACK，Gateway 才撤销 token、释放 binding
 并进入旧运行证书禁用流程；离线、超时、未知 scope 或 ACK 失败均保持 binding 有效。
@@ -124,13 +120,11 @@ set +a
 go run ./cmd/aws-iot-gateway
 ```
 
-需要让真实 Taixin/Anyka 硬件访问 Gateway 时，不要在各硬件仓手写 endpoint、CA 或 time SPKI。共享
-`development`（local/LAN）与 `staging` 环境的公开 `Gateway Device Bootstrap Contract` 发布位置分别是
-`deploy/device-bootstrap/contracts/development/` 与
-`deploy/device-bootstrap/contracts/staging/`；硬件构建只复制存在且经审核的目录。Gateway owner 从本地 signer 或已部署 CloudFormation/KMS 的**公开** Outputs 生成候选
-目录，再人工审核、替换并提交环境 Contract；Dell 和硬件仓不需要 AWS authority。命令、环境变量、轮换和回滚见
-[deploy/device-bootstrap/README.md](deploy/device-bootstrap/README.md)，格式和消费者校验规则见
-[docs/contracts/gateway-device-bootstrap-v1.md](docs/contracts/gateway-device-bootstrap-v1.md)。
+本地真机命令使用 `wait_ack=true` 时，可在 `development` 环境显式设置
+`AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED=true`。API 将通过当前 AWS 标准凭据链使用 MQTT over
+WebSocket 订阅 `cmd/<AWS_IOT_TOPIC_PREFIX>/+/res`，并把 ACK 写入本机 Redis；该模式不读取共享
+staging SQS，也不会替代 staging 的 IoT Rule/event-worker。`staging` 和 `production` 环境启用此开关
+会启动失败。运行身份需要目标 topic 的 `iot:Connect`、`iot:Subscribe` 和 `iot:Receive` 权限。
 
 测试：
 

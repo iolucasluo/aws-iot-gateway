@@ -220,3 +220,33 @@ func validEnvironmentMap() map[string]string {
 		]`,
 	}
 }
+
+func TestLoadConfigAllowsDirectACKSubscriberOnlyInDevelopment(t *testing.T) {
+	t.Parallel()
+
+	development := validEnvironmentMap()
+	development["GATEWAY_ENVIRONMENT"] = "development"
+	development["AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED"] = "true"
+	config, err := LoadConfig(func(key string) string { return development[key] })
+	if err != nil {
+		t.Fatalf("LoadConfig() development error = %v", err)
+	}
+	if !config.DirectACKSubscriberEnabled {
+		t.Fatal("DirectACKSubscriberEnabled = false, want true")
+	}
+
+	staging := validEnvironmentMap()
+	staging["AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED"] = "true"
+	if _, err := LoadConfig(func(key string) string { return staging[key] }); err == nil ||
+		!strings.Contains(err.Error(), "development") {
+		t.Fatalf("LoadConfig() staging error = %v, want development-only rejection", err)
+	}
+
+	invalid := validEnvironmentMap()
+	invalid["GATEWAY_ENVIRONMENT"] = "development"
+	invalid["AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED"] = "yes"
+	if _, err := LoadConfig(func(key string) string { return invalid[key] }); err == nil ||
+		!strings.Contains(err.Error(), "AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED") {
+		t.Fatalf("LoadConfig() invalid boolean error = %v", err)
+	}
+}

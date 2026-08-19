@@ -135,3 +135,24 @@ func TestIngestRejectsCrossEnvironmentAndMalformedIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestIngestHandlesDirectMQTTCommandACK(t *testing.T) {
+	t.Parallel()
+
+	sink := &ackSinkStub{}
+	service, err := NewIngestService("aws-iot-gateway-staging", sink, &eventRepositoryStub{})
+	if err != nil {
+		t.Fatalf("NewIngestService() error = %v", err)
+	}
+	payload := []byte(`{"topic":"cmd/another-env/attacker/res","session_id":"session-direct","action":"device_info","code":0}`)
+	if err := service.HandleMQTT(context.Background(),
+		"cmd/aws-iot-gateway-staging/fdr-direct/res", payload); err != nil {
+		t.Fatalf("HandleMQTT() error = %v", err)
+	}
+	if sink.deviceSN != "fdr-direct" || sink.session != "session-direct" || sink.ack["action"] != "device_info" {
+		t.Fatalf("sink = %#v", sink)
+	}
+	if _, exists := sink.ack["topic"]; exists {
+		t.Fatalf("ACK retained transport topic: %#v", sink.ack)
+	}
+}
