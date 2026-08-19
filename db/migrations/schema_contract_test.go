@@ -81,6 +81,7 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 	}
 
 	for _, forbidden := range []string{
+		"INSERT INTO products",
 		"CREATE TABLE devices (",
 		"CREATE TABLE activations (",
 		"CREATE TABLE bindings (",

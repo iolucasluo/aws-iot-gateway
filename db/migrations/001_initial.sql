@@ -28,10 +28,6 @@ CREATE TABLE products (
     CONSTRAINT products_name_check CHECK (btrim(name) <> '')
 );
 
-INSERT INTO products (id, pid, name, status) VALUES
-    ('10000000-0000-0000-0000-000000000001', 'feeder-x1', 'Feeder X1', 'active'),
-    ('10000000-0000-0000-0000-000000000002', 'minion-cam-x1', 'Minion Cam X1', 'active');
-
 CREATE TABLE device_registry (
     id uuid CONSTRAINT device_registry_pkey PRIMARY KEY,
     device_sn varchar(64) NOT NULL CONSTRAINT device_registry_device_sn_key UNIQUE,

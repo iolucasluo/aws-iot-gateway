@@ -18,6 +18,7 @@ func TestRuntimeRepositoriesPersistCommandMediaEventAndWebhookOutbox(t *testing.
 	if err := ApplyMigrations(ctx, pool); err != nil {
 		t.Fatalf("ApplyMigrations() error = %v", err)
 	}
+	applyProductSeeds(t, ctx, pool)
 	const (
 		deviceID  = "038f0000-0000-7000-8000-000000000001"
 		bindingID = "038f0000-0000-7000-8000-000000000002"

@@ -1,6 +1,6 @@
 # Gateway database
 
-`db/` 集中存放 Gateway 的数据库资产；它不承载 Product、Project、Factory 或其他平台域。
+`db/` 集中存放 Gateway 的数据库资产；只读 `products` 激活目录是唯一产品事实，不扩展为 Product CRUD、Project、Factory 或其他平台域。
 
 | 目录 | 职责 | 执行方式 |
 |---|---|---|

@@ -20,6 +20,7 @@ func TestSquashedInitialSchemaEnforcesDatabaseConventions(t *testing.T) {
 	if err := ApplyMigrations(ctx, pool); err != nil {
 		t.Fatalf("ApplyMigrations() error = %v", err)
 	}
+	applyProductSeeds(t, ctx, pool)
 
 	_, err := pool.Exec(ctx, `
 		INSERT INTO device_registry (id, device_sn, thing_name, pid, status)
@@ -27,11 +28,11 @@ func TestSquashedInitialSchemaEnforcesDatabaseConventions(t *testing.T) {
 		        'fdr-00000000000000000000000000000001',
 		        'fdr-00000000000000000000000000000001', 'feeder-x1', 'active');
 		INSERT INTO device_activations (
-			id, internal_app_id, binding_external_user_id, method, status,
+			id, internal_app_id, binding_external_user_id, method, pid, status,
 			code_hash, idempotency_key, request_hash, device_registry_id, expires_at
 		) VALUES (
 			'018f0000-0000-7000-8000-000000000002', 'livpet-staging', 'user-1',
-			'ble', 'activated', decode(repeat('aa', 32), 'hex'), 'migration-fixture',
+			'ble', 'feeder-x1', 'activated', decode(repeat('aa', 32), 'hex'), 'migration-fixture',
 			decode(repeat('bb', 32), 'hex'), '018f0000-0000-7000-8000-000000000001',
 			now() + interval '1 hour'
 		);
@@ -235,4 +236,15 @@ func newIsolatedMigrationPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 		base.Close()
 	})
 	return pool
+}
+
+func applyProductSeeds(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	seed, err := os.ReadFile("../../../db/seeds/001_products.sql")
+	if err != nil {
+		t.Fatalf("read product seed: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(seed)); err != nil {
+		t.Fatalf("apply product seed: %v", err)
+	}
 }

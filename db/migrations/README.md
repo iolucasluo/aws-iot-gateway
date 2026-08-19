@@ -13,6 +13,7 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或�
   `gateway_schema_migrations`；`.down.sql` 永不自动执行。
 - `001_initial.sql` 必须保持 Gateway 窄域业务边界，同时继承 explorex-api 的精确表/FK/索引命名、
   `updated_at` trigger、数据库硬约束与 schema contract test 规范。
+- migration 只定义 schema，不写产品数据；dev/staging 的两条 active PID 由 `../seeds/001_products.sql` 显式初始化。
 
 ## 当前 schema 快照（17 张业务表）
 

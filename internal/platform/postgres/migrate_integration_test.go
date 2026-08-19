@@ -17,7 +17,7 @@ func TestMigrateCreatesRequiredTablesAndGlobalBindingConstraint(t *testing.T) {
 	}
 
 	for _, table := range []string{
-		"device_registry", "device_activations", "device_activation_sessions", "device_bindings", "device_tokens",
+		"products", "device_registry", "device_activations", "device_activation_sessions", "device_bindings", "device_tokens",
 		"device_commands", "device_events", "device_schedules", "device_streams", "device_snapshots", "device_recordings",
 		"webhook_outbox", "webhook_deliveries", "device_lifecycle_outbox",
 		"idempotency_records", "audit_logs",
@@ -30,6 +30,7 @@ func TestMigrateCreatesRequiredTablesAndGlobalBindingConstraint(t *testing.T) {
 			t.Fatalf("table %s does not exist", table)
 		}
 	}
+	applyProductSeeds(t, ctx, pool)
 	for _, column := range []string{"presence_online", "presence_updated_at", "last_seen_at"} {
 		var exists bool
 		if err := pool.QueryRow(ctx, `
@@ -91,5 +92,44 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	}
 	if err := ApplyMigrations(ctx, pool); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("second ApplyMigrations() error = %v", err)
+	}
+}
+
+func TestProductSeedIsExplicitAndIdempotent(t *testing.T) {
+	ctx := context.Background()
+	pool := newIsolatedMigrationPool(t, ctx)
+	if err := ApplyMigrations(ctx, pool); err != nil {
+		t.Fatalf("ApplyMigrations() error = %v", err)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM products`).Scan(&count); err != nil {
+		t.Fatalf("count products after migration: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("products after migration = %d, want 0 before explicit seed", count)
+	}
+
+	applyProductSeeds(t, ctx, pool)
+	applyProductSeeds(t, ctx, pool)
+	rows, err := pool.Query(ctx, `SELECT pid FROM products WHERE status='active' ORDER BY pid`)
+	if err != nil {
+		t.Fatalf("list seeded products: %v", err)
+	}
+	defer rows.Close()
+	var products []string
+	for rows.Next() {
+		var pid string
+		if err := rows.Scan(&pid); err != nil {
+			t.Fatalf("scan product pid: %v", err)
+		}
+		products = append(products, pid)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate product pids: %v", err)
+	}
+	want := []string{"feeder-x1", "minion-cam-x1"}
+	if len(products) != len(want) || products[0] != want[0] || products[1] != want[1] {
+		t.Fatalf("seeded products = %v, want %v", products, want)
 	}
 }

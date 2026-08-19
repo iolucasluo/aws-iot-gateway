@@ -30,6 +30,7 @@ func TestActivationRepositorySurvivesServiceRestartAndCreatesBinding(t *testing.
 	if err := ApplyMigrations(ctx, pool); err != nil {
 		t.Fatalf("ApplyMigrations() error = %v", err)
 	}
+	applyProductSeeds(t, ctx, pool)
 	repository, err := NewActivationRepository(pool)
 	if err != nil {
 		t.Fatalf("NewActivationRepository() error = %v", err)
