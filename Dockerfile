@@ -10,7 +10,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/aws-iot
 
 FROM alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
-RUN addgroup -S -g 10001 gateway && adduser -S -D -H -u 10001 -G gateway gateway
+RUN apk add --no-cache ffmpeg && \
+    addgroup -S -g 10001 gateway && adduser -S -D -H -u 10001 -G gateway gateway
 COPY --from=build /out/aws-iot-gateway /usr/local/bin/aws-iot-gateway
 COPY --from=build /out/iot-gateway-event-worker /usr/local/bin/iot-gateway-event-worker
 COPY --from=build /out/aws-iot-gateway-db-seed /usr/local/bin/aws-iot-gateway-db-seed

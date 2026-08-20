@@ -976,6 +976,8 @@ func writeMediaError(writer http.ResponseWriter, err error) {
 		writeError(writer, http.StatusNotFound, "stream_not_found", "stream was not found")
 	case errors.Is(err, media.ErrSnapshotNotFound):
 		writeError(writer, http.StatusNotFound, "snapshot_not_found", "snapshot was not found")
+	case errors.Is(err, media.ErrSnapshotProcessing):
+		writeError(writer, http.StatusServiceUnavailable, "snapshot_processing_failed", "snapshot processing failed")
 	case errors.Is(err, media.ErrRecordingNotFound):
 		writeError(writer, http.StatusNotFound, "recording_not_found", "recording was not found")
 	case errors.Is(err, media.ErrRecordingRejected):

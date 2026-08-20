@@ -14,22 +14,29 @@ import (
 )
 
 const (
-	mediaUploadTTL   = 15 * time.Minute
-	mediaDownloadTTL = 15 * time.Minute
-	maxFeedAudioSize = 1 << 20
+	mediaUploadTTL      = 15 * time.Minute
+	mediaDownloadTTL    = 15 * time.Minute
+	maxFeedAudioSize    = 1 << 20
+	maxSnapshotH264Size = 8 << 20
 )
 
 var (
-	ErrSnapshotNotFound  = errors.New("snapshot not found")
-	ErrRecordingNotFound = errors.New("recording not found")
-	ErrRecordingRejected = errors.New("recording start rejected")
+	ErrSnapshotNotFound   = errors.New("snapshot not found")
+	ErrSnapshotProcessing = errors.New("snapshot processing failed")
+	ErrRecordingNotFound  = errors.New("recording not found")
+	ErrRecordingRejected  = errors.New("recording start rejected")
 )
 
 type ObjectStore interface {
 	PutURL(context.Context, string, string, time.Duration) (string, error)
 	GetURL(context.Context, string, time.Duration) (string, error)
 	Upload(context.Context, string, string, []byte) error
+	Download(context.Context, string, int64) ([]byte, error)
 	Exists(context.Context, string) (bool, error)
+}
+
+type SnapshotConverter interface {
+	H264ToJPEG(context.Context, []byte) ([]byte, error)
 }
 
 type Snapshot struct {
@@ -64,6 +71,7 @@ type Recording struct {
 type AssetRepository interface {
 	CreateSnapshot(context.Context, Snapshot) error
 	SetSnapshotStatus(context.Context, string, string) error
+	TransitionSnapshotStatus(context.Context, string, string, string) (bool, error)
 	GetSnapshot(context.Context, string, string, string) (Snapshot, error)
 	CreateRecording(context.Context, Recording) error
 	SetRecordingStatus(context.Context, string, string) error
@@ -75,15 +83,17 @@ type AssetService struct {
 	store       ObjectStore
 	commander   Commander
 	repository  AssetRepository
+	converter   SnapshotConverter
 	environment string
 	newID       func() (string, error)
+	locks       snapshotLocks
 }
 
-func NewAssetService(store ObjectStore, commander Commander, repository AssetRepository, environment string, newID func() (string, error)) *AssetService {
+func NewAssetService(store ObjectStore, commander Commander, repository AssetRepository, environment string, converter SnapshotConverter, newID func() (string, error)) *AssetService {
 	if newID == nil {
 		newID = randomUUID
 	}
-	return &AssetService{store: store, commander: commander, repository: repository, environment: environment, newID: newID}
+	return &AssetService{store: store, commander: commander, repository: repository, converter: converter, environment: environment, newID: newID}
 }
 
 func (service *AssetService) CreateSnapshot(
@@ -117,37 +127,96 @@ func (service *AssetService) CreateSnapshot(
 		_ = service.repository.SetSnapshotStatus(ctx, id, "failed")
 		return SnapshotResult{}, err
 	}
-	status := "uploading"
-	result := SnapshotResult{SnapshotID: id, Status: status}
-	if exists, _ := service.store.Exists(ctx, key); exists {
-		status = "ready"
-		result.Status = status
-		result.URL, err = service.store.GetURL(ctx, key, mediaDownloadTTL)
-		if err != nil {
-			return SnapshotResult{}, err
-		}
-		result.ExpiresAt = time.Now().UTC().Add(mediaDownloadTTL)
-	}
-	if err := service.repository.SetSnapshotStatus(ctx, id, status); err != nil {
+	if err := service.repository.SetSnapshotStatus(ctx, id, "uploading"); err != nil {
 		return SnapshotResult{}, err
 	}
-	return result, nil
+	snapshot.Status = "uploading"
+	return service.resolveSnapshot(ctx, snapshot)
 }
 
 func (service *AssetService) GetSnapshot(ctx context.Context, bindingID, deviceSN, id string) (SnapshotResult, error) {
+	unlock := service.locks.lock(id)
+	defer unlock()
 	snapshot, err := service.repository.GetSnapshot(ctx, bindingID, deviceSN, id)
 	if err != nil {
 		return SnapshotResult{}, err
 	}
-	if exists, _ := service.store.Exists(ctx, snapshot.ObjectKey); !exists {
+	if snapshot.Status == "failed" || snapshot.Status == "expired" {
 		return SnapshotResult{SnapshotID: id, Status: snapshot.Status}, nil
 	}
-	url, err := service.store.GetURL(ctx, snapshot.ObjectKey, mediaDownloadTTL)
+	return service.resolveSnapshot(ctx, snapshot)
+}
+
+func (service *AssetService) resolveSnapshot(ctx context.Context, snapshot Snapshot) (SnapshotResult, error) {
+	result := SnapshotResult{SnapshotID: snapshot.ID, Status: snapshot.Status}
+	jpegKey, err := snapshotJPEGKey(snapshot.ObjectKey)
+	if err != nil {
+		return service.failSnapshot(ctx, snapshot, err)
+	}
+	jpegExists, err := service.store.Exists(ctx, jpegKey)
+	if err != nil {
+		return snapshotProcessingError(fmt.Errorf("check JPEG snapshot: %w", err))
+	}
+	if !jpegExists {
+		h264Exists, err := service.store.Exists(ctx, snapshot.ObjectKey)
+		if err != nil {
+			return snapshotProcessingError(fmt.Errorf("check H.264 snapshot: %w", err))
+		}
+		if !h264Exists {
+			return result, nil
+		}
+		if service.converter == nil {
+			return service.failSnapshot(ctx, snapshot, fmt.Errorf("snapshot converter is unavailable"))
+		}
+		h264, err := service.store.Download(ctx, snapshot.ObjectKey, maxSnapshotH264Size)
+		if err != nil {
+			return snapshotProcessingError(fmt.Errorf("download H.264 snapshot: %w", err))
+		}
+		jpeg, err := service.converter.H264ToJPEG(ctx, h264)
+		if err != nil {
+			return snapshotProcessingError(err)
+		}
+		if err := service.store.Upload(ctx, jpegKey, "image/jpeg", jpeg); err != nil {
+			return snapshotProcessingError(fmt.Errorf("upload JPEG snapshot: %w", err))
+		}
+	}
+	url, err := service.store.GetURL(ctx, jpegKey, mediaDownloadTTL)
+	if err != nil {
+		return snapshotProcessingError(fmt.Errorf("presign JPEG snapshot download: %w", err))
+	}
+	transitioned, err := service.repository.TransitionSnapshotStatus(ctx, snapshot.ID, "uploading", "ready")
 	if err != nil {
 		return SnapshotResult{}, err
 	}
-	_ = service.repository.SetSnapshotStatus(ctx, id, "ready")
-	return SnapshotResult{SnapshotID: id, Status: "ready", URL: url, ExpiresAt: time.Now().UTC().Add(mediaDownloadTTL)}, nil
+	if !transitioned && snapshot.Status != "ready" {
+		current, err := service.repository.GetSnapshot(ctx, snapshot.BindingID, snapshot.DeviceSN, snapshot.ID)
+		if err != nil {
+			return SnapshotResult{}, err
+		}
+		if current.Status != "ready" {
+			return SnapshotResult{SnapshotID: snapshot.ID, Status: current.Status}, nil
+		}
+	}
+	return SnapshotResult{
+		SnapshotID: snapshot.ID, Status: "ready", URL: url,
+		ExpiresAt: time.Now().UTC().Add(mediaDownloadTTL),
+	}, nil
+}
+
+func (service *AssetService) failSnapshot(ctx context.Context, snapshot Snapshot, cause error) (SnapshotResult, error) {
+	_, _ = service.repository.TransitionSnapshotStatus(ctx, snapshot.ID, "uploading", "failed")
+	return snapshotProcessingError(cause)
+}
+
+func snapshotProcessingError(cause error) (SnapshotResult, error) {
+	return SnapshotResult{}, fmt.Errorf("%w: %w", ErrSnapshotProcessing, cause)
+}
+
+func snapshotJPEGKey(h264Key string) (string, error) {
+	if !strings.HasSuffix(h264Key, ".h264") {
+		return "", fmt.Errorf("snapshot object key is invalid")
+	}
+	return strings.TrimSuffix(h264Key, ".h264") + ".jpg", nil
 }
 
 func (service *AssetService) CreateRecording(

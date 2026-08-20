@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 
+# The contract tests must validate missing confirmations even when invoked by an
+# authorized parent deploy process.
+unset CONFIRM_AWS_STAGING_DEPLOY CONFIRM_AWS_STAGING_SEED
+
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 DEPLOY="$ROOT/deploy/staging/deploy.sh"
 

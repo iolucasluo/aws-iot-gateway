@@ -70,6 +70,14 @@ func TestRuntimeRepositoriesPersistCommandMediaEventAndWebhookOutbox(t *testing.
 	if _, err := mediaRepository.GetSnapshot(ctx, bindingID, deviceSN, snapshotID); err != nil {
 		t.Fatalf("GetSnapshot(): %v", err)
 	}
+	transitioned, err := mediaRepository.TransitionSnapshotStatus(ctx, snapshotID, "uploading", "ready")
+	if err != nil || !transitioned {
+		t.Fatalf("TransitionSnapshotStatus(uploading -> ready) = %v, %v", transitioned, err)
+	}
+	transitioned, err = mediaRepository.TransitionSnapshotStatus(ctx, snapshotID, "uploading", "failed")
+	if err != nil || transitioned {
+		t.Fatalf("TransitionSnapshotStatus must not overwrite ready: %v, %v", transitioned, err)
+	}
 
 	eventRepository, _ := NewEventRepository(pool)
 	statusAt := time.Date(2026, 8, 14, 10, 0, 0, 0, time.UTC)
