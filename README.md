@@ -1,8 +1,8 @@
 # aws-iot-gateway
 
-`aws-iot-gateway` 是 LivPet 和内部 Demo App 共用的 **Internal AWS API**。它拥有用户激活、全局唯一绑定、设备运行身份和受限设备操作；不实现 Developer、Project、Product、Factory、tenant、IDevID、RMA 或平台 OTA。
+`aws-iot-gateway` 是 LivPet 和内部 Demo App 共用的 **Internal AWS API**。它拥有用户激活、全局唯一绑定、设备运行身份和受限设备操作；`products` 仅作为受控的只读激活目录，不实现 Developer、Project、Product CRUD/owner、Factory、tenant、IDevID、RMA 或平台 OTA。
 
-`/api/v1/openapi/*` 中的 `openapi` 只是 LivPet wire compatibility，产品和代码语义均使用 internal app。固定 PID 是 `feeder-x1`。
+`/api/v1/openapi/*` 中的 `openapi` 只是 LivPet wire compatibility，产品和代码语义均使用 internal app。App 必须先读取受控产品目录并在创建 activation 时显式提交 active PID；Gateway 不再默认 `feeder-x1`。
 
 ## 认证与隔离
 
@@ -40,6 +40,7 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 | --- | --- | --- |
 | `GET /healthz` | 运行检查 | 无 |
 | `POST /api/v1/device-time/bootstrap` | 无可信 RTC 的设备 | 公共窄路由；COSE 验签后可信 |
+| `GET /api/v1/openapi/device-products` | 内部 App backend | HMAC v1；只读 active 产品目录 |
 | `POST /api/v1/openapi/device-activations` | 内部 App backend | HMAC v1 |
 | `GET /api/v1/openapi/device-activations/{id}` | 内部 App backend | HMAC v1 |
 | `POST /api/v1/openapi/device-activations/{id}/sessions` | LivPet commissioning 兼容路径 | HMAC v1 |
@@ -55,6 +56,15 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 | `POST /api/v1/device-activations/confirm-installation` | 设备 | activation code + operational-key proof |
 
 设备子路由覆盖 detail、shadow、commands、schedules、events、streams、snapshots、recordings 和 feed-audio。Bearer `/v1/activations`、`/v1/devices` 和旧 `/v1/device-activations/{id}/*` 已从 router 删除。完整目标路由和阶段验收快照见根仓 `docs/branches/.archived/wicgeechan/2026-08-17/2026-08-13-internal-aws-api-implementation-plan.md`；当前未完成项见 `docs/branches/iot-flash-develop-internal-aws-follow-ups.md`。
+
+设备冷启动的公开 Contract → signed-time → 严格 TLS 接入闭环，以及登记、activation、binding、reset、MQTT
+事件与媒体的代码反向工程流程图见 [`docs/flows/目录说明.md`](docs/flows/目录说明.md)。每个场景单独成篇；
+它们不恢复旧 IoT 平台的 Project、IDevID、Factory、RMA 或 OTA 语义。
+
+`GET /api/v1/openapi/devices/{device_sn}/shadow` 不向 App 暴露 AWS Shadow envelope、metadata、
+version 或 timestamp；Gateway 只返回已校验的 `state.reported` 设备投影。投影至少包含非空
+`sn`、非空 `pid` 和 JSON boolean `online`，缺失或类型错误时 fail closed 为
+`503 device_service_unavailable`。Wi-Fi MAC 字段固定为 `wifi_mac`。
 
 `recommission` 只接受 `reset_scope=runtime|all`：默认 `runtime` 仅清理 Wi-Fi 与运行身份，`all`
 还清理设备本地用户数据。两种 scope 都必须先取得设备 ACK，Gateway 才撤销 token、释放 binding
@@ -110,21 +120,39 @@ Internal App 配置，AWS access key 仍走 standard credential chain，不写�
 本地开发优先复用 `127.0.0.1:5432/6379` 上已有的 PostgreSQL/Redis 进程，但必须使用独立的
 `aws_iot_gateway` 数据库和 Redis DB index（示例为 `/1`）。根工作区 `local-dev` skill 只探测、
 不启停用户已有的进程；端口为空时才使用 `deploy/local/compose.yaml` 启动 fallback 依赖。
-直接使用 fallback 时可运行：
+从根工作区运行 `docs/coding-rules/skills/local-dev/scripts/dev.sh up --env cwj` 时，会先同步执行显式
+seed runner，成功后才以前台生命周期启动 API。等价的手工 fallback 流程是：
 
 ```sh
 docker compose --env-file .env.cwj -f deploy/local/compose.yaml up -d --wait
 set -a
 . ./.env.cwj
 set +a
+go run ./cmd/aws-iot-gateway-db-seed
 go run ./cmd/aws-iot-gateway
 ```
 
+`aws-iot-gateway-db-seed` 是 development/staging 的显式一次性初始化命令：它先幂等执行 migration，再事务执行
+`db/seeds/`，当前写入 `feeder-x1` 和 `minion-cam-x1`。API/worker 启动不会自动 seed；漏掉该步骤时产品目录为空、
+activation 必然返回 `product_unavailable`。该命令拒绝空环境和 `production`。详细边界见
+[db/seeds/README.md](db/seeds/README.md)，staging 一次性 ECS 执行方式见
+[deploy/staging/README.md](deploy/staging/README.md)。
+
+需要让真实 Taixin/Anyka 硬件访问 Gateway 时，不要在各硬件仓手写 endpoint、CA 或 time SPKI。共享
+`development`（local/LAN）与 `staging` 环境的公开 `Gateway Device Bootstrap Contract` 发布位置分别是
+`deploy/device-bootstrap/contracts/development/` 与
+`deploy/device-bootstrap/contracts/staging/`；硬件构建只复制存在且经审核的目录。Gateway owner 从本地 signer 或已部署 CloudFormation/KMS 的**公开** Outputs 生成候选
+目录，再人工审核、替换并提交环境 Contract；Dell 和硬件仓不需要 AWS authority。命令、环境变量、轮换和回滚见
+[deploy/device-bootstrap/README.md](deploy/device-bootstrap/README.md)，格式和消费者校验规则见
+[docs/contracts/device-service-bootstrap-v1.md](docs/contracts/device-service-bootstrap-v1.md)。
+
 本地真机命令使用 `wait_ack=true` 时，可在 `development` 环境显式设置
 `AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED=true`。API 将通过当前 AWS 标准凭据链使用 MQTT over
-WebSocket 订阅 `cmd/<AWS_IOT_TOPIC_PREFIX>/+/res`，并把 ACK 写入本机 Redis；该模式不读取共享
-staging SQS，也不会替代 staging 的 IoT Rule/event-worker。`staging` 和 `production` 环境启用此开关
-会启动失败。运行身份需要目标 topic 的 `iot:Connect`、`iot:Subscribe` 和 `iot:Receive` 权限。
+WebSocket 订阅 `cmd/<AWS_IOT_TOPIC_PREFIX>/+/res`、`dt/<AWS_IOT_TOPIC_PREFIX>/+/status` 和
+`dt/<AWS_IOT_TOPIC_PREFIX>/+/lwt`：ACK 写入本机 Redis，status/LWT 使用 Gateway 接收时间更新本地
+PostgreSQL presence。该模式不读取共享 staging SQS，也不会替代 staging 的 IoT Rule/event-worker；
+设备 payload 中自带的接收时间不会参与 presence 排序。`staging` 和 `production` 环境启用此开关
+会启动失败。运行身份需要上述 topic 的 `iot:Connect`、`iot:Subscribe` 和 `iot:Receive` 权限。
 
 测试：
 

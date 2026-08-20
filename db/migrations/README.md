@@ -1,7 +1,8 @@
 # aws-iot-gateway PostgreSQL migrations
 
 本目录是 Gateway schema 的唯一权威源。这里只保留用户 activation、全局设备绑定、运行身份、设备控制、
-事件、媒体和 outbox；没有 Developer、Project、Product、Factory、IDevID、RMA、tenant 或平台 OTA 表。
+事件、媒体和 outbox。`products` 是 Gateway schema 自有的只读激活目录，不是旧 IoT 平台的 Product 域；没有
+Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或平台 OTA 表。
 
 ## 文件与执行约定
 
@@ -12,11 +13,16 @@
   `gateway_schema_migrations`；`.down.sql` 永不自动执行。
 - `001_initial.sql` 必须保持 Gateway 窄域业务边界，同时继承 explorex-api 的精确表/FK/索引命名、
   `updated_at` trigger、数据库硬约束与 schema contract test 规范。
+- migration 通常只定义 schema，不写产品数据；development/staging 的两条 active PID 由
+  `aws-iot-gateway-db-seed` 显式执行 `../seeds/001_products.sql` 初始化。唯一例外是 `002` 在识别到旧版
+  pre-production `001_initial.sql` 时回填其历史上唯一合法的 `feeder-x1`，以便在不删除旧 activation/registry
+  数据的前提下建立 PID 外键；fresh schema 不执行该数据回填。
 
-## 当前 schema 快照（16 张业务表）
+## 当前 schema 快照（17 张业务表）
 
 | 表 | 用途 | PK | 主要 FK / 删除语义 |
 |---|---|---|---|
+| `products` | 只读激活产品目录（PID、名称、active/disabled） | `id` | 被 registry/activation 以 PID RESTRICT 引用 |
 | `device_registry` | 设备运行权威记录、ThingName、证书与 presence | `id` | — |
 | `device_activations` | internal app 用户激活 saga | `id` | `device_registry_id → device_registry`（nullable, RESTRICT） |
 | `device_activation_sessions` | activation 安装 session | `id` | `device_activation_id → device_activations`（CASCADE） |
@@ -43,3 +49,6 @@
 - `001_initial`：原 `001-004` 的 pre-production squash。包含窄域 Internal AWS API、设备 MQTT
   heartbeat/LWT presence、运行证书撤销补偿 outbox、精确表/FK/索引命名、统一 `set_updated_at()`
   trigger，以及 `device_bindings.binding_external_user_id` 的 23514 不可变 trigger。
+- `002_legacy_product_catalog`：只对已登记旧版 `001_initial.sql` 且缺少 `device_activations.pid` 的 schema
+  生效；创建最小产品目录、回填旧 activation PID、移除 registry 的隐式默认 PID，并建立 registry/activation
+  到 `products(pid)` 的 RESTRICT 外键。fresh schema 为 no-op；为避免丢失历史数据，不提供自动 down。

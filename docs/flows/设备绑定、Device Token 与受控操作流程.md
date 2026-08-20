@@ -121,5 +121,5 @@ sequenceDiagram
 | 所有设备路由的统一准入 | `internal/httpapi/server.go`：`serveDeviceOperation` |
 | 指令与 ACK | `internal/modules/device/service.go` |
 | WebRTC capability negotiation | `internal/modules/media/stream.go` |
-| binding/token schema 约束 | `migrations/sql/001_initial.sql`、`migrations/schema_contract_test.go` |
+| binding/token schema 约束 | `db/migrations/001_initial.sql`、`db/migrations/schema_contract_test.go` |
 | 回归测试 | `go test -race -count=1 ./internal/internalauth ./internal/httpapi ./internal/modules/binding ./internal/modules/device ./internal/modules/media` |

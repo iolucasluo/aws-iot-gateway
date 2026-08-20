@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"math/big"
 	"os"
@@ -14,6 +15,34 @@ import (
 	"time"
 )
 
+func TestWritePublishesProviderNeutralServiceContract(t *testing.T) {
+	t.Parallel()
+
+	directory := filepath.Join(t.TempDir(), "device-service-bootstrap-contract")
+	if _, err := Write(directory, Input{
+		Environment:      "development",
+		ServiceBaseURL:   "http://192.168.1.20:14080",
+		TimeBootstrapURL: "http://192.168.1.20:14080/api/v1/device-time/bootstrap",
+		SignerBackend:    "local",
+		Keys:             []KeyInput{{Kid: "time-local-test-g1", SPKIDER: testP256SPKI(t)}},
+	}); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	var contract map[string]any
+	if err := json.Unmarshal(mustReadFile(t, filepath.Join(directory, "contract.json")), &contract); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if contract["kind"] != "device-service-bootstrap" {
+		t.Fatalf("kind = %v, want device-service-bootstrap", contract["kind"])
+	}
+	if _, ok := contract["service"]; !ok {
+		t.Fatal("provider-neutral service field is missing")
+	}
+	if _, ok := contract["gateway"]; ok {
+		t.Fatal("provider-specific gateway field must not be published")
+	}
+}
+
 func TestWriteAndLoadDevelopmentContractWithLocalP256Key(t *testing.T) {
 	t.Parallel()
 
@@ -21,7 +50,7 @@ func TestWriteAndLoadDevelopmentContractWithLocalP256Key(t *testing.T) {
 	spki := testP256SPKI(t)
 	written, err := Write(directory, Input{
 		Environment:      "development",
-		GatewayBaseURL:   "http://192.168.1.20:14080",
+		ServiceBaseURL:   "http://192.168.1.20:14080",
 		TimeBootstrapURL: "http://192.168.1.20:14080/api/v1/device-time/bootstrap",
 		SignerBackend:    "local",
 		Keys:             []KeyInput{{Kid: "time-local-test-g1", SPKIDER: spki}},
@@ -29,7 +58,7 @@ func TestWriteAndLoadDevelopmentContractWithLocalP256Key(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
-	if written.Gateway.CAPEMFile != "" || len(written.TimeBootstrap.Keys) != 1 {
+	if written.Service.CAPEMFile != "" || len(written.TimeBootstrap.Keys) != 1 {
 		t.Fatalf("Write() contract = %#v", written)
 	}
 	if _, err := os.Stat(filepath.Join(directory, "contract.json")); err != nil {
@@ -54,15 +83,15 @@ func TestWriteRejectsReleaseHTTPAndMismatchedP256Input(t *testing.T) {
 	for name, input := range map[string]Input{
 		"release HTTP": {
 			Environment:      "staging",
-			GatewayBaseURL:   "http://gateway.staging.example.test",
+			ServiceBaseURL:   "http://gateway.staging.example.test",
 			TimeBootstrapURL: "http://time.staging.example.test/api/v1/device-time/bootstrap",
 			SignerBackend:    "aws-kms",
-			GatewayCAPEM:     []byte("-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n"),
+			ServiceCAPEM:     []byte("-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n"),
 			Keys:             []KeyInput{{Kid: "time-staging-g1", SPKIDER: spki}},
 		},
 		"bad SPKI": {
 			Environment:      "development",
-			GatewayBaseURL:   "http://192.168.1.20:14080",
+			ServiceBaseURL:   "http://192.168.1.20:14080",
 			TimeBootstrapURL: "http://192.168.1.20:14080/api/v1/device-time/bootstrap",
 			SignerBackend:    "local",
 			Keys:             []KeyInput{{Kid: "time-local-test-g1", SPKIDER: []byte("not a public key")}},
@@ -82,7 +111,7 @@ func TestLoadRejectsTrailingContractJSON(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "device-bootstrap-contract")
 	if _, err := Write(directory, Input{
 		Environment:      "development",
-		GatewayBaseURL:   "http://192.168.1.20:14080",
+		ServiceBaseURL:   "http://192.168.1.20:14080",
 		TimeBootstrapURL: "http://192.168.1.20:14080/api/v1/device-time/bootstrap",
 		SignerBackend:    "local",
 		Keys:             []KeyInput{{Kid: "time-local-test-g1", SPKIDER: testP256SPKI(t)}},
@@ -110,7 +139,7 @@ func TestLoadRejectsSymlinkedContractDirectoryComponent(t *testing.T) {
 	spki := testP256SPKI(t)
 	if _, err := Write(directory, Input{
 		Environment:      "development",
-		GatewayBaseURL:   "http://192.168.1.20:14080",
+		ServiceBaseURL:   "http://192.168.1.20:14080",
 		TimeBootstrapURL: "http://192.168.1.20:14080/api/v1/device-time/bootstrap",
 		SignerBackend:    "local",
 		Keys:             []KeyInput{{Kid: "time-local-test-g1", SPKIDER: spki}},
@@ -141,8 +170,7 @@ func TestInputFromAWSReleaseBindsStackOutputsToTheKMSPublicKey(t *testing.T) {
 
 	input, err := InputFromAWSRelease(ReleaseSource{
 		Environment:  "staging",
-		StackName:    "aws-iot-gateway-staging",
-		GatewayCAPEM: testCertificatePEM(t),
+		ServiceCAPEM: testCertificatePEM(t),
 		Outputs: map[string]string{
 			"APIBaseURL":          "https://gateway.staging.example.test",
 			"TimeBootstrapURL":    "http://time.staging.example.test/api/v1/device-time/bootstrap",
@@ -154,8 +182,7 @@ func TestInputFromAWSReleaseBindsStackOutputsToTheKMSPublicKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InputFromAWSRelease() error = %v", err)
 	}
-	if input.SignerBackend != "aws-kms" || input.Keys[0].Kid != "time-staging-g1" ||
-		input.SourceStack != "aws-iot-gateway-staging" || input.KMSKeyARN == "" {
+	if input.SignerBackend != "aws-kms" || input.Keys[0].Kid != "time-staging-g1" {
 		t.Fatalf("InputFromAWSRelease() = %#v", input)
 	}
 }
@@ -165,8 +192,7 @@ func TestInputFromAWSReleaseRejectsMissingKeyProvenance(t *testing.T) {
 
 	_, err := InputFromAWSRelease(ReleaseSource{
 		Environment:  "production",
-		StackName:    "aws-iot-gateway-production",
-		GatewayCAPEM: testCertificatePEM(t),
+		ServiceCAPEM: testCertificatePEM(t),
 		Outputs: map[string]string{
 			"APIBaseURL":         "https://gateway.production.example.test",
 			"TimeBootstrapURL":   "http://time.production.example.test/api/v1/device-time/bootstrap",

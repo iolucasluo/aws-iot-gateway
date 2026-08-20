@@ -25,7 +25,7 @@ func TestRunLocalWritesDevelopmentContractFromOwnerOnlyPrivateKey(t *testing.T) 
 	err := run(context.Background(), []string{
 		"local",
 		"--out", output,
-		"--gateway-url", "http://192.168.1.20:14080",
+		"--service-url", "http://192.168.1.20:14080",
 		"--time-bootstrap-url", "http://192.168.1.20:14080/api/v1/device-time/bootstrap",
 		"--key-id", "time-local-test-g1",
 		"--private-key", privateKeyPath,
@@ -37,7 +37,7 @@ func TestRunLocalWritesDevelopmentContractFromOwnerOnlyPrivateKey(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if contract.Environment != "development" || contract.Provenance.SignerBackend != "local" ||
+	if contract.Environment != "development" ||
 		contract.TimeBootstrap.Keys[0].Kid != "time-local-test-g1" {
 		t.Fatalf("contract = %#v", contract)
 	}
@@ -55,7 +55,7 @@ func TestRunLocalCanPublishCurrentAndNextTimeBootstrapKeys(t *testing.T) {
 	err := run(context.Background(), []string{
 		"local",
 		"--out", output,
-		"--gateway-url", "http://192.168.1.20:14080",
+		"--service-url", "http://192.168.1.20:14080",
 		"--time-bootstrap-url", "http://192.168.1.20:14080/api/v1/device-time/bootstrap",
 		"--key-id", "time-local-test-g1",
 		"--private-key", privateKeyPath,
@@ -83,7 +83,7 @@ func TestRunAWSReleaseRequiresACompleteRotationKeyPairBeforeAWSAccess(t *testing
 		"--environment", "staging",
 		"--stack", "aws-iot-gateway-staging",
 		"--region", "ap-east-1",
-		"--gateway-ca", filepath.Join(t.TempDir(), "gateway-ca.pem"),
+		"--service-ca", filepath.Join(t.TempDir(), "service-ca.pem"),
 		"--next-key-id", "time-staging-g2",
 	})
 	if err == nil || !strings.Contains(err.Error(), "both --next-key-id and --next-kms-key-id") {

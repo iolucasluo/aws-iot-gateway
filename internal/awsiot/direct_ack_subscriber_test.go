@@ -17,6 +17,24 @@ func TestDirectACKTopicUsesExactNamespace(t *testing.T) {
 	}
 }
 
+func TestDirectIngestTopicsIncludeACKStatusAndLWT(t *testing.T) {
+	t.Parallel()
+	want := []string{
+		"cmd/aws-iot-gateway-staging/+/res",
+		"dt/aws-iot-gateway-staging/+/status",
+		"dt/aws-iot-gateway-staging/+/lwt",
+	}
+	got := directIngestTopics("aws-iot-gateway-staging")
+	if len(got) != len(want) {
+		t.Fatalf("directIngestTopics() = %#v", got)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("directIngestTopics()[%d] = %q, want %q", index, got[index], want[index])
+		}
+	}
+}
+
 func TestDirectACKTopicPrefixMustBeOneMQTTSegment(t *testing.T) {
 	t.Parallel()
 	for _, prefix := range []string{"", "nested/prefix", "prefix/+", "prefix/#", " leading", "trailing "} {
@@ -29,6 +47,48 @@ func TestDirectACKTopicPrefixMustBeOneMQTTSegment(t *testing.T) {
 			t.Fatalf("validDirectACKTopicPrefix(%q) = false", prefix)
 		}
 	}
+}
+
+func TestPresignIoTWebSocketURLAppendsTemporarySessionTokenAfterSigning(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 20, 3, 45, 0, 0, time.UTC)
+	base := aws.Credentials{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "secret-example"}
+	permanentURL, err := presignIoTWebSocketURL(
+		context.Background(), "example-ats.iot.ap-east-1.amazonaws.com", "ap-east-1", base, now,
+	)
+	if err != nil {
+		t.Fatalf("presign permanent credentials: %v", err)
+	}
+	temporary := base
+	temporary.SessionToken = "temporary/session+token="
+	temporaryURL, err := presignIoTWebSocketURL(
+		context.Background(), "example-ats.iot.ap-east-1.amazonaws.com", "ap-east-1", temporary, now,
+	)
+	if err != nil {
+		t.Fatalf("presign temporary credentials: %v", err)
+	}
+	permanentQuery, err := parseWebSocketQuery(permanentURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporaryQuery, err := parseWebSocketQuery(temporaryURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := temporaryQuery.Get("X-Amz-Security-Token"); got != temporary.SessionToken {
+		t.Fatalf("X-Amz-Security-Token = %q", got)
+	}
+	if temporaryQuery.Get("X-Amz-Signature") != permanentQuery.Get("X-Amz-Signature") {
+		t.Fatal("temporary session token was included in the IoT WebSocket signature")
+	}
+}
+
+func parseWebSocketQuery(rawURL string) (url.Values, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	return parsed.Query(), nil
 }
 
 func TestPresignIoTWebSocketURL(t *testing.T) {

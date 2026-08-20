@@ -15,6 +15,7 @@ func TestBindingRepositoryRevokesAccessAndQueuesCertificateCleanup(t *testing.T)
 	if err := ApplyMigrations(ctx, pool); err != nil {
 		t.Fatalf("ApplyMigrations() error = %v", err)
 	}
+	applyProductSeeds(t, ctx, pool)
 
 	const (
 		deviceID  = "028f0000-0000-7000-8000-000000000001"

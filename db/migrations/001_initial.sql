@@ -16,12 +16,24 @@ $$;
 COMMENT ON FUNCTION set_updated_at() IS
     '统一维护 Gateway 可变业务表 updated_at；调用方不得依赖手工更新时间戳。';
 
+CREATE TABLE products (
+    id uuid CONSTRAINT products_pkey PRIMARY KEY,
+    pid varchar(64) NOT NULL CONSTRAINT products_pid_key UNIQUE,
+    name varchar(128) NOT NULL,
+    status varchar(16) NOT NULL DEFAULT 'active'
+        CONSTRAINT products_status_check CHECK (status IN ('active', 'disabled')),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT products_pid_check CHECK (btrim(pid) <> ''),
+    CONSTRAINT products_name_check CHECK (btrim(name) <> '')
+);
+
 CREATE TABLE device_registry (
     id uuid CONSTRAINT device_registry_pkey PRIMARY KEY,
     device_sn varchar(64) NOT NULL CONSTRAINT device_registry_device_sn_key UNIQUE,
     thing_name varchar(128) NOT NULL CONSTRAINT device_registry_thing_name_key UNIQUE,
-    pid varchar(64) NOT NULL DEFAULT 'feeder-x1'
-        CONSTRAINT device_registry_pid_check CHECK (pid = 'feeder-x1'),
+    pid varchar(64) NOT NULL
+        CONSTRAINT device_registry_pid_check CHECK (btrim(pid) <> ''),
     certificate_id varchar(128),
     certificate_arn text,
     aws_iot_endpoint text,
@@ -33,7 +45,8 @@ CREATE TABLE device_registry (
     last_seen_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT device_registry_thing_name_check CHECK (thing_name = device_sn)
+    CONSTRAINT device_registry_thing_name_check CHECK (thing_name = device_sn),
+    CONSTRAINT device_registry_pid_fkey FOREIGN KEY (pid) REFERENCES products(pid) ON DELETE RESTRICT
 );
 
 CREATE TABLE device_activations (
@@ -42,6 +55,8 @@ CREATE TABLE device_activations (
     binding_external_user_id varchar(255) NOT NULL,
     method varchar(8) NOT NULL
         CONSTRAINT device_activations_method_check CHECK (method IN ('qr', 'ap', 'ble')),
+    pid varchar(64) NOT NULL
+        CONSTRAINT device_activations_pid_check CHECK (btrim(pid) <> ''),
     status varchar(24) NOT NULL
         CONSTRAINT device_activations_status_check CHECK (status IN (
             'pending', 'activating', 'installing', 'finalizing',
@@ -59,7 +74,8 @@ CREATE TABLE device_activations (
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT device_activations_internal_app_id_idempotency_key_key
-        UNIQUE (internal_app_id, idempotency_key)
+        UNIQUE (internal_app_id, idempotency_key),
+    CONSTRAINT device_activations_pid_fkey FOREIGN KEY (pid) REFERENCES products(pid) ON DELETE RESTRICT
 );
 
 CREATE INDEX idx_device_activations_owner_status
@@ -361,6 +377,9 @@ COMMENT ON TRIGGER trg_enforce_device_binding_user_invariant ON device_bindings 
 
 CREATE TRIGGER trg_device_registry_updated_at
     BEFORE UPDATE ON device_registry
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_products_updated_at
+    BEFORE UPDATE ON products
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_device_activations_updated_at
     BEFORE UPDATE ON device_activations

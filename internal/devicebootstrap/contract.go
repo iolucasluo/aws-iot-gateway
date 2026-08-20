@@ -1,4 +1,4 @@
-// Package devicebootstrap owns the public device bootstrap release contract.
+// Package devicebootstrap owns the provider-neutral device service bootstrap contract.
 package devicebootstrap
 
 import (
@@ -28,12 +28,10 @@ var keyIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 type Input struct {
 	Environment      string
-	GatewayBaseURL   string
-	GatewayCAPEM     []byte
+	ServiceBaseURL   string
+	ServiceCAPEM     []byte
 	TimeBootstrapURL string
 	SignerBackend    string
-	SourceStack      string
-	KMSKeyARN        string
 	Keys             []KeyInput
 }
 
@@ -46,12 +44,11 @@ type Contract struct {
 	SchemaVersion int           `json:"schema_version"`
 	Kind          string        `json:"kind"`
 	Environment   string        `json:"environment"`
-	Gateway       Gateway       `json:"gateway"`
+	Service       Service       `json:"service"`
 	TimeBootstrap TimeBootstrap `json:"time_bootstrap"`
-	Provenance    Provenance    `json:"provenance"`
 }
 
-type Gateway struct {
+type Service struct {
 	BaseURL     string `json:"base_url"`
 	CAPEMFile   string `json:"ca_pem_file,omitempty"`
 	CAPEMSHA256 string `json:"ca_pem_sha256,omitempty"`
@@ -68,16 +65,9 @@ type Key struct {
 	SHA256      string `json:"sha256"`
 }
 
-type Provenance struct {
-	SignerBackend string `json:"signer_backend"`
-	SourceStack   string `json:"source_stack,omitempty"`
-	KMSKeyARN     string `json:"kms_key_arn,omitempty"`
-}
-
 type ReleaseSource struct {
 	Environment   string
-	StackName     string
-	GatewayCAPEM  []byte
+	ServiceCAPEM  []byte
 	Outputs       map[string]string
 	ActiveSPKIDER []byte
 }
@@ -104,18 +94,15 @@ func InputFromAWSRelease(source ReleaseSource) (Input, error) {
 	if err != nil {
 		return Input{}, err
 	}
-	keyARN, err := value("TimeBootstrapKeyArn")
-	if err != nil {
+	if _, err := value("TimeBootstrapKeyArn"); err != nil {
 		return Input{}, err
 	}
 	input := Input{
 		Environment:      strings.TrimSpace(source.Environment),
-		GatewayBaseURL:   gatewayURL,
-		GatewayCAPEM:     source.GatewayCAPEM,
+		ServiceBaseURL:   gatewayURL,
+		ServiceCAPEM:     source.ServiceCAPEM,
 		TimeBootstrapURL: timeBootstrapURL,
 		SignerBackend:    "aws-kms",
-		SourceStack:      strings.TrimSpace(source.StackName),
-		KMSKeyARN:        keyARN,
 		Keys:             []KeyInput{{Kid: keyID, SPKIDER: source.ActiveSPKIDER}},
 	}
 	if _, err := build(input); err != nil {
@@ -170,21 +157,22 @@ func Load(directory string) (Contract, error) {
 	}
 	input := Input{
 		Environment:      contract.Environment,
-		GatewayBaseURL:   contract.Gateway.BaseURL,
+		ServiceBaseURL:   contract.Service.BaseURL,
 		TimeBootstrapURL: contract.TimeBootstrap.URL,
-		SignerBackend:    contract.Provenance.SignerBackend,
-		SourceStack:      contract.Provenance.SourceStack,
-		KMSKeyARN:        contract.Provenance.KMSKeyARN,
+		SignerBackend:    "aws-kms",
 	}
-	if contract.Gateway.CAPEMFile != "" {
-		ca, err := readRegularFile(directory, contract.Gateway.CAPEMFile)
+	if contract.Environment == "development" {
+		input.SignerBackend = "local"
+	}
+	if contract.Service.CAPEMFile != "" {
+		ca, err := readRegularFile(directory, contract.Service.CAPEMFile)
 		if err != nil {
 			return Contract{}, err
 		}
-		if sha256Hex(ca) != contract.Gateway.CAPEMSHA256 {
-			return Contract{}, fmt.Errorf("Gateway CA SHA-256 does not match contract")
+		if sha256Hex(ca) != contract.Service.CAPEMSHA256 {
+			return Contract{}, fmt.Errorf("service CA SHA-256 does not match contract")
 		}
-		input.GatewayCAPEM = ca
+		input.ServiceCAPEM = ca
 	}
 	for _, key := range contract.TimeBootstrap.Keys {
 		spki, err := readRegularFile(directory, key.SPKIDERFile)
@@ -210,11 +198,9 @@ func Load(directory string) (Contract, error) {
 
 func build(input Input) (Contract, error) {
 	input.Environment = strings.TrimSpace(input.Environment)
-	input.GatewayBaseURL = strings.TrimSpace(input.GatewayBaseURL)
+	input.ServiceBaseURL = strings.TrimSpace(input.ServiceBaseURL)
 	input.TimeBootstrapURL = strings.TrimSpace(input.TimeBootstrapURL)
 	input.SignerBackend = strings.TrimSpace(input.SignerBackend)
-	input.SourceStack = strings.TrimSpace(input.SourceStack)
-	input.KMSKeyARN = strings.TrimSpace(input.KMSKeyARN)
 	if input.Environment != "development" && input.Environment != "staging" && input.Environment != "production" {
 		return Contract{}, fmt.Errorf("contract environment must be development, staging, or production")
 	}
@@ -227,25 +213,19 @@ func build(input Input) (Contract, error) {
 	if input.SignerBackend != "local" && input.SignerBackend != "aws-kms" {
 		return Contract{}, fmt.Errorf("contract signer backend must be local or aws-kms")
 	}
-	if input.SignerBackend == "local" && (input.SourceStack != "" || input.KMSKeyARN != "") {
-		return Contract{}, fmt.Errorf("local contract must not include AWS signer provenance")
-	}
-	if input.SignerBackend == "aws-kms" && (input.SourceStack == "" || input.KMSKeyARN == "") {
-		return Contract{}, fmt.Errorf("aws-kms contract requires source stack and KMS key ARN provenance")
-	}
-	gatewayURL, err := parseGatewayURL(input.GatewayBaseURL)
+	serviceURL, err := parseServiceURL(input.ServiceBaseURL)
 	if err != nil {
 		return Contract{}, err
 	}
-	if input.Environment != "development" && gatewayURL.Scheme != "https" {
-		return Contract{}, fmt.Errorf("staging and production Gateway URLs must use HTTPS")
+	if input.Environment != "development" && serviceURL.Scheme != "https" {
+		return Contract{}, fmt.Errorf("staging and production service URLs must use HTTPS")
 	}
-	if gatewayURL.Scheme == "https" {
-		if err := validatePEMCertificates(input.GatewayCAPEM); err != nil {
-			return Contract{}, fmt.Errorf("Gateway CA: %w", err)
+	if serviceURL.Scheme == "https" {
+		if err := validatePEMCertificates(input.ServiceCAPEM); err != nil {
+			return Contract{}, fmt.Errorf("service CA: %w", err)
 		}
-	} else if len(input.GatewayCAPEM) != 0 {
-		return Contract{}, fmt.Errorf("HTTP Gateway contract must not include a CA")
+	} else if len(input.ServiceCAPEM) != 0 {
+		return Contract{}, fmt.Errorf("HTTP service contract must not include a CA")
 	}
 	if err := validateTimeBootstrapURL(input.TimeBootstrapURL); err != nil {
 		return Contract{}, err
@@ -255,19 +235,14 @@ func build(input Input) (Contract, error) {
 	}
 	contract := Contract{
 		SchemaVersion: SchemaVersion,
-		Kind:          "gateway-device-bootstrap",
+		Kind:          "device-service-bootstrap",
 		Environment:   input.Environment,
-		Gateway:       Gateway{BaseURL: input.GatewayBaseURL},
+		Service:       Service{BaseURL: input.ServiceBaseURL},
 		TimeBootstrap: TimeBootstrap{URL: input.TimeBootstrapURL},
-		Provenance: Provenance{
-			SignerBackend: input.SignerBackend,
-			SourceStack:   input.SourceStack,
-			KMSKeyARN:     input.KMSKeyARN,
-		},
 	}
-	if gatewayURL.Scheme == "https" {
-		contract.Gateway.CAPEMFile = "gateway-ca.pem"
-		contract.Gateway.CAPEMSHA256 = sha256Hex(input.GatewayCAPEM)
+	if serviceURL.Scheme == "https" {
+		contract.Service.CAPEMFile = "service-ca.pem"
+		contract.Service.CAPEMSHA256 = sha256Hex(input.ServiceCAPEM)
 	}
 	seenKids := make(map[string]struct{}, len(input.Keys))
 	for _, key := range input.Keys {
@@ -291,9 +266,9 @@ func build(input Input) (Contract, error) {
 }
 
 func writeContractFiles(directory string, contract Contract, input Input) error {
-	if contract.Gateway.CAPEMFile != "" {
-		if err := os.WriteFile(filepath.Join(directory, contract.Gateway.CAPEMFile), input.GatewayCAPEM, 0o444); err != nil {
-			return fmt.Errorf("write Gateway CA: %w", err)
+	if contract.Service.CAPEMFile != "" {
+		if err := os.WriteFile(filepath.Join(directory, contract.Service.CAPEMFile), input.ServiceCAPEM, 0o444); err != nil {
+			return fmt.Errorf("write service CA: %w", err)
 		}
 	}
 	for index, key := range contract.TimeBootstrap.Keys {
@@ -315,11 +290,11 @@ func writeContractFiles(directory string, contract Contract, input Input) error 
 	return nil
 }
 
-func parseGatewayURL(value string) (*url.URL, error) {
+func parseServiceURL(value string) (*url.URL, error) {
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
 		(parsed.Scheme != "http" && parsed.Scheme != "https") || (parsed.Path != "" && parsed.Path != "/") {
-		return nil, fmt.Errorf("Gateway base URL must be an HTTP(S) origin without path, credentials, query, or fragment")
+		return nil, fmt.Errorf("service base URL must be an HTTP(S) origin without path, credentials, query, or fragment")
 	}
 	return parsed, nil
 }

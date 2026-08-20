@@ -226,6 +226,9 @@ func TestLoadConfigAllowsDirectACKSubscriberOnlyInDevelopment(t *testing.T) {
 
 	development := validEnvironmentMap()
 	development["GATEWAY_ENVIRONMENT"] = "development"
+	development["TIME_BOOTSTRAP_SIGNER"] = "local"
+	development["TIME_BOOTSTRAP_LOCAL_PRIVATE_KEY_PATH"] = ".local/time-bootstrap/private.pem"
+	delete(development, "TIME_BOOTSTRAP_KMS_KEY_ID")
 	development["AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED"] = "true"
 	config, err := LoadConfig(func(key string) string { return development[key] })
 	if err != nil {

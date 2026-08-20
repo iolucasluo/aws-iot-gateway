@@ -18,6 +18,7 @@ func TestRuntimeRepositoriesPersistCommandMediaEventAndWebhookOutbox(t *testing.
 	if err := ApplyMigrations(ctx, pool); err != nil {
 		t.Fatalf("ApplyMigrations() error = %v", err)
 	}
+	applyProductSeeds(t, ctx, pool)
 	const (
 		deviceID  = "038f0000-0000-7000-8000-000000000001"
 		bindingID = "038f0000-0000-7000-8000-000000000002"
@@ -68,6 +69,14 @@ func TestRuntimeRepositoriesPersistCommandMediaEventAndWebhookOutbox(t *testing.
 	}
 	if _, err := mediaRepository.GetSnapshot(ctx, bindingID, deviceSN, snapshotID); err != nil {
 		t.Fatalf("GetSnapshot(): %v", err)
+	}
+	transitioned, err := mediaRepository.TransitionSnapshotStatus(ctx, snapshotID, "uploading", "ready")
+	if err != nil || !transitioned {
+		t.Fatalf("TransitionSnapshotStatus(uploading -> ready) = %v, %v", transitioned, err)
+	}
+	transitioned, err = mediaRepository.TransitionSnapshotStatus(ctx, snapshotID, "uploading", "failed")
+	if err != nil || transitioned {
+		t.Fatalf("TransitionSnapshotStatus must not overwrite ready: %v, %v", transitioned, err)
 	}
 
 	eventRepository, _ := NewEventRepository(pool)

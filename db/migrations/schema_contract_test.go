@@ -6,23 +6,12 @@ import (
 	"testing"
 )
 
-func TestOnlySquashedInitialMigrationRemains(t *testing.T) {
-	t.Parallel()
-
-	entries, err := fs.ReadDir(Files, "sql")
-	if err != nil {
-		t.Fatalf("read embedded migrations: %v", err)
-	}
-	if len(entries) != 1 || entries[0].IsDir() || entries[0].Name() != "001_initial.sql" {
-		t.Fatalf("migration files = %v, want only 001_initial.sql", migrationNames(entries))
-	}
-}
-
 func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t *testing.T) {
 	t.Parallel()
-	initial := readMigration(t, "sql/001_initial.sql")
+	initial := readMigration(t, "001_initial.sql")
 
 	for _, table := range []string{
+		"products",
 		"device_registry",
 		"device_activations",
 		"device_activation_sessions",
@@ -57,6 +46,7 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 	}
 
 	for _, table := range []string{
+		"products",
 		"device_registry",
 		"device_activations",
 		"device_activation_sessions",
@@ -82,6 +72,8 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 		"device_registry_id uuid",
 		"device_binding_id uuid",
 		"presence_online boolean NOT NULL DEFAULT false",
+		"CONSTRAINT device_registry_pid_fkey FOREIGN KEY (pid) REFERENCES products(pid)",
+		"CONSTRAINT device_activations_pid_fkey FOREIGN KEY (pid) REFERENCES products(pid)",
 		"updated_at timestamptz NOT NULL DEFAULT now()",
 		"COMMENT ON TABLE device_schedules",
 	} {
@@ -89,12 +81,12 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 	}
 
 	for _, forbidden := range []string{
+		"INSERT INTO products",
 		"CREATE TABLE devices (",
 		"CREATE TABLE activations (",
 		"CREATE TABLE bindings (",
 		"CREATE TABLE projects (",
 		"developer_accounts",
-		"products",
 		"factory_batches",
 		"idevid",
 		"rma",
@@ -103,6 +95,34 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 	} {
 		if strings.Contains(strings.ToLower(initial), strings.ToLower(forbidden)) {
 			t.Errorf("squashed initial schema contains forbidden legacy/platform fragment %q", forbidden)
+		}
+	}
+}
+
+func TestLegacyProductCatalogMigrationIsScopedAndNonDestructive(t *testing.T) {
+	t.Parallel()
+	migration := readMigration(t, "002_legacy_product_catalog.up.sql")
+
+	for _, fragment := range []string{
+		"legacy_activation_schema",
+		"CREATE TABLE IF NOT EXISTS products",
+		"ALTER COLUMN pid DROP DEFAULT",
+		"ADD COLUMN pid varchar(64)",
+		"WHERE activation.pid IS NULL",
+		"device_registry_pid_fkey",
+		"device_activations_pid_fkey",
+		"ON DELETE RESTRICT",
+	} {
+		requireMigrationContains(t, migration, fragment)
+	}
+	for _, forbidden := range []string{
+		"DROP TABLE",
+		"TRUNCATE",
+		"DELETE FROM",
+		"DROP COLUMN",
+	} {
+		if strings.Contains(strings.ToUpper(migration), forbidden) {
+			t.Errorf("compatibility migration contains destructive fragment %q", forbidden)
 		}
 	}
 }

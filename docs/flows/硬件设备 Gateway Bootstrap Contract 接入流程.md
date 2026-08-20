@@ -19,12 +19,12 @@ Contract 目录只有以下公开内容：
 ```text
 device-bootstrap-contract/
   contract.json                         # canonical manifest + 文件 SHA-256
-  gateway-ca.pem                        # HTTPS Gateway CA（适用时）
+  service-ca.pem                        # HTTPS service CA（适用时）
   time-bootstrap/<kid>.der              # 一到两把 P-256 SPKI
 ```
 
 它绝不含 private signer key、AWS credentials、activation code、App HMAC、device token、运行证书或设备私钥。
-格式、字段验证和文件隔离以 [Gateway Device Bootstrap Contract v1](../contracts/gateway-device-bootstrap-v1.md)
+格式、字段验证和文件隔离以 [Device Service Bootstrap Contract v1](../contracts/device-service-bootstrap-v1.md)
 为准。
 
 ## Owner 与固定边界
@@ -57,7 +57,7 @@ device-bootstrap-contract/
    CloudFormation Outputs 与 KMS 公钥，不调用 `kms:Sign`，也不读取 secret。
 2. 校验候选的 environment、URL、CA、`kid`、SPKI 类型、所有 SHA-256 与消费者兼容性。
 3. 若候选与已发布目录不同，人工以**整个目录**替换对应环境目录，并和事实源变更一同提交；不能只复制
-   `gateway-ca.pem` 或某个 `.der`，否则 `contract.json` 的完整性声明失效。
+   `service-ca.pem` 或某个 `.der`，否则 `contract.json` 的完整性声明失效。
 4. 硬件仓只复制 Git 中已审核的完整目录；Dell 仅接收其公开副本。
 
 候选脚本与命令见 [部署者手册](../../deploy/device-bootstrap/README.md)。环境 `.env` 仅保存 Gateway

@@ -36,6 +36,16 @@ func (repository *MediaRepository) SetSnapshotStatus(ctx context.Context, id, st
 	return nil
 }
 
+func (repository *MediaRepository) TransitionSnapshotStatus(ctx context.Context, id, from, to string) (bool, error) {
+	result, err := repository.pool.Exec(ctx, `
+		UPDATE device_snapshots SET status=$3, updated_at=now() WHERE id=$1 AND status=$2
+	`, id, from, to)
+	if err != nil {
+		return false, fmt.Errorf("transition snapshot status: %w", err)
+	}
+	return result.RowsAffected() == 1, nil
+}
+
 func (repository *MediaRepository) GetSnapshot(ctx context.Context, bindingID, deviceSN, id string) (media.Snapshot, error) {
 	var snapshot media.Snapshot
 	if err := repository.pool.QueryRow(ctx, `

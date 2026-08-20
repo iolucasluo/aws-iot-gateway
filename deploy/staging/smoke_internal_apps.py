@@ -3,7 +3,7 @@
 
 The script obtains the already-injected Internal App secret ARN from the active
 API task definition. It never prints API secrets, device tokens, or response
-bodies. Its requests are limited to list/token/replay checks; it does not
+bodies. Its requests are limited to product/list/token/replay checks; it does not
 activate, bind, unbind, command, or modify a device.
 """
 
@@ -23,8 +23,10 @@ import uuid
 
 
 SIGNATURE_DOMAIN = "ExploreX-OpenAPI-HMAC-v1"
+PRODUCTS_PATH = "/api/v1/openapi/device-products"
 LIST_PATH = "/api/v1/openapi/devices/list"
 TOKEN_PATH = "/api/v1/openapi/devices/token"
+EXPECTED_PRODUCT_PIDS = {"feeder-x1", "minion-cam-x1"}
 
 
 class SmokeError(RuntimeError):
@@ -207,6 +209,28 @@ def post_json(
         return error.code, json.load(error)
 
 
+def get_json(
+    *, base_url: str, credential: dict[str, str], path: str
+) -> tuple[int, dict[str, object]]:
+    body = b""
+    headers = build_signed_headers(
+        api_key=credential["api_key"],
+        api_secret=credential["api_secret"],
+        timestamp=timestamp_from_milliseconds(int(time.time() * 1000)),
+        nonce=str(uuid.uuid4()),
+        method="GET",
+        path=path,
+        raw_query="",
+        body=body,
+    )
+    request = urllib.request.Request(base_url + path, method="GET", headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return response.status, json.load(response)
+    except urllib.error.HTTPError as error:
+        return error.code, json.load(error)
+
+
 def error_code(body: dict[str, object]) -> str:
     value = body.get("error_code")
     return value if isinstance(value, str) else ""
@@ -215,6 +239,17 @@ def error_code(body: dict[str, object]) -> str:
 def require_status(label: str, actual: int, expected: int) -> None:
     if actual != expected:
         raise SmokeError(f"{label} returned HTTP {actual}, expected {expected}")
+
+
+def require_expected_products(body: dict[str, object]) -> None:
+    products = body.get("products")
+    if not isinstance(products, list):
+        raise SmokeError("staging product catalog is invalid")
+    actual_pids = {
+        item.get("pid") for item in products if isinstance(item, dict) and isinstance(item.get("pid"), str)
+    }
+    if not EXPECTED_PRODUCT_PIDS.issubset(actual_pids):
+        raise SmokeError("staging product catalog is missing required products")
 
 
 def run(args: argparse.Namespace) -> None:
@@ -230,6 +265,12 @@ def run(args: argparse.Namespace) -> None:
         peer = credentials[args.peer_app_id]
     except KeyError as error:
         raise SmokeError("requested Internal App ID is not configured") from error
+
+    products_status, products_body = get_json(
+        base_url=base_url, credential=demo, path=PRODUCTS_PATH
+    )
+    require_status("product catalog", products_status, 200)
+    require_expected_products(products_body)
 
     list_payload = {"binding_external_user_id": args.binding_external_user_id}
     demo_status, demo_body = post_json(
