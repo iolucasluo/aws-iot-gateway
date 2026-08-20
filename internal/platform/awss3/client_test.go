@@ -1,0 +1,54 @@
+package awss3
+
+import (
+	"context"
+	"io"
+	"strings"
+	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
+)
+
+type s3APIStub struct {
+	body    string
+	headErr error
+}
+
+func (stub *s3APIStub) PutObject(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+	return &s3.PutObjectOutput{}, nil
+}
+func (stub *s3APIStub) GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	length := int64(len(stub.body))
+	return &s3.GetObjectOutput{Body: io.NopCloser(strings.NewReader(stub.body)), ContentLength: &length}, nil
+}
+func (stub *s3APIStub) HeadObject(context.Context, *s3.HeadObjectInput, ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+	return &s3.HeadObjectOutput{}, stub.headErr
+}
+
+func TestDownloadReturnsBoundedS3Object(t *testing.T) {
+	t.Parallel()
+	client := &Client{client: &s3APIStub{body: "h264-idr"}, bucket: "media-bucket"}
+
+	payload, err := client.Download(context.Background(), "snapshots/id.h264", 32)
+	if err != nil {
+		t.Fatalf("Download() error = %v", err)
+	}
+	if string(payload) != "h264-idr" {
+		t.Fatalf("Download() = %q", payload)
+	}
+}
+
+func TestExistsDistinguishesMissingObjectFromS3Failure(t *testing.T) {
+	t.Parallel()
+	missing := &Client{client: &s3APIStub{headErr: &smithy.GenericAPIError{Code: "NotFound", Message: "missing"}}, bucket: "media-bucket"}
+	exists, err := missing.Exists(context.Background(), "snapshots/id.jpg")
+	if err != nil || exists {
+		t.Fatalf("missing Exists() = %v, %v", exists, err)
+	}
+
+	denied := &Client{client: &s3APIStub{headErr: &smithy.GenericAPIError{Code: "AccessDenied", Message: "denied"}}, bucket: "media-bucket"}
+	if _, err := denied.Exists(context.Background(), "snapshots/id.jpg"); err == nil {
+		t.Fatal("Exists() must propagate non-not-found S3 errors")
+	}
+}

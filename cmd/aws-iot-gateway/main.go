@@ -27,6 +27,7 @@ import (
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awskms"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awskvs"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awss3"
+	gatewayffmpeg "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/ffmpeg"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/localsigner"
 	gatewaypostgres "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/postgres"
 	redisstore "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/redis"
@@ -173,7 +174,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure media repository: %v", err)
 	}
-	assetService := media.NewAssetService(mediaStore, deviceService, mediaRepository, config.Environment, nil)
+	snapshotConverter, err := gatewayffmpeg.NewConverter("ffmpeg")
+	if err != nil {
+		log.Fatalf("configure snapshot converter: %v", err)
+	}
+	assetService := media.NewAssetService(mediaStore, deviceService, mediaRepository, config.Environment, snapshotConverter, nil)
 	server := &http.Server{
 		Addr: config.ListenAddress,
 		Handler: httpapi.NewInternalAPI(service, verifier, httpapi.Dependencies{

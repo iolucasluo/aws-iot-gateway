@@ -1128,3 +1128,15 @@ func TestInternalAPIDeviceStatusQueriesPTZThroughGateway(t *testing.T) {
 		t.Fatalf("command = %#v", command)
 	}
 }
+
+func TestWriteMediaErrorReportsSnapshotProcessingFailure(t *testing.T) {
+	t.Parallel()
+	response := httptest.NewRecorder()
+
+	writeMediaError(response, media.ErrSnapshotProcessing)
+
+	if response.Code != http.StatusServiceUnavailable ||
+		!bytes.Contains(response.Body.Bytes(), []byte(`"error_code":"snapshot_processing_failed"`)) {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+}
