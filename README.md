@@ -144,7 +144,7 @@ activation 必然返回 `product_unavailable`。该命令拒绝空环境和 `pro
 `deploy/device-bootstrap/contracts/staging/`；硬件构建只复制存在且经审核的目录。Gateway owner 从本地 signer 或已部署 CloudFormation/KMS 的**公开** Outputs 生成候选
 目录，再人工审核、替换并提交环境 Contract；Dell 和硬件仓不需要 AWS authority。命令、环境变量、轮换和回滚见
 [deploy/device-bootstrap/README.md](deploy/device-bootstrap/README.md)，格式和消费者校验规则见
-[docs/contracts/gateway-device-bootstrap-v1.md](docs/contracts/gateway-device-bootstrap-v1.md)。
+[docs/contracts/device-service-bootstrap-v1.md](docs/contracts/device-service-bootstrap-v1.md)。
 
 本地真机命令使用 `wait_ack=true` 时，可在 `development` 环境显式设置
 `AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED=true`。API 将通过当前 AWS 标准凭据链使用 MQTT over

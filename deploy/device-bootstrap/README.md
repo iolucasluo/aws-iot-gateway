@@ -1,4 +1,4 @@
-# Gateway Device Bootstrap Contract：部署者手册
+# Device Service Bootstrap Contract：Gateway producer 手册
 
 这是 Gateway 对 Anyka、Taixin 和后续硬件交付的唯一公开 bootstrap 输入。它解决的是设备尚未拥有可信墙上时钟时，如何安全地知道：
 
@@ -9,7 +9,7 @@
 
 它不是服务器 `.env`，不是 QR/AP/BLE commissioning payload，也不是 Demo App HMAC 配置。Contract 中禁止存在私钥、AWS credentials、activation code、设备证书、App secret 或 device token。
 
-完整格式在 [docs/contracts/gateway-device-bootstrap-v1.md](../../docs/contracts/gateway-device-bootstrap-v1.md)。
+完整格式在 [docs/contracts/device-service-bootstrap-v1.md](../../docs/contracts/device-service-bootstrap-v1.md)。
 
 ## 关键原则：Gateway 生成一次，硬件只复制
 
@@ -18,7 +18,7 @@
 ```text
 Gateway deployment owner
   └─ generates one public Contract
-       ├─ taixin: TXW82X_GATEWAY_BOOTSTRAP_CONTRACT=<copied directory>
+       ├─ taixin: TXW82X_SERVICE_BOOTSTRAP_CONTRACT=<copied directory>
        └─ anyka:  GATEWAY_DEVICE_BOOTSTRAP_CONTRACT=<copied directory>
 ```
 
@@ -68,10 +68,10 @@ TIME_BOOTSTRAP_LOCAL_PRIVATE_KEY_PATH=.local/device-bootstrap/$USER/time-bootstr
 然后给 Contract 指定**设备能够访问的** LAN 地址；`127.0.0.1` 只能用于同机测试，不能烧入硬件。
 
 ```sh
-export GATEWAY_DEVICE_BOOTSTRAP_GATEWAY_URL=http://<shared-local-host>:14080
-export GATEWAY_DEVICE_BOOTSTRAP_TIME_URL=http://<shared-local-host>:14080/api/v1/device-time/bootstrap
-export GATEWAY_DEVICE_BOOTSTRAP_KEY_ID=time-local-shared-g1
-export GATEWAY_DEVICE_BOOTSTRAP_PRIVATE_KEY="$PWD/.local/device-bootstrap/$USER/time-bootstrap-private.pem"
+export DEVICE_SERVICE_BOOTSTRAP_SERVICE_URL=http://<shared-local-host>:14080
+export DEVICE_SERVICE_BOOTSTRAP_TIME_URL=http://<shared-local-host>:14080/api/v1/device-time/bootstrap
+export DEVICE_SERVICE_BOOTSTRAP_KEY_ID=time-local-shared-g1
+export DEVICE_SERVICE_BOOTSTRAP_PRIVATE_KEY="$PWD/.local/device-bootstrap/$USER/time-bootstrap-private.pem"
 ./deploy/device-bootstrap/scripts/render-local-contract.sh \
   --out /tmp/device-bootstrap-contract-local-next
 ```
@@ -100,7 +100,7 @@ AWS_REGION=ap-east-1 \
 
 | Consumer | 只接收的输入 | 生成后动作 | 明确不接收 |
 | --- | --- | --- | --- |
-| Taixin / TXW82x | Contract directory | renderer 生成 Git 忽略的 `explorex_gateway_release_config.generated.h`，嵌入 CA/keyring | 本地 signer private key、AWS credentials |
+| Taixin / TXW82x | Contract directory | renderer 生成 Git 忽略的 `explorex_service_bootstrap.generated.h`，嵌入 CA/keyring | 本地 signer private key、AWS credentials |
 | Anyka / Linux | Contract directory | pack script 写入 immutable release env、CA 和每个 `<kid>.der` | KMS key、CloudFormation access |
 | aws-iot-demo-app | 无 | 保持自己的 Gateway origin + HMAC 配置 | CA/SPKI bootstrap trust Contract |
 
@@ -109,7 +109,7 @@ Dell 是 Taixin 的受控 build host，不是第四个配置 producer。正式 b
 
 ```sh
 docs/coding-rules/skills/txw82x-firmware-flash/scripts/txw82x_remote_clean_package.sh \
-  build-import --contract /absolute/path/to/device-bootstrap-contract
+  build-import --contract /absolute/path/to/device-service-bootstrap-contract
 ```
 
 wrapper 在 Mac 与 Dell 双重校验 Contract，只在远端本次 build 内渲染 generated header，退出时
@@ -135,7 +135,7 @@ publisher 的重复测试。
 
 正常 Contract 只有一把 active key。轮换时可含两把：current + next。顺序固定为：
 
-1. Gateway 发布者设置 current 以外的 `GATEWAY_DEVICE_BOOTSTRAP_NEXT_KEY_ID`；local 同时设置公开 DER 路径 `GATEWAY_DEVICE_BOOTSTRAP_NEXT_PUBLIC_KEY`，staging 同时设置新 KMS key id `GATEWAY_DEVICE_BOOTSTRAP_NEXT_KMS_KEY_ID`，然后导出带 current + next 的 Contract。
+1. Gateway 发布者设置 current 以外的 `DEVICE_SERVICE_BOOTSTRAP_NEXT_KEY_ID`；local 同时设置公开 DER 路径 `DEVICE_SERVICE_BOOTSTRAP_NEXT_PUBLIC_KEY`，staging 同时设置新 KMS key id `DEVICE_SERVICE_BOOTSTRAP_NEXT_KMS_KEY_ID`，然后导出带 current + next 的 Contract。
 2. 先发布能携带两把 key 的硬件镜像。
 3. 切换 Gateway signer 的 active `kid`。
 4. 等所有受支持镜像都含新 key 后，再导出/发布只保留新 key 的 Contract。

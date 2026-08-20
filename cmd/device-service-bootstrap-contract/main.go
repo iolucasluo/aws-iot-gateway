@@ -1,4 +1,4 @@
-// gateway-device-bootstrap-contract creates public device bootstrap Contracts.
+// device-service-bootstrap-contract creates public provider-neutral bootstrap Contracts.
 package main
 
 import (
@@ -27,7 +27,7 @@ func main() {
 
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: gateway-device-bootstrap-contract local|aws-release [flags]")
+		return fmt.Errorf("usage: device-service-bootstrap-contract local|aws-release [flags]")
 	}
 	switch args[0] {
 	case "local":
@@ -42,18 +42,18 @@ func run(ctx context.Context, args []string) error {
 func runLocal(args []string) error {
 	flags := flag.NewFlagSet("local", flag.ContinueOnError)
 	output := flags.String("out", "", "new contract output directory")
-	gatewayURL := flags.String("gateway-url", "", "development Gateway origin")
+	serviceURL := flags.String("service-url", "", "development service origin")
 	timeBootstrapURL := flags.String("time-bootstrap-url", "", "development time bootstrap URL")
 	keyID := flags.String("key-id", "", "development time key id")
 	privateKeyPath := flags.String("private-key", "", "owner-only P-256 PKCS#8 PEM private key")
 	nextKeyID := flags.String("next-key-id", "", "optional next time key id during a planned rotation")
 	nextPublicKeyPath := flags.String("next-public-key", "", "optional next P-256 DER SPKI during a planned rotation")
-	gatewayCAPath := flags.String("gateway-ca", "", "optional CA PEM for a local HTTPS Gateway")
+	serviceCAPath := flags.String("service-ca", "", "optional CA PEM for a local HTTPS service")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if *output == "" || *gatewayURL == "" || *timeBootstrapURL == "" || *keyID == "" || *privateKeyPath == "" {
-		return fmt.Errorf("local requires --out, --gateway-url, --time-bootstrap-url, --key-id, and --private-key")
+	if *output == "" || *serviceURL == "" || *timeBootstrapURL == "" || *keyID == "" || *privateKeyPath == "" {
+		return fmt.Errorf("local requires --out, --service-url, --time-bootstrap-url, --key-id, and --private-key")
 	}
 	if (*nextKeyID == "") != (*nextPublicKeyPath == "") {
 		return fmt.Errorf("local rotation requires both --next-key-id and --next-public-key")
@@ -70,7 +70,7 @@ func runLocal(args []string) error {
 	if err != nil {
 		return fmt.Errorf("encode local time signer public key: %w", err)
 	}
-	ca, err := readOptionalFile(*gatewayCAPath)
+	ca, err := readOptionalFile(*serviceCAPath)
 	if err != nil {
 		return err
 	}
@@ -84,8 +84,8 @@ func runLocal(args []string) error {
 	}
 	_, err = devicebootstrap.Write(*output, devicebootstrap.Input{
 		Environment:      "development",
-		GatewayBaseURL:   *gatewayURL,
-		GatewayCAPEM:     ca,
+		ServiceBaseURL:   *serviceURL,
+		ServiceCAPEM:     ca,
 		TimeBootstrapURL: *timeBootstrapURL,
 		SignerBackend:    "local",
 		Keys:             keys,
@@ -99,19 +99,19 @@ func runAWSRelease(ctx context.Context, args []string) error {
 	environment := flags.String("environment", "", "staging or production")
 	stackName := flags.String("stack", "", "CloudFormation stack name")
 	region := flags.String("region", "", "AWS region")
-	gatewayCAPath := flags.String("gateway-ca", "", "approved Gateway CA PEM")
+	serviceCAPath := flags.String("service-ca", "", "approved service CA PEM")
 	nextKeyID := flags.String("next-key-id", "", "optional next time key id during a planned rotation")
 	nextKMSKeyID := flags.String("next-kms-key-id", "", "optional next KMS key id during a planned rotation")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if *output == "" || *environment == "" || *stackName == "" || *region == "" || *gatewayCAPath == "" {
-		return fmt.Errorf("aws-release requires --out, --environment, --stack, --region, and --gateway-ca")
+	if *output == "" || *environment == "" || *stackName == "" || *region == "" || *serviceCAPath == "" {
+		return fmt.Errorf("aws-release requires --out, --environment, --stack, --region, and --service-ca")
 	}
 	if (*nextKeyID == "") != (*nextKMSKeyID == "") {
 		return fmt.Errorf("aws-release rotation requires both --next-key-id and --next-kms-key-id")
 	}
-	ca, err := readOptionalFile(*gatewayCAPath)
+	ca, err := readOptionalFile(*serviceCAPath)
 	if err != nil {
 		return err
 	}
@@ -140,8 +140,7 @@ func runAWSRelease(ctx context.Context, args []string) error {
 	}
 	input, err := devicebootstrap.InputFromAWSRelease(devicebootstrap.ReleaseSource{
 		Environment:   *environment,
-		StackName:     *stackName,
-		GatewayCAPEM:  ca,
+		ServiceCAPEM:  ca,
 		Outputs:       outputs,
 		ActiveSPKIDER: publicKey,
 	})

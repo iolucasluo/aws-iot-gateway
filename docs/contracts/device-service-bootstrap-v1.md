@@ -1,8 +1,9 @@
-# Gateway Device Bootstrap Contract v1
+# Device Service Bootstrap Contract v1
 
-This is the canonical public release contract for Anyka, Taixin, and future
-device firmware that must contact `aws-iot-gateway` before it has trusted wall
-clock time. It is separate from:
+This is the provider-neutral public release contract for Anyka, Taixin, and
+future device firmware that must discover its bootstrap service before it has
+trusted wall clock time. `aws-iot-gateway` is one producer, not part of the
+consumer interface. It is separate from:
 
 - Gateway server `.env`, which includes private runtime configuration;
 - QR/AP/BLE commissioning payloads, which remain owned by the device transport
@@ -12,15 +13,16 @@ clock time. It is separate from:
 ## Directory
 
 ```text
-device-bootstrap-contract/
+device-service-bootstrap-contract/
   contract.json
-  gateway-ca.pem                         # required only for HTTPS Gateway
+  service-ca.pem                         # required only for HTTPS service
   time-bootstrap/<kid>.der               # one or two P-256 DER SPKIs
 ```
 
-`contract.json` has `schema_version = 1`, `kind = "gateway-device-bootstrap"`,
-an environment, a Gateway origin, the exact HTTP time-bootstrap URL, a keyring,
-file SHA-256 values, and non-secret signer provenance.
+`contract.json` has `schema_version = 1`, `kind = "device-service-bootstrap"`,
+an environment, a service origin, the exact HTTP time-bootstrap URL, a keyring,
+and file SHA-256 values. Producer implementation and signing authority are not
+part of the consumer contract.
 
 ## Canonical example
 
@@ -30,11 +32,11 @@ the Contract root; consumers must never resolve them outside that directory.
 ```json
 {
   "schema_version": 1,
-  "kind": "gateway-device-bootstrap",
+  "kind": "device-service-bootstrap",
   "environment": "staging",
-  "gateway": {
+  "service": {
     "base_url": "https://<api-id>.execute-api.<region>.amazonaws.com",
-    "ca_pem_file": "gateway-ca.pem",
+    "ca_pem_file": "service-ca.pem",
     "ca_pem_sha256": "<lowercase sha256>"
   },
   "time_bootstrap": {
@@ -44,26 +46,21 @@ the Contract root; consumers must never resolve them outside that directory.
       "spki_der_file": "time-bootstrap/time-staging-g1.der",
       "sha256": "<lowercase sha256>"
     }]
-  },
-  "provenance": {
-    "signer_backend": "aws-kms",
-    "source_stack": "aws-iot-gateway-staging",
-    "kms_key_arn": "arn:aws:kms:..."
   }
 }
 ```
 
-`gateway.ca_pem_file` and its digest are required exactly when `gateway.base_url`
+`service.ca_pem_file` and its digest are required exactly when `service.base_url`
 uses HTTPS. They must be absent for a development HTTP origin. Every key is an
 uncompressed P-256 SubjectPublicKeyInfo DER file; key count is one normally and
 at most two during a planned rotation.
 
 ## Validation and ownership
 
-| Rule | Gateway exporter | Consumer |
+| Rule | Producer | Consumer |
 | --- | --- | --- |
 | URL shape | emits only an HTTP(S) origin and the exact time path | rejects path/query/fragment/credentials or an unexpected time path |
-| Environment | local signer → `development`; KMS exporter → `staging`/`production` | rejects cross-environment signer combinations and release HTTP |
+| Environment | selects the reviewed target environment | rejects unknown environments and release HTTP |
 | Schema + integrity | writes only canonical public fields and SHA-256 metadata atomically | rejects duplicate/unknown fields and validates all SHA-256 values before use |
 | Filesystem isolation | creates a new output directory; never writes a private key | rejects absolute paths, `..`, symlink escape and non-regular artifacts |
 | COSE trust | signs with the active `kid` | selects exactly matching keyring `kid`, then verifies ES256 + nonce + chip UID |
@@ -95,20 +92,19 @@ in the shared `local` directory.
 
 ## Environment isolation
 
-| Contract environment | Gateway origin | signer provenance | device-build rule |
+| Contract environment | service origin | producer policy | device-build rule |
 | --- | --- | --- | --- |
-| `development` | Explicit HTTP or HTTPS local origin | `local` | HTTP only with an explicit development build gate |
-| `staging` | HTTPS | `aws-kms` | release-like, CA mandatory |
-| `production` | HTTPS | `aws-kms` or an approved future managed signer | CA mandatory |
+| `development` | Explicit HTTP or HTTPS local origin | producer-owned | HTTP only with an explicit development build gate |
+| `staging` | HTTPS | producer-owned | release-like, CA mandatory |
+| `production` | HTTPS | producer-owned | CA mandatory |
 
-No release build may consume a `development` Contract. A local signer Contract
-cannot claim staging or production. The device time endpoint always remains
+No release build may consume a `development` Contract. The device time endpoint always remains
 the exact HTTP endpoint `/api/v1/device-time/bootstrap`; authenticity comes
 from the COSE ES256 response and its keyring, not from TLS.
 
 The fixed HTTP time endpoint is deliberately narrow: it only returns a signed,
 short-lived time statement. It must never be generalized into an unauthenticated
-Gateway API path. The normal Gateway origin remains HTTPS for staging and
+service API path. The normal service origin remains HTTPS for staging and
 production, with a pinned CA supplied by this Contract.
 
 ## Key lifecycle
@@ -121,8 +117,8 @@ then retire the old key only after supported device releases no longer need it.
 
 ## Consumer boundary
 
-- Anyka writes the Gateway URL and time URL to immutable release configuration,
-  installs `gateway-ca.pem` as `/etc/backend_tls_roots.pem`, and installs every
+- Anyka writes the service URL and time URL to immutable release configuration,
+  installs `service-ca.pem` as `/etc/backend_tls_roots.pem`, and installs every
   keyring entry as `config/time-bootstrap/<kid>.der`.
 - Taixin renders the Contract into an ignored generated C header and embeds the
   CA and keyring in the firmware image. Dell receives the Contract but no AWS
@@ -131,7 +127,7 @@ then retire the old key only after supported device releases no longer need it.
   Dell validates it again, renders a temporary generated header, and records
   `contract.json` SHA-256 in its receipt; it never relies on a pre-installed
   local header.
-- `aws-iot-demo-app` does not consume this Contract. It keeps its own Gateway
+- `aws-iot-demo-app` does not consume this Contract. It keeps its own service
   origin plus HMAC configuration boundary.
 
 The contract contains only public endpoints and public trust material. It does
