@@ -2,7 +2,13 @@
 
 ## Database initialization
 
-使用 `deploy/local/compose.yaml` 的新库时，加载开发者自己的 `.env.<name>` 后显式初始化 schema 和两条 active PID：
+根工作区的 cwj 统一入口会在 API 前显式执行可重复的 seed runner：
+
+```sh
+docs/coding-rules/skills/local-dev/scripts/dev.sh up --env cwj
+```
+
+手工使用 `deploy/local/compose.yaml` 的新库时，加载开发者自己的 `.env.<name>` 后执行同样流程：
 
 ```sh
 docker compose --env-file .env.cwj -f deploy/local/compose.yaml up -d --wait

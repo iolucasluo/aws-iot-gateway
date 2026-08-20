@@ -120,7 +120,8 @@ Internal App 配置，AWS access key 仍走 standard credential chain，不写�
 本地开发优先复用 `127.0.0.1:5432/6379` 上已有的 PostgreSQL/Redis 进程，但必须使用独立的
 `aws_iot_gateway` 数据库和 Redis DB index（示例为 `/1`）。根工作区 `local-dev` skill 只探测、
 不启停用户已有的进程；端口为空时才使用 `deploy/local/compose.yaml` 启动 fallback 依赖。
-直接使用 fallback 时可运行：
+从根工作区运行 `docs/coding-rules/skills/local-dev/scripts/dev.sh up --env cwj` 时，会先同步执行显式
+seed runner，成功后才以前台生命周期启动 API。等价的手工 fallback 流程是：
 
 ```sh
 docker compose --env-file .env.cwj -f deploy/local/compose.yaml up -d --wait
