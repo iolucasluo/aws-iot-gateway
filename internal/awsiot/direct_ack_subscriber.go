@@ -267,6 +267,7 @@ func presignIoTWebSocketURL(
 	}
 	signedURI, _, err := v4.NewSigner().PresignHTTP(
 		ctx, credentials, request, emptySHA256, "iotdevicegateway", region, signingTime,
+		func(options *v4.SignerOptions) { options.DisableSessionToken = true },
 	)
 	if err != nil {
 		return "", fmt.Errorf("sign direct ACK WebSocket request: %w", err)
@@ -274,6 +275,11 @@ func presignIoTWebSocketURL(
 	signedURL, err := url.Parse(signedURI)
 	if err != nil {
 		return "", fmt.Errorf("parse direct ACK WebSocket URL: %w", err)
+	}
+	if credentials.SessionToken != "" {
+		query := signedURL.Query()
+		query.Set("X-Amz-Security-Token", credentials.SessionToken)
+		signedURL.RawQuery = query.Encode()
 	}
 	signedURL.Scheme = "wss"
 	return signedURL.String(), nil

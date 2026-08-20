@@ -18,7 +18,7 @@ test -d "$CWJ_CONTRACT/time-bootstrap"
 test ! -e "$CWJ_CONTRACT/service-ca.pem"
 test ! -e "$ROOT/deploy/local/device-bootstrap-contract"
 test ! -e "$ROOT/deploy/staging/device-bootstrap-contract"
-git -C "$ROOT" check-ignore -q .local/device-bootstrap/cwj/time-bootstrap-private.pem
+grep -Fx '/.local/' "$ROOT/.gitignore" >/dev/null
 
 python3 - "$CWJ_CONTRACT/contract.json" <<'PY'
 import json
