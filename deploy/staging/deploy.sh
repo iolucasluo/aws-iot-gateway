@@ -433,7 +433,7 @@ create_and_execute_change_set() {
     local destructive_changes
     destructive_changes=$(aws_cli cloudformation describe-change-set --stack-name "$STACK_NAME" \
         --change-set-name "$change_set" \
-        --query 'length(Changes[?ResourceChange.Action == `Remove` || ResourceChange.Replacement == `True` || ResourceChange.Replacement == `Conditional`])' \
+        --query 'length(Changes[?ResourceChange.Action == `Remove` || ((ResourceChange.Replacement == `True` || ResourceChange.Replacement == `Conditional`) && ResourceChange.ResourceType != `AWS::ECS::TaskDefinition`)])' \
         --output text)
     [[ "$destructive_changes" =~ ^[0-9]+$ ]] || fail "could not evaluate CloudFormation replacement/removal risk"
     if [[ "$destructive_changes" != 0 ]]; then

@@ -52,7 +52,7 @@ CONFIRM_AWS_STAGING_SEED=seed-aws-iot-gateway-staging \
 
 普通 deploy 保留现有 CloudFormation NoEcho 参数，`InternalAppsSecretArn`、`IoTCredentialProviderEndpoint`、`EnvironmentName`、`DatabaseInstanceClass` 和 `RedisNodeType` 均使用 `UsePreviousValue=true`。Internal App secret 创建或轮换是独立高风险操作，不由该入口执行。
 
-部署使用 linux/amd64 image，并将 ECR tag 解析为当前 staging repository 的 immutable `@sha256` digest 后传给 CloudFormation。成功 rollout 后等待 API/worker stable，运行 one-off seed、health/time/HMAC smoke，先写入被 Git 忽略的 `.runtime/aws-deploy/<release-id>/manifest.json`，再生成 Contract candidate。普通发布还会拒绝包含 CloudFormation resource removal 或 replacement（包括 conditional replacement）的 change set；这类基础设施变更必须拆分审查并使用单独受控流程。脚本不自动执行二进制回退；migration 是 forward-only，回退前必须先审查 schema 兼容性并重新取得 AWS mutation 授权。
+部署使用 linux/amd64 image，并将 ECR tag 解析为当前 staging repository 的 immutable `@sha256` digest 后传给 CloudFormation。成功 rollout 后等待 API/worker stable，运行 one-off seed、health/time/HMAC smoke，先写入被 Git 忽略的 `.runtime/aws-deploy/<release-id>/manifest.json`，再生成 Contract candidate。普通发布允许镜像更新固有的 ECS TaskDefinition replacement，但拒绝 CloudFormation resource removal，以及其他资源的 replacement（包括 conditional replacement）；这类基础设施变更必须拆分审查并使用单独受控流程。脚本不自动执行二进制回退；migration 是 forward-only，回退前必须先审查 schema 兼容性并重新取得 AWS mutation 授权。
 
 ## 初次建站或 secret 轮换
 

@@ -42,6 +42,7 @@ for required in \
     'git -C "$GATEWAY_ROOT" ls-remote --exit-code' \
     'ordinary staging deploy refuses CloudFormation removals or resource replacements' \
     'ResourceChange.Replacement == `Conditional`' \
+    'ResourceChange.ResourceType != `AWS::ECS::TaskDefinition`' \
     '[[ "$IMAGE_REF" == "$repository"@sha256:* ]]' \
     '@sha256:' \
     'aws ecs wait services-stable' \
