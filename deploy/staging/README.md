@@ -4,7 +4,61 @@ This deployment is intentionally limited to `ap-east-1` staging. It creates two 
 
 The `INTERNAL_APPS_JSON` value lives in one explicitly created Secrets Manager secret. Do not pass it as a CloudFormation parameter or commit it. RDS creates and rotates its own master secret.
 
-Deployment order:
+## 受控发布入口
+
+当前仓库的 staging owner entrypoint 是：
+
+```sh
+./deploy/staging/deploy.sh --env staging --status
+```
+
+聚合工作区从 `docs/coding-rules/skills/aws-deploy/scripts/deploy.sh` 薄转发到本脚本。入口只支持 AWS account `135359468083`、region `ap-east-1`、runtime stack `aws-iot-gateway-staging`，不支持 production、`--force`、DB reset、Redis flush 或自动替换 secret。
+
+常用模式：
+
+```sh
+# 只读 AWS 状态与公开 health
+./deploy/staging/deploy.sh --env staging --status
+
+# 模板/source/release 计划；不 build/push/update
+./deploy/staging/deploy.sh --env staging --plan
+
+# 完整本地发布门禁；不 build/push/update
+./deploy/staging/deploy.sh --env staging --dry-run
+
+# CloudWatch 日志
+./deploy/staging/deploy.sh --env staging --logs api 200
+./deploy/staging/deploy.sh --env staging --logs event-worker 200
+
+# 线上 health/time/HMAC smoke
+./deploy/staging/deploy.sh --env staging --verify
+
+# 本地生成公开 Device Bootstrap Contract 候选目录
+./deploy/staging/deploy.sh --env staging \
+  --render-device-bootstrap-contract /absolute/new/staging-contract-candidate
+```
+
+`--verify` 不更新 AWS 基础设施或设备绑定，但 HMAC smoke 会签发已绑定设备 token，并在 Redis 消费 nonce 以验证 replay rejection。它不会 activate、bind、unbind、command 或修改设备。
+
+真实发布和单独 seed 都是 AWS mutation。`--deploy` 还要求 Gateway 工作树 clean、不是 detached HEAD，且当前 `HEAD` 与该分支 remote upstream 已发布 commit 完全一致。除用户对上述明确 account/region/stack 授权外，还必须设置精确确认变量：
+
+```sh
+CONFIRM_AWS_STAGING_DEPLOY=deploy-aws-iot-gateway-staging \
+  ./deploy/staging/deploy.sh --env staging --deploy
+
+CONFIRM_AWS_STAGING_SEED=seed-aws-iot-gateway-staging \
+  ./deploy/staging/deploy.sh --env staging --seed
+```
+
+普通 deploy 保留现有 CloudFormation NoEcho 参数，`InternalAppsSecretArn`、`IoTCredentialProviderEndpoint`、`EnvironmentName`、`DatabaseInstanceClass` 和 `RedisNodeType` 均使用 `UsePreviousValue=true`。Internal App secret 创建或轮换是独立高风险操作，不由该入口执行。
+
+部署使用 linux/amd64 image，并将 ECR tag 解析为当前 staging repository 的 immutable `@sha256` digest 后传给 CloudFormation。成功 rollout 后等待 API/worker stable，运行 one-off seed、health/time/HMAC smoke，先写入被 Git 忽略的 `.runtime/aws-deploy/<release-id>/manifest.json`，再生成 Contract candidate。普通发布还会拒绝包含 CloudFormation resource removal 或 replacement（包括 conditional replacement）的 change set；这类基础设施变更必须拆分审查并使用单独受控流程。脚本不自动执行二进制回退；migration 是 forward-only，回退前必须先审查 schema 兼容性并重新取得 AWS mutation 授权。
+
+## 初次建站或 secret 轮换
+
+下列步骤只适用于首次创建 staging 或经单独批准的 secret 轮换，不是普通镜像发布流程：
+
+初次建站顺序：
 
 1. Deploy `deploy/cloudformation/bootstrap.yaml`.
 2. Build the container for `linux/amd64`, push an immutable ECR tag, and capture its URI.
