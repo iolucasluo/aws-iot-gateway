@@ -24,15 +24,18 @@ seed 命令可重复执行且仅允许 `GATEWAY_ENVIRONMENT=development|staging`
 
 ## Device bootstrap contract
 
-`deploy/device-bootstrap/contracts/development/` is intentionally absent until a shared local Gateway
-owner provides both of the following stable inputs:
+The shared development Contract is published at
+`deploy/device-bootstrap/contracts/development/` for the operator-approved LAN Gateway:
 
-1. a team-device-reachable hostname or reserved address for the running Gateway;
-2. the owner-only P-256 signer configured in that Gateway's ignored local `.env`.
+```text
+Gateway:        http://192.168.11.131:14081
+Time bootstrap: http://192.168.11.131:14081/api/v1/device-time/bootstrap
+Key ID:         time-development-g1
+```
 
-Do not turn a developer laptop's DHCP address into the shared Contract. Generate
-the candidate with `deploy/device-bootstrap/scripts/render-local-contract.sh --out
-<absolute-new-directory>`, review it, then manually add
-`deploy/device-bootstrap/contracts/development/` in the same reviewed Git change. The resulting
-directory is public and contains only the endpoint and public SPKI; the signer
-PEM remains in the owner's ignored local configuration.
+The directory is public and contains only the endpoint and P-256 public SPKI. The matching signer
+PEM remains in the owner's ignored local configuration and must never be committed. If the shared
+endpoint or signer changes, generate a new candidate with
+`deploy/device-bootstrap/scripts/render-local-contract.sh --out <absolute-new-directory>`, review it,
+and replace the complete published directory in one Git change. Do not publish a developer laptop's
+unreserved DHCP address or copy only one file from a candidate.

@@ -42,12 +42,13 @@ device-bootstrap-contract/
 ## 环境发布：候选先于替换，整包先于单文件
 
 `development` 和 `staging` 是 Contract 的规范环境名。口语中的“local”只指 Gateway 部署位置；其可复制的
-团队 Contract 目录仍是 `deploy/device-bootstrap/contracts/development/`，不是 `deploy/local/`。当前没有
-可供团队设备访问的稳定 development endpoint 和 shared local signer，因此该目录有意缺席。
+团队 Contract 目录仍是 `deploy/device-bootstrap/contracts/development/`，不是 `deploy/local/`。当前已发布的
+共享 development endpoint 是 `http://192.168.11.131:14081`，时间响应由 `time-development-g1` 对应的 owner-only
+signer 签名；Git 目录只保存公开 SPKI，不保存 signer 私钥。
 
 | Contract 环境 | Producer 输入 | 已发布位置 | 硬件规则 |
 | --- | --- | --- | --- |
-| `development` | 稳定可达的本地/LAN Gateway + owner-only P-256 signer | `deploy/device-bootstrap/contracts/development/`（输入具备后） | 仅显式 development firmware gate 可用 HTTP |
+| `development` | 稳定可达的本地/LAN Gateway + owner-only P-256 signer | `deploy/device-bootstrap/contracts/development/` | 仅显式 development firmware gate 可用 HTTP |
 | `staging` | CloudFormation public Outputs + KMS `GetPublicKey` + 受跟踪 CA | `deploy/device-bootstrap/contracts/staging/` | HTTPS、CA 与 `aws-kms` provenance 必须齐全 |
 | `production` | 正式 release authority | 受控 release artifact store | 不把 production 信任根当开发仓临时配置 |
 
