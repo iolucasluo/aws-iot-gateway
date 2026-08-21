@@ -9,6 +9,7 @@ from typing import Any
 ALLOWED_TASK_DEFINITIONS = {"APITaskDefinition", "WorkerTaskDefinition"}
 ALLOWED_ACTIONS = {"Add", "Modify"}
 REPLACEMENT_VALUES = {"False", "True", "Conditional"}
+ALLOWED_TASK_ROLE_REFERENCES = {"APITaskDefinition": "APITaskRole.Arn"}
 
 
 def validate_changes(document: dict[str, Any]) -> list[str]:
@@ -18,6 +19,16 @@ def validate_changes(document: dict[str, Any]) -> list[str]:
         return ["change set response must contain a Changes array"]
     if not changes:
         return ["change set Changes array must not be empty"]
+
+    non_replacing_roles = {
+        resource.get("LogicalResourceId")
+        for item in changes
+        if isinstance(item, dict)
+        and isinstance((resource := item.get("ResourceChange")), dict)
+        and resource.get("Action") == "Modify"
+        and resource.get("ResourceType") == "AWS::IAM::Role"
+        and resource.get("Replacement") == "False"
+    }
 
     for index, item in enumerate(changes):
         resource = item.get("ResourceChange") if isinstance(item, dict) else None
@@ -74,14 +85,26 @@ def validate_changes(document: dict[str, Any]) -> list[str]:
             if not isinstance(target, dict):
                 errors.append(f"replacement details are malformed for {logical_id}")
                 continue
-            if (
-                target.get("Attribute") != "Properties"
-                or target.get("Name") != "ContainerDefinitions"
-                or target.get("RequiresRecreation") != "Always"
-            ):
+            container_revision = (
+                target.get("Attribute") == "Properties"
+                and target.get("Name") == "ContainerDefinitions"
+                and target.get("RequiresRecreation") == "Always"
+            )
+            expected_role_reference = ALLOWED_TASK_ROLE_REFERENCES.get(logical_id)
+            role_reference_propagation = (
+                expected_role_reference is not None
+                and target.get("Attribute") == "Properties"
+                and target.get("Name") == "TaskRoleArn"
+                and target.get("RequiresRecreation") == "Always"
+                and detail.get("Evaluation") == "Dynamic"
+                and detail.get("ChangeSource") == "ResourceAttribute"
+                and detail.get("CausingEntity") == expected_role_reference
+                and expected_role_reference.removesuffix(".Arn") in non_replacing_roles
+            )
+            if not container_revision and not role_reference_propagation:
                 errors.append(
                     f"replacement for {logical_id} must be caused only by "
-                    "ContainerDefinitions requiring recreation"
+                    "ContainerDefinitions or an approved non-replacing task-role reference"
                 )
 
     return errors
