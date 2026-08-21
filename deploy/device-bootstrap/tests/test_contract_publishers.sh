@@ -103,6 +103,12 @@ for value in (
 if "openssl genpkey" in local:
     raise SystemExit("local Contract publisher must not silently create private keys")
 
+if "\ncd \"$ROOT\"\n" not in local or "go run ./cmd/device-service-bootstrap-contract" not in local:
+    raise SystemExit("local Contract publisher must run Go from the Gateway module root")
+
+if "\ncd \"$ROOT\"\n" not in staging or "go run ./cmd/device-service-bootstrap-contract" not in staging:
+    raise SystemExit("staging Contract publisher must run Go from the Gateway module root")
+
 for value in (
     "AWS_PROFILE",
     "AWS_REGION",
