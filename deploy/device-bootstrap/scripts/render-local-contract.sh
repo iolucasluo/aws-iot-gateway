@@ -42,7 +42,8 @@ else
     set --
 fi
 
-exec go run "$ROOT/cmd/device-service-bootstrap-contract" local \
+cd "$ROOT"
+exec go run ./cmd/device-service-bootstrap-contract local \
     --out "$OUTPUT" \
     --service-url "$DEVICE_SERVICE_BOOTSTRAP_SERVICE_URL" \
     --time-bootstrap-url "$DEVICE_SERVICE_BOOTSTRAP_TIME_URL" \

@@ -54,6 +54,76 @@ class ChangeSetGuardTests(unittest.TestCase):
 
         self.assertEqual(GUARD.validate_changes(changes), [])
 
+    def test_accepts_api_task_role_reference_propagation_without_role_replacement(self) -> None:
+        api_task = replacement("APITaskDefinition")
+        api_task["ResourceChange"]["Details"].append(
+            {
+                "Target": {
+                    "Attribute": "Properties",
+                    "Name": "TaskRoleArn",
+                    "RequiresRecreation": "Always",
+                },
+                "Evaluation": "Dynamic",
+                "ChangeSource": "ResourceAttribute",
+                "CausingEntity": "APITaskRole.Arn",
+            }
+        )
+        changes = {
+            "Changes": [
+                api_task,
+                {
+                    "ResourceChange": {
+                        "Action": "Modify",
+                        "LogicalResourceId": "APITaskRole",
+                        "ResourceType": "AWS::IAM::Role",
+                        "Replacement": "False",
+                    }
+                },
+            ]
+        }
+
+        self.assertEqual(GUARD.validate_changes(changes), [])
+
+    def test_rejects_task_role_reference_from_unapproved_role(self) -> None:
+        api_task = replacement("APITaskDefinition")
+        api_task["ResourceChange"]["Details"].append(
+            {
+                "Target": {
+                    "Attribute": "Properties",
+                    "Name": "TaskRoleArn",
+                    "RequiresRecreation": "Always",
+                },
+                "Evaluation": "Dynamic",
+                "ChangeSource": "ResourceAttribute",
+                "CausingEntity": "UnexpectedRole.Arn",
+            }
+        )
+
+        self.assertIn(
+            "approved non-replacing task-role reference",
+            " ".join(GUARD.validate_changes({"Changes": [api_task]})),
+        )
+
+    def test_rejects_task_role_reference_without_non_replacing_role_change(self) -> None:
+        api_task = replacement("APITaskDefinition")
+        api_task["ResourceChange"]["Details"].append(
+            {
+                "Target": {
+                    "Attribute": "Properties",
+                    "Name": "TaskRoleArn",
+                    "RequiresRecreation": "Always",
+                },
+                "Evaluation": "Dynamic",
+                "ChangeSource": "ResourceAttribute",
+                "CausingEntity": "APITaskRole.Arn",
+            }
+        )
+
+        self.assertIn(
+            "approved non-replacing task-role reference",
+            " ".join(GUARD.validate_changes({"Changes": [api_task]})),
+        )
+
     def test_rejects_resource_removal(self) -> None:
         changes = {
             "Changes": [

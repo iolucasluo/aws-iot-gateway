@@ -37,7 +37,8 @@ else
 fi
 
 export AWS_PROFILE AWS_REGION
-exec go run "$ROOT/cmd/device-service-bootstrap-contract" aws-release \
+cd "$ROOT"
+exec go run ./cmd/device-service-bootstrap-contract aws-release \
     --out "$OUTPUT" \
     --environment staging \
     --stack "$DEVICE_SERVICE_BOOTSTRAP_STACK" \

@@ -441,6 +441,9 @@ Resources:
                 Action: [s3:GetObject, s3:PutObject]
                 Resource: !Sub ${MediaBucket.Arn}/*
               - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt MediaBucket.Arn
+              - Effect: Allow
                 Action: [kms:GetPublicKey, kms:Sign]
                 Resource: !GetAtt TimeBootstrapKey.Arn
   WorkerTaskRole:
