@@ -154,7 +154,8 @@ func (service *Service) SendCommands(
 	}
 	results := make([]CommandResult, 0, len(commands))
 	for index, input := range commands {
-		if strings.TrimSpace(input.Code) == "" || len(input.Code) > 64 {
+		action := strings.TrimSpace(input.Code)
+		if action == "" || action == "local_media" || len(input.Code) > 64 {
 			return SendCommandsResult{}, ErrInvalidInput
 		}
 		sessionID := strings.TrimSpace(input.CommandID)
@@ -235,6 +236,62 @@ func (service *Service) SendCommands(
 		}
 	}
 	return SendCommandsResult{Results: results}, nil
+}
+
+// SendLocalMediaCommand publishes the one command whose payload contains temporary LAN media
+// credentials. It deliberately bypasses CommandRepository: the plaintext password exists only in
+// the request/response lifetime and the MQTT transport. The device ACK is expected to be redacted.
+func (service *Service) SendLocalMediaCommand(
+	ctx context.Context,
+	internalAppID, deviceSN, sessionID string,
+	value json.RawMessage,
+) (CommandResult, error) {
+	if service.publisher == nil || service.ackWaiter == nil || strings.TrimSpace(internalAppID) == "" ||
+		strings.TrimSpace(deviceSN) == "" || !topicPrefixRegexp.MatchString(service.topicPrefix) ||
+		len(sessionID) < 16 || len(sessionID) > 63 || len(value) == 0 || len(value) > 1024 {
+		return CommandResult{}, ErrInvalidInput
+	}
+	for _, character := range sessionID {
+		if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') && character != '_' && character != '-' {
+			return CommandResult{}, ErrInvalidInput
+		}
+	}
+	payload, err := commandPayload(CommandInput{Code: "local_media", Value: value}, sessionID)
+	if err != nil {
+		return CommandResult{}, ErrInvalidInput
+	}
+	body, err := marshalWithoutHTMLEscape(payload)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("marshal local media command: %w", err)
+	}
+	if err := service.publisher.Publish(ctx, "cmd/"+service.topicPrefix+"/"+deviceSN+"/req", body); err != nil {
+		return CommandResult{}, fmt.Errorf("%w: %v", ErrPublishFailed, err)
+	}
+	ack, err := service.ackWaiter.Wait(ctx, deviceSN, sessionID, commandACKTimeout)
+	if err != nil {
+		if errors.Is(err, ErrACKTimeout) || errors.Is(err, context.DeadlineExceeded) {
+			return CommandResult{}, ErrDeviceOffline
+		}
+		return CommandResult{}, err
+	}
+	code, ok := numericCode(ack["code"])
+	if !ok || ack["action"] != "local_media" || ack["session_id"] != sessionID {
+		return CommandResult{}, ErrInvalidDeviceResponse
+	}
+	switch code {
+	case -2:
+		return CommandResult{}, ErrDeviceBusy
+	case 0:
+		return CommandResult{
+			Code: "local_media", Status: "success", CommandID: sessionID, Data: ack,
+		}, nil
+	default:
+		return CommandResult{
+			Code: "local_media", Status: "error", CommandID: sessionID, Data: ack,
+			Reason: fmt.Sprintf("device rejected command with code %d", code),
+		}, nil
+	}
 }
 
 func parsePTZStatus(data map[string]any, expectedSessionID string) (PTZStatus, error) {

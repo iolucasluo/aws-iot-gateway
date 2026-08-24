@@ -87,6 +87,58 @@ func TestSendCommandsPreservesLivPetPayloadAndResponseShape(t *testing.T) {
 	}
 }
 
+func TestSendLocalMediaCommandKeepsTemporaryCredentialsOutOfCommandRepository(t *testing.T) {
+	t.Parallel()
+	publisher := &publisherStub{}
+	repository := &commandRepositoryStub{}
+	service := NewService(publisher, ackWaiterStub{ack: map[string]any{
+		"action": "local_media", "session_id": "local-media-session-0001", "code": float64(0),
+		"state": "ready",
+	}}, repository, "aws-iot-gateway-staging", nil)
+	value := json.RawMessage(`{"contract_version":"local-media.v1","op":"open","protocol":"onvif","revision":1718000000000,"lease_seconds":300,"expires_at_epoch_sec":1718000300,"credential_generation":"generation_00000001","username":"onvif_user","password":"abcdefghijklmnopqrstuvwxyzABCDEF012345"}`)
+
+	result, err := service.SendLocalMediaCommand(
+		context.Background(), "livpet-staging", "fdr-0001", "local-media-session-0001", value,
+	)
+	if err != nil {
+		t.Fatalf("SendLocalMediaCommand() error = %v", err)
+	}
+	if len(repository.commands) != 0 {
+		t.Fatalf("ephemeral local media secret was persisted: %#v", repository.commands)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(publisher.payload, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload["action"] != "local_media" || payload["session_id"] != "local-media-session-0001" ||
+		payload["password"] != "abcdefghijklmnopqrstuvwxyzABCDEF012345" {
+		t.Fatalf("published payload = %#v", payload)
+	}
+	if result.Status != "success" || result.CommandID != "local-media-session-0001" ||
+		result.Data["state"] != "ready" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestSendCommandsRejectsLocalMediaBeforePersistenceOrPublish(t *testing.T) {
+	t.Parallel()
+	publisher := &publisherStub{}
+	repository := &commandRepositoryStub{}
+	service := NewService(publisher, ackWaiterStub{}, repository,
+		"aws-iot-gateway-staging", func() (string, error) { return "must-not-run", nil })
+
+	_, err := service.SendCommands(
+		context.Background(), "livpet-staging", "device-id", "fdr-0001",
+		[]CommandInput{{Code: "local_media", Value: json.RawMessage(`{"password":"must-not-persist"}`)}}, true,
+	)
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("SendCommands() error = %v, want ErrInvalidInput", err)
+	}
+	if len(repository.commands) != 0 || len(publisher.payload) != 0 {
+		t.Fatalf("generic local media mutated repository=%#v or published=%s", repository.commands, publisher.payload)
+	}
+}
+
 func TestGetShadowReturnsReportedProjectionWithoutAWSMetadata(t *testing.T) {
 	t.Parallel()
 	publisher := &shadowPublisherStub{shadow: []byte(`{

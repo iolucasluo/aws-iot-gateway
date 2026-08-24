@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -148,11 +150,14 @@ func TestMigrateUpgradesLegacySquashedInitialWithoutDroppingData(t *testing.T) {
 	}
 
 	var productName, productStatus string
-	if err := pool.QueryRow(ctx, `SELECT name, status FROM products WHERE pid='feeder-x1'`).Scan(&productName, &productStatus); err != nil {
+	var capabilities []byte
+	if err := pool.QueryRow(ctx, `SELECT name, status, capabilities FROM products WHERE pid='feeder-x1'`).Scan(
+		&productName, &productStatus, &capabilities,
+	); err != nil {
 		t.Fatalf("legacy feeder product was not preserved: %v", err)
 	}
-	if productName != "Feeder X1" || productStatus != "active" {
-		t.Fatalf("legacy feeder product = %q/%q", productName, productStatus)
+	if productName != "Feeder X1" || productStatus != "active" || string(capabilities) != "[]" {
+		t.Fatalf("legacy feeder product = %q/%q capabilities=%s", productName, productStatus, capabilities)
 	}
 
 	rows, err := pool.Query(ctx, `SELECT id::text, pid FROM device_activations ORDER BY id`)
@@ -237,24 +242,32 @@ func TestProductSeedIsExplicitAndIdempotent(t *testing.T) {
 
 	applyProductSeeds(t, ctx, pool)
 	applyProductSeeds(t, ctx, pool)
-	rows, err := pool.Query(ctx, `SELECT pid FROM products WHERE status='active' ORDER BY pid`)
+	rows, err := pool.Query(ctx, `SELECT pid, capabilities FROM products WHERE status='active' ORDER BY pid`)
 	if err != nil {
 		t.Fatalf("list seeded products: %v", err)
 	}
 	defer rows.Close()
-	var products []string
+	products := make(map[string][]string)
 	for rows.Next() {
 		var pid string
-		if err := rows.Scan(&pid); err != nil {
+		var capabilities []byte
+		if err := rows.Scan(&pid, &capabilities); err != nil {
 			t.Fatalf("scan product pid: %v", err)
 		}
-		products = append(products, pid)
+		var capabilityIDs []string
+		if err := json.Unmarshal(capabilities, &capabilityIDs); err != nil {
+			t.Fatalf("decode %s capabilities: %v", pid, err)
+		}
+		slices.Sort(capabilityIDs)
+		products[pid] = capabilityIDs
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate product pids: %v", err)
 	}
-	want := []string{"feeder-x1", "minion-cam-x1"}
-	if len(products) != len(want) || products[0] != want[0] || products[1] != want[1] {
-		t.Fatalf("seeded products = %v, want %v", products, want)
+	if !slices.Equal(products["feeder-x1"], []string{"local-media.v1", "ptz.v1", "webrtc.v1"}) {
+		t.Fatalf("feeder capabilities = %v", products["feeder-x1"])
+	}
+	if !slices.Equal(products["minion-cam-x1"], []string{"webrtc.v1"}) {
+		t.Fatalf("minion capabilities = %v", products["minion-cam-x1"])
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -131,9 +132,98 @@ func TestInternalAPIListsActiveDeviceProducts(t *testing.T) {
 		if _, found := product["name"]; !found {
 			t.Fatalf("product wire keys = %#v, want lowercase name", product)
 		}
+		if _, found := product["capabilities"]; !found {
+			t.Fatalf("product wire keys = %#v, want explicit capabilities", product)
+		}
 		if _, found := product["PID"]; found {
 			t.Fatalf("product wire keys = %#v, must not expose Go field names", product)
 		}
+	}
+}
+
+func TestInternalAPILocalMediaSessionUsesTypedNoStoreContract(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1_718_000_000, 0).UTC()
+	bindingRepository := &httpBindingRepository{binding: binding.Binding{
+		ID: "018f0000-0000-7000-8000-000000000002", DeviceID: "018f0000-0000-7000-8000-000000000001",
+		DeviceSN: "fdr-00000000000000000000000000000001", PID: "feeder-x1",
+		InternalAppID: "livpet-staging", Active: true,
+	}}
+	bindingRepository.token = binding.DeviceToken{
+		BindingID: bindingRepository.binding.ID, TokenHash: binding.HashToken("device-token-local-media"),
+		ExpiresAt: now.Add(time.Hour),
+	}
+	bindingService := binding.NewService(bindingRepository, nil, func() time.Time { return now }, nil)
+	commander := &httpLocalMediaCommander{}
+	revisions := &httpLocalMediaRevision{next: now.UnixMilli()}
+	activationService := activation.NewService()
+	localMedia := media.NewLocalMediaService(
+		commander, revisions, activationService, func() time.Time { return now },
+		func() (media.LocalMediaCredentials, error) {
+			return media.LocalMediaCredentials{
+				SessionID: "local_media_session_000001", Generation: "generation_000000000001",
+				Username: "onvif_user", Password: "abcdefghijklmnopqrstuvwxyzABCDEF012345",
+			}, nil
+		},
+	)
+	handler := newSignedTestHandler(t, activationService, now, Dependencies{
+		Binding: bindingService, LocalMedia: localMedia,
+	})
+	path := "/api/v1/openapi/devices/" + bindingRepository.binding.DeviceSN + "/local-media-sessions"
+	zeroLeaseRequest := signedInternalRequest(
+		t, now, "nonce-local-media-zero", http.MethodPost, path, []byte(`{"lease_seconds":0}`),
+	)
+	zeroLeaseRequest.Header.Set("X-Device-Token", "device-token-local-media")
+	zeroLeaseResponse := httptest.NewRecorder()
+	handler.ServeHTTP(zeroLeaseResponse, zeroLeaseRequest)
+	if zeroLeaseResponse.Code != http.StatusBadRequest || commander.calls != 0 {
+		t.Fatalf(
+			"explicit zero lease = %d %s, calls=%d",
+			zeroLeaseResponse.Code, zeroLeaseResponse.Body.String(), commander.calls,
+		)
+	}
+	trailingJSONRequest := signedInternalRequest(
+		t, now, "nonce-local-media-trailing", http.MethodPost, path,
+		[]byte(`{"lease_seconds":300}{}`),
+	)
+	trailingJSONRequest.Header.Set("X-Device-Token", "device-token-local-media")
+	trailingJSONResponse := httptest.NewRecorder()
+	handler.ServeHTTP(trailingJSONResponse, trailingJSONRequest)
+	if trailingJSONResponse.Code != http.StatusBadRequest || commander.calls != 0 {
+		t.Fatalf(
+			"trailing JSON = %d %s, calls=%d",
+			trailingJSONResponse.Code, trailingJSONResponse.Body.String(), commander.calls,
+		)
+	}
+
+	request := signedInternalRequest(t, now, "nonce-local-media-open", http.MethodPost, path, []byte(`{"lease_seconds":300}`))
+	request.Header.Set("X-Device-Token", "device-token-local-media")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated || response.Header().Get("Cache-Control") != "no-store" ||
+		response.Header().Get("Pragma") != "no-cache" {
+		t.Fatalf("local media open = %d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
+	}
+	var opened media.LocalMediaSession
+	if err := json.Unmarshal(response.Body.Bytes(), &opened); err != nil {
+		t.Fatalf("decode local media response: %v", err)
+	}
+	if opened.ContractVersion != media.LocalMediaContractVersion || opened.Protocol != "onvif" ||
+		opened.Credentials.Generation != "generation_000000000001" || opened.Credentials.Password == "" ||
+		opened.ONVIFEndpoint != "http://192.168.10.20:8081/onvif/device_service" {
+		t.Fatalf("local media response = %#v", opened)
+	}
+
+	closeBody := []byte(`{"credential_generation":"generation_000000000001"}`)
+	closeRequest := signedInternalRequest(t, now, "nonce-local-media-close", http.MethodDelete, path, closeBody)
+	closeRequest.Header.Set("X-Device-Token", "device-token-local-media")
+	closeResponse := httptest.NewRecorder()
+	handler.ServeHTTP(closeResponse, closeRequest)
+	if closeResponse.Code != http.StatusOK || closeResponse.Header().Get("Cache-Control") != "no-store" ||
+		!bytes.Contains(closeResponse.Body.Bytes(), []byte(`"state":"disabled"`)) || commander.calls != 2 {
+		t.Fatalf("local media close = %d %s, calls=%d", closeResponse.Code, closeResponse.Body.String(), commander.calls)
 	}
 }
 
@@ -921,6 +1011,43 @@ type httpPublisher struct {
 	payload []byte
 }
 
+type httpLocalMediaRevision struct{ next int64 }
+
+func (store *httpLocalMediaRevision) Next(_ context.Context, _ string, _ int64) (int64, error) {
+	store.next++
+	return store.next, nil
+}
+
+type httpLocalMediaCommander struct{ calls int }
+
+func (commander *httpLocalMediaCommander) SendLocalMediaCommand(
+	_ context.Context, _, _ string, sessionID string, value json.RawMessage,
+) (devicemodule.CommandResult, error) {
+	commander.calls++
+	var command map[string]any
+	if err := json.Unmarshal(value, &command); err != nil {
+		return devicemodule.CommandResult{}, err
+	}
+	ack := map[string]any{
+		"action": "local_media", "session_id": sessionID, "code": float64(0),
+		"contract_version": media.LocalMediaContractVersion, "protocol": "onvif",
+		"result": "applied", "revision": command["revision"],
+	}
+	if command["op"] == "open" {
+		ack["state"] = "ready"
+		ack["expires_at_epoch_sec"] = command["expires_at_epoch_sec"]
+		ack["credential_generation"] = command["credential_generation"]
+		ack["credential_fingerprint"] = "6817555eaff81377795f73a709a82ae1b4dec9d3655b24cb92a7312776d57b9f"
+		ack["onvif_endpoint"] = "http://192.168.10.20:8081/onvif/device_service"
+		ack["rtsp_base_uri"] = "rtsp://192.168.10.20:554"
+	} else {
+		ack["state"] = "disabled"
+	}
+	return devicemodule.CommandResult{
+		Code: "local_media", Status: "success", CommandID: sessionID, Data: ack,
+	}, nil
+}
+
 type httpRecommissioner struct {
 	receipt    binding.ResetReceipt
 	err        error
@@ -1138,5 +1265,34 @@ func TestWriteMediaErrorReportsSnapshotProcessingFailure(t *testing.T) {
 	if response.Code != http.StatusServiceUnavailable ||
 		!bytes.Contains(response.Body.Bytes(), []byte(`"error_code":"snapshot_processing_failed"`)) {
 		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestWriteLocalMediaErrorDoesNotMislabelProductOrInfrastructureFailuresAsKVS(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name       string
+		err        error
+		statusCode int
+		errorCode  string
+	}{
+		{
+			name: "unknown product", err: activation.ErrProductUnavailable,
+			statusCode: http.StatusConflict, errorCode: "local_media_unsupported",
+		},
+		{
+			name: "infrastructure failure", err: errors.New("redis unavailable"),
+			statusCode: http.StatusServiceUnavailable, errorCode: "local_media_unavailable",
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			writeLocalMediaError(response, testCase.err)
+			if response.Code != testCase.statusCode ||
+				!bytes.Contains(response.Body.Bytes(), []byte(`"error_code":"`+testCase.errorCode+`"`)) {
+				t.Fatalf("response = %d %s", response.Code, response.Body.String())
+			}
+		})
 	}
 }

@@ -24,6 +24,7 @@ type server struct {
 	device        *devicemodule.Service
 	events        *events.QueryService
 	media         *media.StreamService
+	localMedia    *media.LocalMediaService
 	assets        *media.AssetService
 	verifier      *internalauth.Verifier
 	timeBootstrap TimeBootstrapService
@@ -47,6 +48,7 @@ type Dependencies struct {
 	Device               *devicemodule.Service
 	Events               *events.QueryService
 	Media                *media.StreamService
+	LocalMedia           *media.LocalMediaService
 	Assets               *media.AssetService
 	TimeBootstrap        TimeBootstrapService
 	TimeBootstrapLimiter TimeBootstrapLimiter
@@ -60,7 +62,8 @@ func NewInternalAPI(service *activation.Service, verifier *internalauth.Verifier
 	}
 	return server{
 		activation: service, binding: dependency.Binding, device: dependency.Device,
-		events: dependency.Events, media: dependency.Media, assets: dependency.Assets, verifier: verifier,
+		events: dependency.Events, media: dependency.Media, localMedia: dependency.LocalMedia,
+		assets: dependency.Assets, verifier: verifier,
 		timeBootstrap: dependency.TimeBootstrap, bootstrapRate: dependency.TimeBootstrapLimiter,
 		deviceRuntime: dependency.DeviceRuntime,
 	}
@@ -148,6 +151,8 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		(operation == "events" && request.Method == http.MethodGet) ||
 		(operation == "streams" && len(parts) == 2 && request.Method == http.MethodPost) ||
 		(operation == "streams" && len(parts) == 3 && request.Method == http.MethodDelete) ||
+		(operation == "local-media-sessions" && len(parts) == 2 &&
+			(request.Method == http.MethodPost || request.Method == http.MethodDelete)) ||
 		(operation == "snapshots" && len(parts) == 2 && request.Method == http.MethodPost) ||
 		(operation == "snapshots" && len(parts) == 3 && request.Method == http.MethodGet) ||
 		(operation == "recordings" && len(parts) == 2 && (request.Method == http.MethodPost || request.Method == http.MethodGet)) ||
@@ -327,6 +332,51 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		}
 		writer.Header().Set("Cache-Control", "no-store")
 		writer.Header().Set("Pragma", "no-cache")
+		writeJSON(writer, http.StatusCreated, result)
+		return true
+	case "local-media-sessions":
+		writer.Header().Set("Cache-Control", "no-store")
+		writer.Header().Set("Pragma", "no-cache")
+		if s.localMedia == nil {
+			writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "local media service is unavailable")
+			return true
+		}
+		if request.Method == http.MethodDelete {
+			var body struct {
+				CredentialGeneration string `json:"credential_generation"`
+			}
+			if !decodeJSON(writer, request, &body) {
+				return true
+			}
+			result, err := s.localMedia.Close(
+				request.Context(), principal.InternalAppID, ownedBinding.PID, ownedBinding.DeviceSN,
+				body.CredentialGeneration,
+			)
+			if err != nil {
+				writeLocalMediaError(writer, err)
+				return true
+			}
+			writeJSON(writer, http.StatusOK, result)
+			return true
+		}
+		var body struct {
+			LeaseSeconds *int `json:"lease_seconds"`
+		}
+		if !decodeOptionalJSON(writer, request, &body) {
+			return true
+		}
+		leaseSeconds := 300
+		if body.LeaseSeconds != nil {
+			leaseSeconds = *body.LeaseSeconds
+		}
+		result, err := s.localMedia.Create(
+			request.Context(), principal.InternalAppID, ownedBinding.PID, ownedBinding.DeviceSN,
+			leaseSeconds,
+		)
+		if err != nil {
+			writeLocalMediaError(writer, err)
+			return true
+		}
 		writeJSON(writer, http.StatusCreated, result)
 		return true
 	case "snapshots":
@@ -923,6 +973,10 @@ func decodeJSON(writer http.ResponseWriter, request *http.Request, target any) b
 		writeError(writer, http.StatusBadRequest, "invalid_request", "request body is invalid")
 		return false
 	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "request body is invalid")
+		return false
+	}
 	return true
 }
 
@@ -984,8 +1038,35 @@ func writeMediaError(writer http.ResponseWriter, err error) {
 		writeError(writer, http.StatusConflict, "recording_rejected", "device rejected recording start")
 	case errors.Is(err, devicemodule.ErrDeviceOffline):
 		writeError(writer, http.StatusConflict, "device_offline", "device is offline")
+	case errors.Is(err, devicemodule.ErrDeviceBusy):
+		writeError(writer, http.StatusConflict, "device_busy", "device is busy")
+	case errors.Is(err, devicemodule.ErrPublishFailed):
+		writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "device command could not be published")
 	default:
 		writeError(writer, http.StatusServiceUnavailable, "kvs_unavailable", "WebRTC playback is unavailable")
+	}
+}
+
+func writeLocalMediaError(writer http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, media.ErrInvalidInput), errors.Is(err, activation.ErrInvalidInput):
+		writeError(writer, http.StatusBadRequest, "invalid_request", "local media request is invalid")
+	case errors.Is(err, media.ErrLocalMediaUnsupported),
+		errors.Is(err, activation.ErrProductUnavailable):
+		writeError(writer, http.StatusConflict, "local_media_unsupported", "product does not support local media")
+	case errors.Is(err, media.ErrLocalMediaRejected):
+		writeError(writer, http.StatusConflict, "local_media_rejected", "device rejected local media")
+	case errors.Is(err, media.ErrInvalidLocalMediaResponse),
+		errors.Is(err, devicemodule.ErrInvalidDeviceResponse):
+		writeError(writer, http.StatusBadGateway, "invalid_local_media_response", "device local media response is invalid")
+	case errors.Is(err, devicemodule.ErrDeviceOffline):
+		writeError(writer, http.StatusConflict, "device_offline", "device is offline")
+	case errors.Is(err, devicemodule.ErrDeviceBusy):
+		writeError(writer, http.StatusConflict, "device_busy", "device is busy")
+	case errors.Is(err, devicemodule.ErrPublishFailed):
+		writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "device command could not be published")
+	default:
+		writeError(writer, http.StatusServiceUnavailable, "local_media_unavailable", "local media is unavailable")
 	}
 }
 
