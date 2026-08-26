@@ -93,7 +93,7 @@ Contract candidate。脚本不自动执行二进制回退；migration 是 forwar
    test "$seed_exit_code" = "0"
    ```
 
-7. Verify `/healthz`, the `TimeBootstrapURL` stack output, and the signed staging smoke below. The smoke now requires both active PIDs (`feeder-x1`, `minion-cam-x1`) before checking device isolation; an empty catalog fails deployment verification.
+7. Verify `/healthz`, the `TimeBootstrapURL` stack output, and the signed staging smoke below. The smoke now requires all active PIDs (`feeder-x1`, `lamp-x1`, `minion-cam-x1`) before checking device isolation; an incomplete catalog fails deployment verification.
 8. Run `AWS_PROFILE=explorex-staging-hk AWS_REGION=ap-east-1 ./deploy/device-bootstrap/scripts/render-staging-contract.sh --out /tmp/device-bootstrap-contract-staging-next`. Review the candidate, then manually replace and commit `deploy/device-bootstrap/contracts/staging/`. Taixin/Anyka/Dell copy that public Git directory; do not give their build hosts AWS credentials or the KMS signing authority.
 
 After a deployment, run the owner-side HMAC v1 smoke from the Gateway repository:

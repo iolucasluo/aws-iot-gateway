@@ -16,6 +16,7 @@ func TestProductSeedDefinesGatewayActivationCatalog(t *testing.T) {
 	for _, fragment := range []string{
 		"INSERT INTO products (id, pid, name, status)",
 		"'feeder-x1'",
+		"'lamp-x1'",
 		"'minion-cam-x1'",
 		"ON CONFLICT (pid) DO NOTHING",
 	} {

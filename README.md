@@ -133,7 +133,7 @@ go run ./cmd/aws-iot-gateway
 ```
 
 `aws-iot-gateway-db-seed` 是 development/staging 的显式一次性初始化命令：它先幂等执行 migration，再事务执行
-`db/seeds/`，当前写入 `feeder-x1` 和 `minion-cam-x1`。API/worker 启动不会自动 seed；漏掉该步骤时产品目录为空、
+`db/seeds/`，当前写入 `feeder-x1`、`lamp-x1` 和 `minion-cam-x1`。API/worker 启动不会自动 seed；漏掉该步骤时产品目录为空、
 activation 必然返回 `product_unavailable`。该命令拒绝空环境和 `production`。详细边界见
 [db/seeds/README.md](db/seeds/README.md)，staging 一次性 ECS 执行方式见
 [deploy/staging/README.md](deploy/staging/README.md)。

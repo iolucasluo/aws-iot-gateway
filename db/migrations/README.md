@@ -13,7 +13,7 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或�
   `gateway_schema_migrations`；`.down.sql` 永不自动执行。
 - `001_initial.sql` 必须保持 Gateway 窄域业务边界，同时继承 explorex-api 的精确表/FK/索引命名、
   `updated_at` trigger、数据库硬约束与 schema contract test 规范。
-- migration 通常只定义 schema，不写产品数据；development/staging 的两条 active PID 由
+- migration 通常只定义 schema，不写产品数据；development/staging 的 active PID 由
   `aws-iot-gateway-db-seed` 显式执行 `../seeds/001_products.sql` 初始化。唯一例外是 `002` 在识别到旧版
   pre-production `001_initial.sql` 时回填其历史上唯一合法的 `feeder-x1`，以便在不删除旧 activation/registry
   数据的前提下建立 PID 外键；fresh schema 不执行该数据回填。

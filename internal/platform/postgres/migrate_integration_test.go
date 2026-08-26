@@ -253,8 +253,13 @@ func TestProductSeedIsExplicitAndIdempotent(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate product pids: %v", err)
 	}
-	want := []string{"feeder-x1", "minion-cam-x1"}
-	if len(products) != len(want) || products[0] != want[0] || products[1] != want[1] {
+	want := []string{"feeder-x1", "lamp-x1", "minion-cam-x1"}
+	if len(products) != len(want) {
 		t.Fatalf("seeded products = %v, want %v", products, want)
+	}
+	for index := range want {
+		if products[index] != want[index] {
+			t.Fatalf("seeded products = %v, want %v", products, want)
+		}
 	}
 }
