@@ -6,7 +6,7 @@
 
 | 编号 | 文件 | 说明 |
 |---|---|---|
-| 001 | `001_products.sql` | active 产品 PID：`feeder-x1`、`minion-cam-x1` |
+| 001 | `001_products.sql` | active 产品 PID：`feeder-x1`、`lamp-x1`、`minion-cam-x1` |
 
 由获授权的非生产数据库操作者显式执行仓库命令；命令会先幂等完成 migration，再按文件名顺序在单个事务中
 执行所有 seed：

@@ -20,6 +20,10 @@ func NewMemoryRepository() *MemoryRepository {
 				PID: "feeder-x1", Name: "Feeder X1",
 				Capabilities: []string{"webrtc.v1", "local-media.v1", "ptz.v1"},
 			},
+			"lamp-x1": {
+				PID: "lamp-x1", Name: "Lamp X1",
+				Capabilities: []string{},
+			},
 			"minion-cam-x1": {
 				PID: "minion-cam-x1", Name: "Minion Cam X1",
 				Capabilities: []string{"webrtc.v1"},

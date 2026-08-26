@@ -16,6 +16,7 @@ func TestProductSeedDefinesGatewayActivationCatalog(t *testing.T) {
 	for _, fragment := range []string{
 		"INSERT INTO products (id, pid, name, status, capabilities)",
 		"'feeder-x1'",
+		"'lamp-x1'",
 		"'minion-cam-x1'",
 		`'["webrtc.v1", "local-media.v1", "ptz.v1"]'::jsonb`,
 		`'["webrtc.v1"]'::jsonb`,

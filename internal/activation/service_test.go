@@ -109,6 +109,28 @@ func TestPrepareRequiresTheIssuedCodeAndReturnsOnlyADeviceInstallPayload(t *test
 	}
 }
 
+func TestLampActivationPreservesProductPIDThroughInstallation(t *testing.T) {
+	t.Parallel()
+
+	service := NewServiceWith(fakeProvisioner{})
+	input := testCreateInput(MethodBLE)
+	input.PID = "lamp-x1"
+	input.IdempotencyKey = "lamp-product-identity"
+	created, err := service.Create(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	installation, err := service.Prepare(context.Background(), PrepareInput{
+		ActivationID: created.ID, Code: created.Code, CSRPEM: "lamp-csr", ExpectedMethod: MethodBLE,
+	})
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if created.PID != "lamp-x1" || installation.PID != "lamp-x1" {
+		t.Fatalf("lamp PID lost across activation: created=%q installation=%q", created.PID, installation.PID)
+	}
+}
+
 func TestPrepareGeneratesDeviceSNBeforeAWSProvisioning(t *testing.T) {
 	t.Parallel()
 

@@ -122,9 +122,10 @@ func TestInternalAPIListsActiveDeviceProducts(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode catalog: %v", err)
 	}
-	if len(payload.Products) != 2 {
-		t.Fatalf("catalog products = %#v, want two named products", payload.Products)
+	if len(payload.Products) != 3 {
+		t.Fatalf("catalog products = %#v, want three named products", payload.Products)
 	}
+	var lampFound bool
 	for _, product := range payload.Products {
 		if _, found := product["pid"]; !found {
 			t.Fatalf("product wire keys = %#v, want lowercase pid", product)
@@ -138,6 +139,12 @@ func TestInternalAPIListsActiveDeviceProducts(t *testing.T) {
 		if _, found := product["PID"]; found {
 			t.Fatalf("product wire keys = %#v, must not expose Go field names", product)
 		}
+		if string(product["pid"]) == `"lamp-x1"` && string(product["name"]) == `"Lamp X1"` {
+			lampFound = true
+		}
+	}
+	if !lampFound {
+		t.Fatalf("catalog products = %#v, want lamp-x1", payload.Products)
 	}
 }
 
@@ -864,7 +871,7 @@ func TestDevicePrepareUsesCompatibilityDeviceActivationPath(t *testing.T) {
 	service := activation.NewServiceWith(testProvisioner{})
 	created, err := service.Create(context.Background(), activation.CreateInput{
 		InternalAppID: "livpet-staging", BindingExternalUserID: "user-42",
-		IdempotencyKey: "operation-qr", Method: activation.MethodQR, PID: "feeder-x1",
+		IdempotencyKey: "operation-qr", Method: activation.MethodQR, PID: "lamp-x1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -891,7 +898,7 @@ func TestDevicePrepareUsesCompatibilityDeviceActivationPath(t *testing.T) {
 		t.Fatalf("installation = %#v", installation)
 	}
 	for key, expected := range map[string]string{
-		"device_id": deviceSN, "aws_region": "ap-east-1",
+		"device_id": deviceSN, "pid": "lamp-x1", "aws_region": "ap-east-1",
 		"aws_iot_credential_endpoint": "example.credentials.iot.ap-east-1.amazonaws.com",
 		"aws_iot_role_alias":          "aws-iot-gateway-staging-kvs",
 		"topic_prefix":                "aws-iot-gateway-staging", "aws_iot_shadow_name": "internal-aws",
