@@ -13,7 +13,7 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或�
   `gateway_schema_migrations`；`.down.sql` 永不自动执行。
 - `001_initial.sql` 必须保持 Gateway 窄域业务边界，同时继承 explorex-api 的精确表/FK/索引命名、
   `updated_at` trigger、数据库硬约束与 schema contract test 规范。
-- migration 通常只定义 schema，不写产品数据；development/staging 的两条 active PID 由
+- migration 通常只定义 schema，不写产品数据；development/staging 的 active PID 由
   `aws-iot-gateway-db-seed` 显式执行 `../seeds/001_products.sql` 初始化。唯一例外是 `002` 在识别到旧版
   pre-production `001_initial.sql` 时回填其历史上唯一合法的 `feeder-x1`，以便在不删除旧 activation/registry
   数据的前提下建立 PID 外键；fresh schema 不执行该数据回填。
@@ -22,7 +22,7 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或�
 
 | 表 | 用途 | PK | 主要 FK / 删除语义 |
 |---|---|---|---|
-| `products` | 只读激活产品目录（PID、名称、active/disabled） | `id` | 被 registry/activation 以 PID RESTRICT 引用 |
+| `products` | 只读激活产品目录（PID、名称、状态、App 可消费的能力 ID） | `id` | 被 registry/activation 以 PID RESTRICT 引用 |
 | `device_registry` | 设备运行权威记录、ThingName、证书与 presence | `id` | — |
 | `device_activations` | internal app 用户激活 saga | `id` | `device_registry_id → device_registry`（nullable, RESTRICT） |
 | `device_activation_sessions` | activation 安装 session | `id` | `device_activation_id → device_activations`（CASCADE） |
@@ -52,3 +52,5 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或�
 - `002_legacy_product_catalog`：只对已登记旧版 `001_initial.sql` 且缺少 `device_activations.pid` 的 schema
   生效；创建最小产品目录、回填旧 activation PID、移除 registry 的隐式默认 PID，并建立 registry/activation
   到 `products(pid)` 的 RESTRICT 外键。fresh schema 为 no-op；为避免丢失历史数据，不提供自动 down。
+- `003_product_capabilities`：为已经应用旧 001/002 的产品目录补充只读 JSON capability ID 数组；fresh schema
+  已由 001 直接包含同一字段与约束。

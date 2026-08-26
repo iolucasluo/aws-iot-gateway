@@ -10,9 +10,11 @@ type ackSinkStub struct {
 	deviceSN string
 	session  string
 	ack      map[string]any
+	calls    int
 }
 
 func (sink *ackSinkStub) Store(_ context.Context, deviceSN, sessionID string, ack map[string]any, _ time.Duration) error {
+	sink.calls++
 	sink.deviceSN, sink.session, sink.ack = deviceSN, sessionID, ack
 	return nil
 }
@@ -57,6 +59,54 @@ func TestIngestRoutesCommandACKByExactEnvironmentTopic(t *testing.T) {
 	}
 	if sink.deviceSN != "fdr-0001" || sink.session != "session-1" || sink.ack["action"] != "feed" {
 		t.Fatalf("sink = %#v", sink)
+	}
+}
+
+func TestIngestRejectsLocalMediaACKBeforeSinkWhenPayloadCouldPersistSecrets(t *testing.T) {
+	t.Parallel()
+
+	for _, payload := range []string{
+		`{"topic":"cmd/aws-iot-gateway-staging/fdr-0001/res","action":"local_media","session_id":"lm_0123456789abcdef0123456789abcdef","code":0,"password":"must-not-persist"}`,
+		`{"topic":"cmd/aws-iot-gateway-staging/fdr-0001/res","action":"local_media","session_id":"lm_0123456789abcdef0123456789abcdef","code":0,"unexpected":{"username":"must-not-persist"}}`,
+		`{"topic":"cmd/aws-iot-gateway-staging/fdr-0001/res","action":"feed","session_id":"lm_0123456789abcdef0123456789abcdef","code":0,"password":"must-not-persist"}`,
+	} {
+		sink := &ackSinkStub{}
+		service, err := NewIngestService("aws-iot-gateway-staging", sink, &eventRepositoryStub{})
+		if err != nil {
+			t.Fatalf("NewIngestService() error = %v", err)
+		}
+		if err := service.Handle(context.Background(), []byte(payload)); err == nil {
+			t.Fatalf("Handle() accepted secret-bearing local-media ACK: %s", payload)
+		}
+		if sink.calls != 0 || sink.ack != nil {
+			t.Fatalf("secret-bearing local-media ACK reached sink: calls=%d ack=%#v", sink.calls, sink.ack)
+		}
+	}
+}
+
+func TestIngestStoresOnlyContractShapedSecretFreeLocalMediaACK(t *testing.T) {
+	t.Parallel()
+
+	sink := &ackSinkStub{}
+	service, err := NewIngestService("aws-iot-gateway-staging", sink, &eventRepositoryStub{})
+	if err != nil {
+		t.Fatalf("NewIngestService() error = %v", err)
+	}
+	payload := []byte(`{
+		"topic":"cmd/aws-iot-gateway-staging/fdr-0001/res",
+		"action":"local_media","session_id":"lm_0123456789abcdef0123456789abcdef","code":0,
+		"contract_version":"local-media.v1","protocol":"onvif","result":"applied",
+		"state":"ready","revision":1718000000001,"expires_at_epoch_sec":1718000300,
+		"credential_generation":"generation_000000000001",
+		"credential_fingerprint":"6817555eaff81377795f73a709a82ae1b4dec9d3655b24cb92a7312776d57b9f",
+		"onvif_endpoint":"http://192.168.10.20:8081/onvif/device_service",
+		"rtsp_base_uri":"rtsp://192.168.10.20:554"
+	}`)
+	if err := service.Handle(context.Background(), payload); err != nil {
+		t.Fatalf("Handle() valid local-media ACK error = %v", err)
+	}
+	if sink.calls != 1 || sink.ack["state"] != "ready" {
+		t.Fatalf("valid local-media ACK was not stored once: calls=%d ack=%#v", sink.calls, sink.ack)
 	}
 }
 

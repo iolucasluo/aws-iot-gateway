@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -24,20 +25,24 @@ func NewActivationRepository(pool *pgxpool.Pool) (*ActivationRepository, error) 
 
 func (repository *ActivationRepository) FindActiveProduct(ctx context.Context, pid string) (activation.Product, error) {
 	var product activation.Product
+	var capabilities []byte
 	if err := repository.pool.QueryRow(ctx, `
-		SELECT pid, name FROM products WHERE pid=$1 AND status='active'
-	`, pid).Scan(&product.PID, &product.Name); err != nil {
+		SELECT pid, name, capabilities FROM products WHERE pid=$1 AND status='active'
+	`, pid).Scan(&product.PID, &product.Name, &capabilities); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return activation.Product{}, activation.ErrProductUnavailable
 		}
 		return activation.Product{}, fmt.Errorf("find active product: %w", err)
+	}
+	if err := json.Unmarshal(capabilities, &product.Capabilities); err != nil {
+		return activation.Product{}, fmt.Errorf("decode active product capabilities: %w", err)
 	}
 	return product, nil
 }
 
 func (repository *ActivationRepository) ListActiveProducts(ctx context.Context) ([]activation.Product, error) {
 	rows, err := repository.pool.Query(ctx, `
-		SELECT pid, name FROM products WHERE status='active' ORDER BY pid
+		SELECT pid, name, capabilities FROM products WHERE status='active' ORDER BY pid
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("list active products: %w", err)
@@ -46,8 +51,12 @@ func (repository *ActivationRepository) ListActiveProducts(ctx context.Context) 
 	products := make([]activation.Product, 0)
 	for rows.Next() {
 		var product activation.Product
-		if err := rows.Scan(&product.PID, &product.Name); err != nil {
+		var capabilities []byte
+		if err := rows.Scan(&product.PID, &product.Name, &capabilities); err != nil {
 			return nil, fmt.Errorf("scan active product: %w", err)
+		}
+		if err := json.Unmarshal(capabilities, &product.Capabilities); err != nil {
+			return nil, fmt.Errorf("decode active product capabilities: %w", err)
 		}
 		products = append(products, product)
 	}

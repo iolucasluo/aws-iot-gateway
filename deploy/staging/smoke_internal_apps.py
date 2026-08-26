@@ -26,7 +26,7 @@ SIGNATURE_DOMAIN = "ExploreX-OpenAPI-HMAC-v1"
 PRODUCTS_PATH = "/api/v1/openapi/device-products"
 LIST_PATH = "/api/v1/openapi/devices/list"
 TOKEN_PATH = "/api/v1/openapi/devices/token"
-EXPECTED_PRODUCT_PIDS = {"feeder-x1", "minion-cam-x1"}
+EXPECTED_PRODUCT_PIDS = {"feeder-x1", "lamp-x1", "minion-cam-x1"}
 
 
 class SmokeError(RuntimeError):

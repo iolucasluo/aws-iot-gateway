@@ -14,10 +14,14 @@ func TestProductSeedDefinesGatewayActivationCatalog(t *testing.T) {
 	}
 	seed := string(content)
 	for _, fragment := range []string{
-		"INSERT INTO products (id, pid, name, status)",
+		"INSERT INTO products (id, pid, name, status, capabilities)",
 		"'feeder-x1'",
+		"'lamp-x1'",
 		"'minion-cam-x1'",
-		"ON CONFLICT (pid) DO NOTHING",
+		`'["webrtc.v1", "local-media.v1", "ptz.v1"]'::jsonb`,
+		`'["webrtc.v1"]'::jsonb`,
+		"ON CONFLICT (pid) DO UPDATE",
+		"capabilities = EXCLUDED.capabilities",
 	} {
 		if !strings.Contains(seed, fragment) {
 			t.Errorf("product seed missing %q", fragment)

@@ -79,7 +79,7 @@ func TestRunMigratesThenSeedsProductCatalogIdempotently(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate seeded products: %v", err)
 	}
-	want := []string{"feeder-x1", "minion-cam-x1"}
+	want := []string{"feeder-x1", "lamp-x1", "minion-cam-x1"}
 	if !reflect.DeepEqual(products, want) {
 		t.Fatalf("seeded products after repeated runner execution = %v, want %v", products, want)
 	}
