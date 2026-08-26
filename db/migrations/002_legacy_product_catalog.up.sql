@@ -27,6 +27,8 @@ BEGIN
         name varchar(128) NOT NULL,
         status varchar(16) NOT NULL DEFAULT 'active'
             CONSTRAINT products_status_check CHECK (status IN ('active', 'disabled')),
+        capabilities jsonb NOT NULL DEFAULT '[]'::jsonb
+            CONSTRAINT products_capabilities_check CHECK (jsonb_typeof(capabilities) = 'array'),
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT products_pid_check CHECK (btrim(pid) <> ''),

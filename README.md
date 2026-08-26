@@ -1,6 +1,6 @@
 # aws-iot-gateway
 
-`aws-iot-gateway` 是 LivPet 和内部 Demo App 共用的 **Internal AWS API**。它拥有用户激活、全局唯一绑定、设备运行身份和受限设备操作；`products` 仅作为受控的只读激活目录，不实现 Developer、Project、Product CRUD/owner、Factory、tenant、IDevID、RMA 或平台 OTA。
+`aws-iot-gateway` 是 LivPet 和内部 Demo App 共用的 **Internal AWS API**。它拥有用户激活、全局唯一绑定、设备运行身份和受限设备操作；`products` 仅作为受控的只读激活/协议能力目录，不实现 Developer、Project、Product CRUD/owner、Factory、tenant、IDevID、RMA 或平台 OTA。
 
 `/api/v1/openapi/*` 中的 `openapi` 只是 LivPet wire compatibility，产品和代码语义均使用 internal app。App 必须先读取受控产品目录并在创建 activation 时显式提交 active PID；Gateway 不再默认 `feeder-x1`。
 
@@ -27,6 +27,8 @@
 - worker 同时消费设备 60 秒 `status` 心跳和 MQTT LWT，按 AWS IoT 接收时间防乱序写入 presence；
   设备列表在连续三次心跳缺失后 fail closed 为离线，不再把陈旧 Shadow 当作连接状态。
 - KVS 与 S3：提供受 binding 约束的 WebRTC、快照、录像和喂食音频能力。
+- 局域网媒体：Gateway 只授权并经 MQTT 开关设备的 ONVIF/RTSP 短租约；不代理、
+  不拨号 RFC 1918 设备地址，App 在同一 LAN 直连设备。
 
 隔离的 dev/staging IaC 位于 `deploy/cloudformation/`。内部 API 仍走 API Gateway → VPC Link → private NLB；另一个公开 ALB 的 HTTP listener 只转发精确的 `/api/v1/device-time/bootstrap`，默认拒绝其他 path。两者共用双 API ECS，后台为双 worker ECS、RDS PostgreSQL、ElastiCache Redis、SQS/DLQ、IoT Rule、KVS、S3 和独立 KMS time signer。它不是生产部署基线。
 
@@ -40,7 +42,7 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 | --- | --- | --- |
 | `GET /healthz` | 运行检查 | 无 |
 | `POST /api/v1/device-time/bootstrap` | 无可信 RTC 的设备 | 公共窄路由；COSE 验签后可信 |
-| `GET /api/v1/openapi/device-products` | 内部 App backend | HMAC v1；只读 active 产品目录 |
+| `GET /api/v1/openapi/device-products` | 内部 App backend | HMAC v1；只读 active PID/name/capabilities 目录 |
 | `POST /api/v1/openapi/device-activations` | 内部 App backend | HMAC v1 |
 | `GET /api/v1/openapi/device-activations/{id}` | 内部 App backend | HMAC v1 |
 | `POST /api/v1/openapi/device-activations/{id}/sessions` | LivPet commissioning 兼容路径 | HMAC v1 |
@@ -49,13 +51,14 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 | `POST /api/v1/openapi/devices/unbind/{device_token}` | 内部 App backend | HMAC v1 |
 | `POST /api/v1/openapi/devices/recommission/{device_token}` | 内部 App backend | HMAC v1 |
 | `GET /api/v1/openapi/devices/{device_sn}/status` | 内部 App backend | HMAC v1 + `X-Device-Token` |
+| `POST/DELETE /api/v1/openapi/devices/{device_sn}/local-media-sessions` | 内部 App backend | HMAC v1 + `X-Device-Token`；`no-store` |
 | `/api/v1/openapi/devices/{device_sn}/*` | 内部 App backend | HMAC v1 + `X-Device-Token` |
 | `POST /api/v1/openapi/devices/{device_sn}/network-reconfiguration-authorizations` | 已绑定设备换网转发 | HMAC v1 + `X-Device-Token` |
 | `POST /api/v1/device-activations/session/prepare-installation` | 设备 | activation code |
 | `POST /api/v1/device-activations/qr/prepare-installation` | 设备 | activation code |
 | `POST /api/v1/device-activations/confirm-installation` | 设备 | activation code + operational-key proof |
 
-设备子路由覆盖 detail、shadow、commands、schedules、events、streams、snapshots、recordings 和 feed-audio。Bearer `/v1/activations`、`/v1/devices` 和旧 `/v1/device-activations/{id}/*` 已从 router 删除。完整目标路由和阶段验收快照见根仓 `docs/branches/.archived/wicgeechan/2026-08-17/2026-08-13-internal-aws-api-implementation-plan.md`；当前未完成项见 `docs/branches/iot-flash-develop-internal-aws-follow-ups.md`。
+设备子路由覆盖 detail、shadow、commands、schedules、events、streams、local-media-sessions、snapshots、recordings 和 feed-audio。Bearer `/v1/activations`、`/v1/devices` 和旧 `/v1/device-activations/{id}/*` 已从 router 删除。完整目标路由和阶段验收快照见根仓 `docs/branches/.archived/wicgeechan/2026-08-17/2026-08-13-internal-aws-api-implementation-plan.md`；当前未完成项见 `docs/branches/iot-flash-develop-internal-aws-follow-ups.md`。
 
 设备冷启动的公开 Contract → signed-time → 严格 TLS 接入闭环，以及登记、activation、binding、reset、MQTT
 事件与媒体的代码反向工程流程图见 [`docs/flows/目录说明.md`](docs/flows/目录说明.md)。每个场景单独成篇；
@@ -110,6 +113,22 @@ active binding 时返回授权；该接口不创建 activation、不改 binding�
 `signaling` 和 `ice_servers`。LivPet 现有 backend 省略能力字段但明确 `wait_ack=true`，兼容层会按其
 实际 SDP 补成接收视频、双向音频且无 DataChannel，并要求设备完整授予；部分授予会撤销本次 viewer
 grant 并返回 409。该兼容映射仍以设备真实 ACK 为准，不伪造设备能力。
+
+`POST .../{device_sn}/local-media-sessions` 创建 30–900 秒的 `local-media.v1` 租约（body
+省略时为 300 秒）。Gateway 先以设备 PID 检查受控产品目录中的显式 capability，
+再为该请求生成一次性 username/password/generation 和单设备严格递增 revision，经专用
+MQTT `local_media(open)` 路径下发。该路径不写 `device_commands`，不允许通用
+`commands` 冒充 `local_media`；`lm_` session 前缀由该 typed 路径保留，通用 command 必须在
+持久化和 MQTT publish 前拒绝。只有设备返回字段集精确匹配、凭据指纹正确、且 ONVIF/RTSP
+locator 同属一个 RFC 1918 IPv4 时，Gateway 才把凭据和 locator 一次性返回 App。首次应用 ACK
+使用 `result=applied`；MQTT QoS 1 相同 revision/payload 的重投可使用 `result=duplicate`，但其余
+ACK 字段仍须逐项精确匹配，避免把冲突或过期指令误判为成功。
+
+`DELETE .../{device_sn}/local-media-sessions` 必须携带该租约的
+`credential_generation`。Gateway 将其映射为 `target_credential_generation`，防止延迟 close
+关闭后续租约。开启/关闭响应均使用 `Cache-Control: no-store` 和 `Pragma: no-cache`。
+凭据只允许存在于当次 Gateway 请求内存、MQTT 运输和设备运行内存，不得写库或日志。
+Gateway 不转发 ONVIF SOAP/RTSP 媒体，DP/PTZ 继续走 OpenAPI → MQTT。
 
 ## 本地运行与验证
 

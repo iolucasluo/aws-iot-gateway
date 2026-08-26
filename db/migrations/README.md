@@ -22,7 +22,7 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或�
 
 | 表 | 用途 | PK | 主要 FK / 删除语义 |
 |---|---|---|---|
-| `products` | 只读激活产品目录（PID、名称、active/disabled） | `id` | 被 registry/activation 以 PID RESTRICT 引用 |
+| `products` | 只读激活产品目录（PID、名称、状态、App 可消费的能力 ID） | `id` | 被 registry/activation 以 PID RESTRICT 引用 |
 | `device_registry` | 设备运行权威记录、ThingName、证书与 presence | `id` | — |
 | `device_activations` | internal app 用户激活 saga | `id` | `device_registry_id → device_registry`（nullable, RESTRICT） |
 | `device_activation_sessions` | activation 安装 session | `id` | `device_activation_id → device_activations`（CASCADE） |
@@ -52,3 +52,5 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或�
 - `002_legacy_product_catalog`：只对已登记旧版 `001_initial.sql` 且缺少 `device_activations.pid` 的 schema
   生效；创建最小产品目录、回填旧 activation PID、移除 registry 的隐式默认 PID，并建立 registry/activation
   到 `products(pid)` 的 RESTRICT 外键。fresh schema 为 no-op；为避免丢失历史数据，不提供自动 down。
+- `003_product_capabilities`：为已经应用旧 001/002 的产品目录补充只读 JSON capability ID 数组；fresh schema
+  已由 001 直接包含同一字段与约束。

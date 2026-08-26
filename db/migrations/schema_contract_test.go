@@ -74,6 +74,8 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 		"presence_online boolean NOT NULL DEFAULT false",
 		"CONSTRAINT device_registry_pid_fkey FOREIGN KEY (pid) REFERENCES products(pid)",
 		"CONSTRAINT device_activations_pid_fkey FOREIGN KEY (pid) REFERENCES products(pid)",
+		"capabilities jsonb NOT NULL DEFAULT '[]'::jsonb",
+		"CONSTRAINT products_capabilities_check",
 		"updated_at timestamptz NOT NULL DEFAULT now()",
 		"COMMENT ON TABLE device_schedules",
 	} {
@@ -95,6 +97,24 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 	} {
 		if strings.Contains(strings.ToLower(initial), strings.ToLower(forbidden)) {
 			t.Errorf("squashed initial schema contains forbidden legacy/platform fragment %q", forbidden)
+		}
+	}
+}
+
+func TestProductCapabilitiesMigrationUpgradesExistingCatalogWithoutProductDomainExpansion(t *testing.T) {
+	t.Parallel()
+	migration := readMigration(t, "003_product_capabilities.up.sql")
+	for _, fragment := range []string{
+		"ALTER TABLE products",
+		"ADD COLUMN IF NOT EXISTS capabilities jsonb",
+		"products_capabilities_check",
+		"jsonb_typeof(capabilities) = 'array'",
+	} {
+		requireMigrationContains(t, migration, fragment)
+	}
+	for _, forbidden := range []string{"CREATE TABLE", "INSERT INTO products", "DROP TABLE", "TRUNCATE"} {
+		if strings.Contains(strings.ToUpper(migration), forbidden) {
+			t.Errorf("product capability migration contains forbidden fragment %q", forbidden)
 		}
 	}
 }

@@ -129,6 +129,13 @@ func main() {
 		log.Fatalf("configure command repository: %v", err)
 	}
 	deviceService := devicemodule.NewService(deviceRuntime, ackStore, commandRepository, config.IoTTopicPrefix, nil)
+	localMediaRevisions, err := redisstore.NewLocalMediaRevisionStore(redis, config.Environment)
+	if err != nil {
+		log.Fatalf("configure local media revisions: %v", err)
+	}
+	localMediaService := media.NewLocalMediaService(
+		deviceService, localMediaRevisions, service, time.Now, nil,
+	)
 	recommissioner, err := binding.NewDeviceRecommissioner(deviceService)
 	if err != nil {
 		log.Fatalf("configure device recommissioner: %v", err)
@@ -183,7 +190,7 @@ func main() {
 		Addr: config.ListenAddress,
 		Handler: httpapi.NewInternalAPI(service, verifier, httpapi.Dependencies{
 			Binding: bindingService, Device: deviceService, Events: events.NewQueryService(eventRepository),
-			Media: streamService, Assets: assetService,
+			Media: streamService, LocalMedia: localMediaService, Assets: assetService,
 			TimeBootstrap: timeService, TimeBootstrapLimiter: rateLimiter,
 			DeviceRuntime: httpapi.DeviceRuntimeConfig{
 				AWSRegion: config.AWSRegion, CredentialEndpoint: config.IoTCredentialEndpoint,

@@ -195,7 +195,11 @@ func TestApplyMigrationsRecordsInitialAndForwardCompatibilityMigration(t *testin
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate migration names: %v", err)
 	}
-	want := []string{"001_initial.sql", "002_legacy_product_catalog.up.sql"}
+	want := []string{
+		"001_initial.sql",
+		"002_legacy_product_catalog.up.sql",
+		"003_product_capabilities.up.sql",
+	}
 	if fmt.Sprint(appliedNames) != fmt.Sprint(want) {
 		t.Fatalf("applied migrations = %v, want %v", appliedNames, want)
 	}
