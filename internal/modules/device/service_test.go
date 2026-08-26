@@ -139,6 +139,28 @@ func TestSendCommandsRejectsLocalMediaBeforePersistenceOrPublish(t *testing.T) {
 	}
 }
 
+func TestSendCommandsRejectsReservedLocalMediaSessionBeforePersistenceOrPublish(t *testing.T) {
+	t.Parallel()
+	publisher := &publisherStub{}
+	repository := &commandRepositoryStub{}
+	service := NewService(publisher, ackWaiterStub{}, repository,
+		"aws-iot-gateway-staging", func() (string, error) { return "must-not-run", nil })
+
+	_, err := service.SendCommands(
+		context.Background(), "livpet-staging", "device-id", "fdr-0001",
+		[]CommandInput{{
+			Code: "feed", CommandID: "lm_0123456789abcdef0123456789abcdef",
+			Value: json.RawMessage(`{"portions":1}`),
+		}}, false,
+	)
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("SendCommands() error = %v, want ErrInvalidInput", err)
+	}
+	if len(repository.commands) != 0 || len(publisher.payload) != 0 {
+		t.Fatalf("reserved session mutated repository=%#v or published=%s", repository.commands, publisher.payload)
+	}
+}
+
 func TestGetShadowReturnsReportedProjectionWithoutAWSMetadata(t *testing.T) {
 	t.Parallel()
 	publisher := &shadowPublisherStub{shadow: []byte(`{

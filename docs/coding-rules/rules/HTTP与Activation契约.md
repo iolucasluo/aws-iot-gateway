@@ -58,3 +58,5 @@ pending -> activating -> installing -> finalizing -> activated
   探测该地址；App 必须在同一 LAN 直连设备。
 - close 必须带原租约 `credential_generation`，设备只关闭精确匹配的 generation。
 - `local_media` 不是通用 DP command；PTZ、喂食和其他控制继续经过 OpenAPI → MQTT。
+- `lm_` session 前缀只属于 typed `local_media` 路径；通用 DP command 必须在落库和 MQTT
+  publish 前拒绝该前缀，避免 ACK 路由冲突和副作用重试。

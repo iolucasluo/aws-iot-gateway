@@ -118,7 +118,8 @@ grant 并返回 409。该兼容映射仍以设备真实 ACK 为准，不伪造�
 省略时为 300 秒）。Gateway 先以设备 PID 检查受控产品目录中的显式 capability，
 再为该请求生成一次性 username/password/generation 和单设备严格递增 revision，经专用
 MQTT `local_media(open)` 路径下发。该路径不写 `device_commands`，不允许通用
-`commands` 冒充 `local_media`。只有设备返回字段集精确匹配、凭据指纹正确、且 ONVIF/RTSP
+`commands` 冒充 `local_media`；`lm_` session 前缀由该 typed 路径保留，通用 command 必须在
+持久化和 MQTT publish 前拒绝。只有设备返回字段集精确匹配、凭据指纹正确、且 ONVIF/RTSP
 locator 同属一个 RFC 1918 IPv4 时，Gateway 才把凭据和 locator 一次性返回 App。首次应用 ACK
 使用 `result=applied`；MQTT QoS 1 相同 revision/payload 的重投可使用 `result=duplicate`，但其余
 ACK 字段仍须逐项精确匹配，避免把冲突或过期指令误判为成功。

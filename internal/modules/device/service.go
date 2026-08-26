@@ -166,7 +166,7 @@ func (service *Service) SendCommands(
 				return SendCommandsResult{}, fmt.Errorf("generate command session: %w", err)
 			}
 		}
-		if len(sessionID) > 128 {
+		if len(sessionID) > 128 || strings.HasPrefix(sessionID, "lm_") {
 			return SendCommandsResult{}, ErrInvalidInput
 		}
 		commandID, err := randomUUID()
