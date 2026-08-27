@@ -79,6 +79,25 @@ grep -q 'DATABASE_URL must use a loopback host' "$TMP_DIR/remote-postgres.out"
 test ! -s "$CAPTURE_FILE" || fail "remote PostgreSQL reached a mutation"
 
 : >"$CAPTURE_FILE"
+sed 's/?sslmode=disable/?host=staging.example.com/' \
+  "$TMP_DIR/valid.env" >"$ENV_FILE"
+if $DEV_SH up --environment-id "$ENVIRONMENT_ID" >"$TMP_DIR/query-override.out" 2>&1; then
+  fail "PostgreSQL query connection override must be rejected"
+fi
+grep -q 'DATABASE_URL query must be empty or exactly sslmode=disable' \
+  "$TMP_DIR/query-override.out"
+test ! -s "$CAPTURE_FILE" || fail "PostgreSQL query override reached a mutation"
+
+: >"$CAPTURE_FILE"
+sed 's#redis://127\.0\.0\.1:6379/2#redis://127.0.0.1:6379/2?db=0#' \
+  "$TMP_DIR/valid.env" >"$ENV_FILE"
+if $DEV_SH up --environment-id "$ENVIRONMENT_ID" >"$TMP_DIR/redis-query.out" 2>&1; then
+  fail "Redis query override must be rejected"
+fi
+grep -q 'REDIS_URL query is not allowed' "$TMP_DIR/redis-query.out"
+test ! -s "$CAPTURE_FILE" || fail "Redis query override reached a mutation"
+
+: >"$CAPTURE_FILE"
 sed 's#redis://127\.0\.0\.1:6379#redis://staging.example.com:6379#' "$TMP_DIR/valid.env" >"$ENV_FILE"
 if $DEV_SH up --environment-id "$ENVIRONMENT_ID" >"$TMP_DIR/remote-redis.out" 2>&1; then
   fail "remote Redis must be rejected"
