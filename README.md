@@ -139,7 +139,8 @@ Internal App 配置，AWS access key 仍走 standard credential chain，不写�
 本地开发优先复用声明端口上已有的 PostgreSQL/Redis 进程，但 `DATABASE_URL`/`REDIS_URL` 必须使用
 loopback host、匹配 `GATEWAY_LOCAL_*_PORT`，并使用独立的 `aws_iot_gateway` 数据库和非零 Redis DB index
 （示例为 `/1`）。PostgreSQL query 仅允许省略或精确为 `sslmode=disable`，Redis query 不允许出现，避免驱动
-覆盖已校验的连接目标；任何一项不满足都在 seed 前失败关闭。本仓 `tool/dev.sh` contract v1 拥有
+覆盖已校验的连接目标；真正导出给 seed/API 的环境快照会再次校验。任何一项不满足都在 seed 前失败关闭。
+本仓 `tool/dev.sh` contract v1 拥有
 `.env.<name>` 校验、端口探测、`deploy/local/compose.yaml` fallback、构建、显式 seed 和 API 前台生命周期；
 它只复用、不停止开发者已有进程。聚合工作区 `local-dev` 的 `status/up/down/test` 只检查 contract version
 并委托本入口，避免不同聚合仓复制 Gateway 启动实现：
@@ -153,7 +154,8 @@ tool/dev.sh test
 ```
 
 `up` 会先同步执行显式 seed runner，成功后才以前台生命周期 `exec` API；Ctrl+C 只终止 API，保留共享
-依赖。等价的手工 fallback 流程是：
+依赖。compose project 固定为 `aws-iot-gateway-local`，不接受调用方 `COMPOSE_PROJECT_NAME` 覆盖。等价的
+手工 fallback 流程是：
 
 ```sh
 docker compose --env-file .env.cwj -f deploy/local/compose.yaml up -d --wait

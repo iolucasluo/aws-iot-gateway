@@ -8,6 +8,7 @@ TMP_DIR=$(mktemp -d)
 ENVIRONMENT_ID="launcher-contract-$$"
 ENV_FILE="$REPO_ROOT/.env.$ENVIRONMENT_ID"
 CAPTURE_FILE="$TMP_DIR/capture.log"
+SOURCE_COUNT_FILE="$TMP_DIR/source-count"
 SECRET_MARKER="launcher-contract-secret-value"
 
 cleanup() {
@@ -70,6 +71,31 @@ test "$(sed -n '2p' "$CAPTURE_FILE")" = "go build -o $TMP_DIR/bin/aws-iot-gatewa
 test "$(sed -n '3p' "$CAPTURE_FILE")" = seed
 test "$(sed -n '4p' "$CAPTURE_FILE")" = api
 
+: >"$CAPTURE_FILE"
+printf '0\n' >"$SOURCE_COUNT_FILE"
+cat >"$ENV_FILE" <<EOF
+GATEWAY_ENVIRONMENT=development
+GATEWAY_LOCAL_POSTGRES_DATABASE=aws_iot_gateway
+GATEWAY_LOCAL_POSTGRES_PORT=5432
+GATEWAY_LOCAL_REDIS_PORT=6379
+source_count=\$(cat "$SOURCE_COUNT_FILE")
+source_count=\$((source_count + 1))
+printf '%s\n' "\$source_count" >"$SOURCE_COUNT_FILE"
+if (( source_count >= 3 )); then
+  DATABASE_URL=postgres://gateway:local-only@staging.example.com:5432/aws_iot_gateway?sslmode=disable
+else
+  DATABASE_URL=postgres://gateway:local-only@127.0.0.1:5432/aws_iot_gateway?sslmode=disable
+fi
+REDIS_URL=redis://127.0.0.1:6379/2
+INTERNAL_APPS_JSON='[{"id":"demo-local","api_key":"demo-key","api_secret":"$SECRET_MARKER"}]'
+EOF
+if $DEV_SH up --environment-id "$ENVIRONMENT_ID" >"$TMP_DIR/stateful-env.out" 2>&1; then
+  fail "stateful env must not replace validated DATABASE_URL before seed"
+fi
+grep -q 'DATABASE_URL must use a loopback host' "$TMP_DIR/stateful-env.out"
+test ! -s "$CAPTURE_FILE" || fail "stateful env reached build or seed"
+
+cp "$TMP_DIR/valid.env" "$ENV_FILE"
 : >"$CAPTURE_FILE"
 sed 's/@127\.0\.0\.1:5432/@staging.example.com:5432/' "$TMP_DIR/valid.env" >"$ENV_FILE"
 if $DEV_SH up --environment-id "$ENVIRONMENT_ID" >"$TMP_DIR/remote-postgres.out" 2>&1; then
@@ -140,8 +166,11 @@ grep -q '^seed$' "$CAPTURE_FILE"
 grep -q '^api$' "$CAPTURE_FILE"
 
 : >"$CAPTURE_FILE"
-$DEV_SH down --environment-id "$ENVIRONMENT_ID"
-grep -q 'docker compose .* down$' "$CAPTURE_FILE"
+COMPOSE_PROJECT_NAME=other-project $DEV_SH down --environment-id "$ENVIRONMENT_ID"
+grep -q 'docker compose -p aws-iot-gateway-local .* down$' "$CAPTURE_FILE"
+if grep -q 'other-project' "$CAPTURE_FILE"; then
+  fail "caller COMPOSE_PROJECT_NAME changed the owned project"
+fi
 
 sed 's#/aws_iot_gateway?#/explorex_api?#' "$TMP_DIR/valid.env" >"$TMP_DIR/invalid-db.env"
 cp "$TMP_DIR/invalid-db.env" "$ENV_FILE"
