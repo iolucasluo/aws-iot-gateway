@@ -27,12 +27,15 @@ test "$($DEV_SH contract-version)" = 1
 cat >"$ENV_FILE" <<EOF
 GATEWAY_ENVIRONMENT=development
 GATEWAY_LOCAL_POSTGRES_DATABASE=aws_iot_gateway
+GATEWAY_LOCAL_POSTGRES_PORT=5432
+GATEWAY_LOCAL_REDIS_PORT=6379
 DATABASE_URL=postgres://gateway:local-only@127.0.0.1:5432/aws_iot_gateway?sslmode=disable
 REDIS_URL=redis://127.0.0.1:6379/2
 INTERNAL_APPS_JSON='[{"id":"demo-local","api_key":"demo-key","api_secret":"$SECRET_MARKER"}]'
 EOF
 chmod 600 "$ENV_FILE"
 git -C "$REPO_ROOT" check-ignore -q ".env.$ENVIRONMENT_ID"
+cp "$ENV_FILE" "$TMP_DIR/valid.env"
 
 export PATH="$FIXTURE_BIN:$PATH"
 export GATEWAY_DEV_BIN_DIR="$TMP_DIR/bin"
@@ -68,6 +71,49 @@ test "$(sed -n '3p' "$CAPTURE_FILE")" = seed
 test "$(sed -n '4p' "$CAPTURE_FILE")" = api
 
 : >"$CAPTURE_FILE"
+sed 's/@127\.0\.0\.1:5432/@staging.example.com:5432/' "$TMP_DIR/valid.env" >"$ENV_FILE"
+if $DEV_SH up --environment-id "$ENVIRONMENT_ID" >"$TMP_DIR/remote-postgres.out" 2>&1; then
+  fail "remote PostgreSQL must be rejected"
+fi
+grep -q 'DATABASE_URL must use a loopback host' "$TMP_DIR/remote-postgres.out"
+test ! -s "$CAPTURE_FILE" || fail "remote PostgreSQL reached a mutation"
+
+: >"$CAPTURE_FILE"
+sed 's#redis://127\.0\.0\.1:6379#redis://staging.example.com:6379#' "$TMP_DIR/valid.env" >"$ENV_FILE"
+if $DEV_SH up --environment-id "$ENVIRONMENT_ID" >"$TMP_DIR/remote-redis.out" 2>&1; then
+  fail "remote Redis must be rejected"
+fi
+grep -q 'REDIS_URL must use a loopback host' "$TMP_DIR/remote-redis.out"
+test ! -s "$CAPTURE_FILE" || fail "remote Redis reached a mutation"
+
+: >"$CAPTURE_FILE"
+sed 's/GATEWAY_LOCAL_POSTGRES_PORT=5432/GATEWAY_LOCAL_POSTGRES_PORT=55432/' "$TMP_DIR/valid.env" >"$ENV_FILE"
+if $DEV_SH up --environment-id "$ENVIRONMENT_ID" >"$TMP_DIR/port-mismatch.out" 2>&1; then
+  fail "PostgreSQL URL/local port mismatch must be rejected"
+fi
+grep -q 'DATABASE_URL port must match GATEWAY_LOCAL_POSTGRES_PORT=55432' "$TMP_DIR/port-mismatch.out"
+test ! -s "$CAPTURE_FILE" || fail "port mismatch reached a mutation"
+
+sed \
+  -e 's/GATEWAY_LOCAL_POSTGRES_PORT=5432/GATEWAY_LOCAL_POSTGRES_PORT=55432/' \
+  -e 's/GATEWAY_LOCAL_REDIS_PORT=6379/GATEWAY_LOCAL_REDIS_PORT=56379/' \
+  -e 's/127\.0\.0\.1:5432/127.0.0.1:55432/' \
+  -e 's/127\.0\.0\.1:6379/127.0.0.1:56379/' \
+  "$TMP_DIR/valid.env" >"$ENV_FILE"
+custom_status=$(GATEWAY_FAKE_LISTEN_PORTS='55432,56379' \
+  $DEV_SH status --environment-id "$ENVIRONMENT_ID")
+grep -q 'tcp:55432 listening' <<<"$custom_status"
+grep -q 'tcp:56379 listening' <<<"$custom_status"
+: >"$CAPTURE_FILE"
+GATEWAY_FAKE_LISTEN_PORTS='55432,56379' $DEV_SH up \
+  --environment-id "$ENVIRONMENT_ID" >"$TMP_DIR/custom-port.out" 2>&1
+test "$(wc -l <"$CAPTURE_FILE" | tr -d ' ')" = 4
+if grep -q '^docker ' "$CAPTURE_FILE"; then
+  fail "custom listening ports must be reused"
+fi
+
+cp "$TMP_DIR/valid.env" "$ENV_FILE"
+: >"$CAPTURE_FILE"
 GATEWAY_FAKE_LISTEN_PORTS='' $DEV_SH up --environment-id "$ENVIRONMENT_ID" >"$TMP_DIR/fallback.out" 2>&1
 first_line=$(sed -n '1p' "$CAPTURE_FILE")
 grep -q 'docker compose .* up -d --wait postgres redis' <<<"$first_line"
@@ -78,7 +124,7 @@ grep -q '^api$' "$CAPTURE_FILE"
 $DEV_SH down --environment-id "$ENVIRONMENT_ID"
 grep -q 'docker compose .* down$' "$CAPTURE_FILE"
 
-sed 's#/aws_iot_gateway?#/explorex_api?#' "$ENV_FILE" >"$TMP_DIR/invalid-db.env"
+sed 's#/aws_iot_gateway?#/explorex_api?#' "$TMP_DIR/valid.env" >"$TMP_DIR/invalid-db.env"
 cp "$TMP_DIR/invalid-db.env" "$ENV_FILE"
 : >"$CAPTURE_FILE"
 if $DEV_SH up --environment-id "$ENVIRONMENT_ID" >"$TMP_DIR/isolation.out" 2>&1; then

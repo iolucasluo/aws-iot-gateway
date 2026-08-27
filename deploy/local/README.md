@@ -10,8 +10,9 @@ tool/dev.sh up --environment-id cwj
 docs/coding-rules/skills/local-dev/scripts/dev.sh up --env cwj
 ```
 
-`tool/dev.sh status/up/down/test` 的 contract version 为 `1`。`up` 只在 5432/6379 未监听时启动本 compose
-project 的 fallback service；`down` 只停止该 project，不停止开发者已有进程。
+`tool/dev.sh status/up/down/test` 的 contract version 为 `1`。`up` 按 `GATEWAY_LOCAL_*_PORT` 探测依赖，
+并要求 `DATABASE_URL`/`REDIS_URL` 使用匹配端口的 loopback endpoint；不满足时不会执行 compose、seed 或 API。
+只有声明端口未监听时才启动本 compose project 的 fallback service；`down` 只停止该 project，不停止开发者已有进程。
 
 手工使用 `deploy/local/compose.yaml` 的新库时，加载开发者自己的 `.env.<name>` 后执行同样流程：
 
