@@ -147,11 +147,23 @@ validate_local_data_isolation() {
   local expected_redis_port=${GATEWAY_LOCAL_REDIS_PORT:-6379}
   local database_url=${DATABASE_URL:?DATABASE_URL is required}
   local redis_url=${REDIS_URL:?REDIS_URL is required}
+  local database_query=
   local database_path=${database_url%%\?*}
   local database_name=${database_path##*/}
   local redis_path=${redis_url%%\?*}
   local redis_db=${redis_path##*/}
 
+  if [[ "$database_url" == *\?* ]]; then
+    database_query=${database_url#*\?}
+    if [[ "$database_query" != "sslmode=disable" ]]; then
+      echo "DATABASE_URL query must be empty or exactly sslmode=disable" >&2
+      exit 1
+    fi
+  fi
+  if [[ "$redis_url" == *\?* ]]; then
+    echo "REDIS_URL query is not allowed" >&2
+    exit 1
+  fi
   validate_local_port GATEWAY_LOCAL_POSTGRES_PORT "$expected_postgres_port"
   validate_local_port GATEWAY_LOCAL_REDIS_PORT "$expected_redis_port"
   validate_loopback_url DATABASE_URL "$database_url" postgres \
