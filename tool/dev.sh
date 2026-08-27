@@ -31,6 +31,8 @@ ENV_FILE="$REPO_ROOT/.env.$ENVIRONMENT_ID"
 BIN_DIR=${GATEWAY_DEV_BIN_DIR:-"$REPO_ROOT/bin"}
 SEED_BIN="$BIN_DIR/aws-iot-gateway-db-seed"
 API_BIN="$BIN_DIR/aws-iot-gateway"
+POSTGRES_PORT=5432
+REDIS_PORT=6379
 
 usage() {
   cat <<'USAGE'
@@ -76,8 +78,73 @@ export_env_for_gateway() {
   set +a
 }
 
+validate_local_port() {
+  local variable_name=$1
+  local value=$2
+  if [[ ! "$value" =~ ^[1-9][0-9]{0,4}$ ]] || (( value > 65535 )); then
+    echo "$variable_name must be a TCP port from 1 to 65535" >&2
+    exit 1
+  fi
+}
+
+load_local_dependency_ports() {
+  local ports
+  ports=$(
+    set +a
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    printf '%s %s\n' \
+      "${GATEWAY_LOCAL_POSTGRES_PORT:-5432}" \
+      "${GATEWAY_LOCAL_REDIS_PORT:-6379}"
+  )
+  read -r POSTGRES_PORT REDIS_PORT <<<"$ports"
+  validate_local_port GATEWAY_LOCAL_POSTGRES_PORT "$POSTGRES_PORT"
+  validate_local_port GATEWAY_LOCAL_REDIS_PORT "$REDIS_PORT"
+}
+
+validate_loopback_url() {
+  local label=$1
+  local url=$2
+  local scheme=$3
+  local expected_port=$4
+  local port_variable=$5
+  local authority endpoint host port
+
+  if [[ "$url" != "$scheme://"* ]]; then
+    echo "$label must use the $scheme scheme" >&2
+    exit 1
+  fi
+  authority=${url#*://}
+  authority=${authority%%/*}
+  endpoint=${authority##*@}
+  if [[ "$endpoint" == \[*\]:* ]]; then
+    host=${endpoint%%]*}
+    host=${host#\[}
+    port=${endpoint#*\]:}
+  elif [[ "$endpoint" == *:* ]]; then
+    host=${endpoint%:*}
+    port=${endpoint##*:}
+  else
+    echo "$label must include an explicit local port" >&2
+    exit 1
+  fi
+  case "$host" in
+    127.0.0.1|localhost|::1) ;;
+    *)
+      echo "$label must use a loopback host" >&2
+      exit 1
+      ;;
+  esac
+  if [[ "$port" != "$expected_port" ]]; then
+    echo "$label port must match $port_variable=$expected_port" >&2
+    exit 1
+  fi
+}
+
 validate_local_data_isolation() {
   local expected_database=${GATEWAY_LOCAL_POSTGRES_DATABASE:?GATEWAY_LOCAL_POSTGRES_DATABASE is required}
+  local expected_postgres_port=${GATEWAY_LOCAL_POSTGRES_PORT:-5432}
+  local expected_redis_port=${GATEWAY_LOCAL_REDIS_PORT:-6379}
   local database_url=${DATABASE_URL:?DATABASE_URL is required}
   local redis_url=${REDIS_URL:?REDIS_URL is required}
   local database_path=${database_url%%\?*}
@@ -85,6 +152,12 @@ validate_local_data_isolation() {
   local redis_path=${redis_url%%\?*}
   local redis_db=${redis_path##*/}
 
+  validate_local_port GATEWAY_LOCAL_POSTGRES_PORT "$expected_postgres_port"
+  validate_local_port GATEWAY_LOCAL_REDIS_PORT "$expected_redis_port"
+  validate_loopback_url DATABASE_URL "$database_url" postgres \
+    "$expected_postgres_port" GATEWAY_LOCAL_POSTGRES_PORT
+  validate_loopback_url REDIS_URL "$redis_url" redis \
+    "$expected_redis_port" GATEWAY_LOCAL_REDIS_PORT
   if [[ "$database_name" != "$expected_database" || "$database_name" == "explorex_api" ]]; then
     echo "DATABASE_URL must target the dedicated $expected_database database" >&2
     exit 1
@@ -101,13 +174,13 @@ compose() {
 
 ensure_dependencies() {
   local targets=()
-  if port_listens 5432; then
-    echo "PostgreSQL 127.0.0.1:5432: reuse existing process"
+  if port_listens "$POSTGRES_PORT"; then
+    echo "PostgreSQL 127.0.0.1:$POSTGRES_PORT: reuse existing process"
   else
     targets+=(postgres)
   fi
-  if port_listens 6379; then
-    echo "Redis 127.0.0.1:6379: reuse existing process"
+  if port_listens "$REDIS_PORT"; then
+    echo "Redis 127.0.0.1:$REDIS_PORT: reuse existing process"
   else
     targets+=(redis)
   fi
@@ -126,7 +199,10 @@ status() {
   else
     echo "env=$ENVIRONMENT_ID file=missing"
   fi
-  for port in 5432 6379 14080; do
+  if [[ -f "$ENV_FILE" ]]; then
+    load_local_dependency_ports
+  fi
+  for port in "$POSTGRES_PORT" "$REDIS_PORT" 14080; do
     if port_listens "$port"; then
       echo "tcp:$port listening"
     else
@@ -142,6 +218,7 @@ status() {
 
 run_gateway() {
   validate_env_file
+  load_local_dependency_ports
   ensure_dependencies
   export_env_for_gateway
   mkdir -p "$BIN_DIR"
