@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)
 COMPOSE_FILE="$REPO_ROOT/deploy/local/compose.yaml"
+COMPOSE_PROJECT=aws-iot-gateway-local
 
 ACTION=${1:-help}
 if [[ $# -gt 0 ]]; then shift; fi
@@ -181,7 +182,7 @@ validate_local_data_isolation() {
 }
 
 compose() {
-  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+  docker compose -p "$COMPOSE_PROJECT" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
 }
 
 ensure_dependencies() {
@@ -233,6 +234,7 @@ run_gateway() {
   load_local_dependency_ports
   ensure_dependencies
   export_env_for_gateway
+  validate_local_data_isolation
   mkdir -p "$BIN_DIR"
   (
     cd "$REPO_ROOT"
