@@ -194,6 +194,26 @@ Resources:
             Status: Enabled
             ExpirationInDays: 30
 
+  OTABucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      VersioningConfiguration: {Status: Enabled}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: AbortIncompleteOTAUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload: {DaysAfterInitiation: 7}
+
   TimeBootstrapKey:
     Type: AWS::KMS::Key
     DeletionPolicy: Retain
@@ -444,6 +464,9 @@ Resources:
                 Action: s3:ListBucket
                 Resource: !GetAtt MediaBucket.Arn
               - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub ${OTABucket.Arn}/*
+              - Effect: Allow
                 Action: [kms:GetPublicKey, kms:Sign]
                 Resource: !GetAtt TimeBootstrapKey.Arn
   WorkerTaskRole:
@@ -494,6 +517,7 @@ Resources:
             - {Name: AWS_IOT_INGEST_QUEUE_URL, Value: !Ref IngestQueue}
             - {Name: AWS_KVS_CHANNEL_PREFIX, Value: !Sub 'aws-iot-gateway-${EnvironmentName}-'}
             - {Name: AWS_S3_MEDIA_BUCKET, Value: !Ref MediaBucket}
+            - {Name: AWS_S3_OTA_BUCKET, Value: !Ref OTABucket}
             - {Name: TIME_BOOTSTRAP_KEY_ID, Value: !Sub 'time-${EnvironmentName}-g1'}
             - {Name: TIME_BOOTSTRAP_SIGNER, Value: aws-kms}
             - {Name: TIME_BOOTSTRAP_KMS_KEY_ID, Value: !GetAtt TimeBootstrapKey.Arn}
@@ -548,6 +572,7 @@ Resources:
             - {Name: AWS_IOT_INGEST_QUEUE_URL, Value: !Ref IngestQueue}
             - {Name: AWS_KVS_CHANNEL_PREFIX, Value: !Sub 'aws-iot-gateway-${EnvironmentName}-'}
             - {Name: AWS_S3_MEDIA_BUCKET, Value: !Ref MediaBucket}
+            - {Name: AWS_S3_OTA_BUCKET, Value: !Ref OTABucket}
             - {Name: TIME_BOOTSTRAP_KEY_ID, Value: !Sub 'time-${EnvironmentName}-g1'}
             - {Name: TIME_BOOTSTRAP_SIGNER, Value: aws-kms}
             - {Name: TIME_BOOTSTRAP_KMS_KEY_ID, Value: !GetAtt TimeBootstrapKey.Arn}
@@ -751,5 +776,7 @@ Outputs:
     Value: !Ref DeviceRoleAlias
   MediaBucketName:
     Value: !Ref MediaBucket
+  OTABucketName:
+    Value: !Ref OTABucket
   IngestQueueURL:
     Value: !Ref IngestQueue

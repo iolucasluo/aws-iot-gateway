@@ -21,6 +21,7 @@ func TestMigrateCreatesRequiredTablesAndGlobalBindingConstraint(t *testing.T) {
 	for _, table := range []string{
 		"products", "device_registry", "device_activations", "device_activation_sessions", "device_bindings", "device_tokens",
 		"device_commands", "device_events", "device_schedules", "device_streams", "device_snapshots", "device_recordings",
+		"ota_firmware_versions", "device_ota_deployments",
 		"webhook_outbox", "webhook_deliveries", "device_lifecycle_outbox",
 		"idempotency_records", "audit_logs",
 	} {
@@ -265,7 +266,7 @@ func TestProductSeedIsExplicitAndIdempotent(t *testing.T) {
 		t.Fatalf("iterate product pids: %v", err)
 	}
 	want := map[string][]string{
-		"feeder-x1":     {"local-media.v1", "ptz.v1", "webrtc.v1"},
+		"feeder-x1":     {"local-media.v1", "ota.app.v1", "ptz.v1", "webrtc.v1"},
 		"lamp-x1":       {},
 		"minion-cam-x1": {"webrtc.v1"},
 	}

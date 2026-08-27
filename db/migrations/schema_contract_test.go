@@ -28,6 +28,8 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 		"device_lifecycle_outbox",
 		"idempotency_records",
 		"audit_logs",
+		"ota_firmware_versions",
+		"device_ota_deployments",
 	} {
 		requireMigrationContains(t, initial, "CREATE TABLE "+table+" (")
 	}
@@ -41,6 +43,8 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 		"idx_device_recordings_history",
 		"idx_audit_logs_app_time",
 		"idx_device_lifecycle_outbox_ready",
+		"uniq_device_ota_deployments_active",
+		"idx_device_ota_deployments_history",
 	} {
 		requireMigrationContains(t, initial, "INDEX "+indexName)
 	}
@@ -59,6 +63,8 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 		"device_recordings",
 		"webhook_outbox",
 		"device_lifecycle_outbox",
+		"ota_firmware_versions",
+		"device_ota_deployments",
 	} {
 		requireMigrationContains(t, initial, "CREATE TRIGGER trg_"+table+"_updated_at")
 	}
@@ -97,6 +103,24 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 	} {
 		if strings.Contains(strings.ToLower(initial), strings.ToLower(forbidden)) {
 			t.Errorf("squashed initial schema contains forbidden legacy/platform fragment %q", forbidden)
+		}
+	}
+}
+
+func TestSingleDeviceOTAMigrationHasExecutionRecordsWithoutCampaignPlatform(t *testing.T) {
+	t.Parallel()
+	migration := readMigration(t, "004_single_device_ota.up.sql")
+	for _, fragment := range []string{
+		"CREATE TABLE IF NOT EXISTS ota_firmware_versions",
+		"CREATE TABLE IF NOT EXISTS device_ota_deployments",
+		"uniq_device_ota_deployments_active",
+		"firmware_version_id uuid NOT NULL",
+	} {
+		requireMigrationContains(t, migration, fragment)
+	}
+	for _, forbidden := range []string{"ota_campaigns", "aws_iot_jobs", "tenant_id", "project_id"} {
+		if strings.Contains(strings.ToLower(migration), forbidden) {
+			t.Errorf("single-device OTA migration contains platform fragment %q", forbidden)
 		}
 	}
 }

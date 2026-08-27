@@ -18,7 +18,7 @@ func TestProductSeedDefinesGatewayActivationCatalog(t *testing.T) {
 		"'feeder-x1'",
 		"'lamp-x1'",
 		"'minion-cam-x1'",
-		`'["webrtc.v1", "local-media.v1", "ptz.v1"]'::jsonb`,
+		`'["webrtc.v1", "local-media.v1", "ptz.v1", "ota.app.v1"]'::jsonb`,
 		`'["webrtc.v1"]'::jsonb`,
 		"ON CONFLICT (pid) DO UPDATE",
 		"capabilities = EXCLUDED.capabilities",

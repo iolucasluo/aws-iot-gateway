@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/ota"
 )
 
 type publisherStub struct {
@@ -136,6 +138,57 @@ func TestSendCommandsRejectsLocalMediaBeforePersistenceOrPublish(t *testing.T) {
 	}
 	if len(repository.commands) != 0 || len(publisher.payload) != 0 {
 		t.Fatalf("generic local media mutated repository=%#v or published=%s", repository.commands, publisher.payload)
+	}
+}
+
+func TestSendCommandsRejectsOTAInstallBeforePersistenceOrPublish(t *testing.T) {
+	t.Parallel()
+	publisher := &publisherStub{}
+	repository := &commandRepositoryStub{}
+	service := NewService(publisher, ackWaiterStub{}, repository,
+		"aws-iot-gateway-staging", func() (string, error) { return "must-not-run", nil })
+
+	_, err := service.SendCommands(
+		context.Background(), "livpet-staging", "device-id", "fdr-0001",
+		[]CommandInput{{Code: "ota_install", Value: json.RawMessage(`{"download_url":"must-not-publish"}`)}}, true,
+	)
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("SendCommands() error = %v, want ErrInvalidInput", err)
+	}
+	if len(repository.commands) != 0 || len(publisher.payload) != 0 {
+		t.Fatalf("generic OTA mutated repository=%#v or published=%s", repository.commands, publisher.payload)
+	}
+}
+
+func TestSendOTACommandPublishesTypedPayloadAndRequiresMatchingAcceptedACK(t *testing.T) {
+	t.Parallel()
+	publisher := &publisherStub{}
+	repository := &commandRepositoryStub{}
+	service := NewService(publisher, ackWaiterStub{ack: map[string]any{
+		"action": "ota_install", "session_id": "deployment-id", "code": float64(0),
+		"deployment_id": "deployment-id", "status": "accepted",
+	}}, repository, "aws-iot-gateway-staging", nil)
+	command := ota.Command{
+		DeploymentID: "deployment-id", DeviceID: "device-id", DeviceSN: "fdr-0001",
+		PID: "feeder-x1", Version: "v1.2.3", FirmwareBuild: 42,
+		DownloadURL: "https://download.example/ota.tar.gz", SHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		FileSize: 1234, ReleaseStatement: "signed-statement", Signature: "c2lnbmF0dXJl",
+	}
+
+	if err := service.SendOTACommand(context.Background(), command); err != nil {
+		t.Fatalf("SendOTACommand() error = %v", err)
+	}
+	if len(repository.commands) != 0 {
+		t.Fatalf("OTA secrets/URLs were persisted in generic commands: %#v", repository.commands)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(publisher.payload, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload["action"] != "ota_install" || payload["schema"] != "explorex-device-ota-v1" ||
+		payload["session_id"] != "deployment-id" || payload["deployment_id"] != "deployment-id" ||
+		payload["firmware_build"] != float64(42) {
+		t.Fatalf("payload = %#v", payload)
 	}
 }
 

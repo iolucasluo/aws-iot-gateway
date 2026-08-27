@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/ota"
 )
 
 const commandACKTimeout = 10 * time.Second
@@ -155,7 +157,7 @@ func (service *Service) SendCommands(
 	results := make([]CommandResult, 0, len(commands))
 	for index, input := range commands {
 		action := strings.TrimSpace(input.Code)
-		if action == "" || action == "local_media" || len(input.Code) > 64 {
+		if action == "" || action == "local_media" || action == "ota_install" || len(input.Code) > 64 {
 			return SendCommandsResult{}, ErrInvalidInput
 		}
 		sessionID := strings.TrimSpace(input.CommandID)
@@ -236,6 +238,59 @@ func (service *Service) SendCommands(
 		}
 	}
 	return SendCommandsResult{Results: results}, nil
+}
+
+// SendOTACommand is the only path that may publish ota_install. The deployment table is the
+// execution authority, so presigned URLs and signed release metadata never enter device_commands.
+func (service *Service) SendOTACommand(ctx context.Context, command ota.Command) error {
+	if service == nil || service.publisher == nil || service.ackWaiter == nil ||
+		!topicPrefixRegexp.MatchString(service.topicPrefix) ||
+		strings.TrimSpace(command.DeploymentID) == "" || len(command.DeploymentID) > 63 ||
+		strings.TrimSpace(command.DeviceID) == "" || strings.TrimSpace(command.DeviceSN) == "" ||
+		strings.TrimSpace(command.PID) == "" || strings.TrimSpace(command.Version) == "" ||
+		command.FirmwareBuild <= 0 || command.FileSize <= 0 || command.FileSize > 3*1024*1024 ||
+		len(command.DownloadURL) < 8 || len(command.DownloadURL) > 1023 ||
+		len(command.SHA256) != 64 || len(command.ReleaseStatement) == 0 ||
+		len(command.ReleaseStatement) > 1023 || len(command.Signature) == 0 || len(command.Signature) > 511 {
+		return ErrInvalidInput
+	}
+	payload := map[string]any{
+		"action": "ota_install", "session_id": command.DeploymentID,
+		"schema": "explorex-device-ota-v1", "deployment_id": command.DeploymentID,
+		"pid": command.PID, "version": command.Version, "firmware_build": command.FirmwareBuild,
+		"download_url": command.DownloadURL, "sha256": command.SHA256,
+		"file_size": command.FileSize, "release_statement": command.ReleaseStatement,
+		"signature": command.Signature,
+	}
+	body, err := marshalWithoutHTMLEscape(payload)
+	if err != nil {
+		return fmt.Errorf("marshal OTA command: %w", err)
+	}
+	if len(body) > 2048 {
+		return ErrInvalidInput
+	}
+	if err := service.publisher.Publish(ctx, "cmd/"+service.topicPrefix+"/"+command.DeviceSN+"/req", body); err != nil {
+		return fmt.Errorf("%w: %v", ErrPublishFailed, err)
+	}
+	ack, err := service.ackWaiter.Wait(ctx, command.DeviceSN, command.DeploymentID, commandACKTimeout)
+	if err != nil {
+		if errors.Is(err, ErrACKTimeout) || errors.Is(err, context.DeadlineExceeded) {
+			return ErrDeviceOffline
+		}
+		return err
+	}
+	code, ok := numericCode(ack["code"])
+	if !ok || ack["action"] != "ota_install" || ack["session_id"] != command.DeploymentID ||
+		ack["deployment_id"] != command.DeploymentID {
+		return ErrInvalidDeviceResponse
+	}
+	if code == -2 {
+		return ErrDeviceBusy
+	}
+	if code != 0 || ack["status"] != "accepted" {
+		return ErrInvalidDeviceResponse
+	}
+	return nil
 }
 
 // SendLocalMediaCommand publishes the one command whose payload contains temporary LAN media

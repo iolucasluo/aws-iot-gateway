@@ -1,6 +1,6 @@
 # aws-iot-gateway
 
-`aws-iot-gateway` 是 LivPet 和内部 Demo App 共用的 **Internal AWS API**。它拥有用户激活、全局唯一绑定、设备运行身份和受限设备操作；`products` 仅作为受控的只读激活/协议能力目录，不实现 Developer、Project、Product CRUD/owner、Factory、tenant、IDevID、RMA 或平台 OTA。
+`aws-iot-gateway` 是 LivPet 和内部 Demo App 共用的 **Internal AWS API**。它拥有用户激活、全局唯一绑定、设备运行身份和受限设备操作；`products` 仅作为受控的只读激活/协议能力目录，不实现 Developer、Project、Product CRUD/owner、Factory、tenant、IDevID、RMA 或 OTA campaign 平台。OTA 只保留签名版本和单设备 deployment。
 
 `/api/v1/openapi/*` 中的 `openapi` 只是 LivPet wire compatibility，产品和代码语义均使用 internal app。App 必须先读取受控产品目录并在创建 activation 时显式提交 active PID；Gateway 不再默认 `feeder-x1`。
 
@@ -26,7 +26,7 @@
   ECS service 使用无歧义别名 `iot-gateway-event-worker`。
 - worker 同时消费设备 60 秒 `status` 心跳和 MQTT LWT，按 AWS IoT 接收时间防乱序写入 presence；
   设备列表在连续三次心跳缺失后 fail closed 为离线，不再把陈旧 Shadow 当作连接状态。
-- KVS 与 S3：提供受 binding 约束的 WebRTC、快照、录像和喂食音频能力。
+- KVS 与 S3：提供受 binding 约束的 WebRTC、快照、录像、喂食音频，以及与 media bucket 隔离的 OTA artifact。
 - 局域网媒体：Gateway 只授权并经 MQTT 开关设备的 ONVIF/RTSP 短租约；不代理、
   不拨号 RFC 1918 设备地址，App 在同一 LAN 直连设备。
 
@@ -50,6 +50,10 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 | `POST /api/v1/openapi/devices/token` | 内部 App backend | HMAC v1 |
 | `POST /api/v1/openapi/devices/unbind/{device_token}` | 内部 App backend | HMAC v1 |
 | `POST /api/v1/openapi/devices/recommission/{device_token}` | 内部 App backend | HMAC v1 |
+| `POST/GET /api/v1/openapi/ota/firmware-versions` | OTA 发布方 / 内部 App | HMAC v1 + `ota:publish` / `ota:deploy` |
+| `POST /api/v1/openapi/ota/firmware-versions/{id}/complete` | OTA 发布方 | HMAC v1 + `ota:publish` |
+| `POST /api/v1/openapi/devices/{device_sn}/ota-deployments` | Demo App / 内部 App | HMAC v1 + `ota:deploy` + `X-Device-Token` |
+| `GET /api/v1/openapi/devices/{device_sn}/ota-deployments/{id}` | Demo App / 内部 App | 同上 |
 | `GET /api/v1/openapi/devices/{device_sn}/status` | 内部 App backend | HMAC v1 + `X-Device-Token` |
 | `POST/DELETE /api/v1/openapi/devices/{device_sn}/local-media-sessions` | 内部 App backend | HMAC v1 + `X-Device-Token`；`no-store` |
 | `/api/v1/openapi/devices/{device_sn}/*` | 内部 App backend | HMAC v1 + `X-Device-Token` |
@@ -58,7 +62,11 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 | `POST /api/v1/device-activations/qr/prepare-installation` | 设备 | activation code |
 | `POST /api/v1/device-activations/confirm-installation` | 设备 | activation code + operational-key proof |
 
-设备子路由覆盖 detail、shadow、commands、schedules、events、streams、local-media-sessions、snapshots、recordings 和 feed-audio。Bearer `/v1/activations`、`/v1/devices` 和旧 `/v1/device-activations/{id}/*` 已从 router 删除。完整目标路由和阶段验收快照见根仓 `docs/branches/.archived/wicgeechan/2026-08-17/2026-08-13-internal-aws-api-implementation-plan.md`；当前未完成项见 `docs/branches/iot-flash-develop-internal-aws-follow-ups.md`。
+设备子路由覆盖 detail、shadow、commands、schedules、events、streams、local-media-sessions、snapshots、recordings、feed-audio 和 ota-deployments。Bearer `/v1/activations`、`/v1/devices` 和旧 `/v1/device-activations/{id}/*` 已从 router 删除。完整目标路由和阶段验收快照见根仓 `docs/branches/.archived/wicgeechan/2026-08-17/2026-08-13-internal-aws-api-implementation-plan.md`；当前未完成项见 `docs/branches/iot-flash-develop-internal-aws-follow-ups.md`。
+
+OTA 不使用 AWS IoT Jobs。发布方先创建版本：staging/production 得到 15 分钟 presigned PUT，上传时必须携带响应中的 Content-Type、Content-Length 和 `x-amz-checksum-sha256`，S3 校验对象字节后再调用 `complete`；development 还可提交 origin 已列入 `OTA_DEV_ARTIFACT_ALLOWED_ORIGINS` 的局域网 `source_url`。Gateway 永不接收签名私钥。Demo App 只对声明 `ota.app.v1` 的设备展示升级入口，创建单设备 deployment 后轮询。HTTP 202 和设备 ACK 仅表示 `accepted`；只有重启 `boot` 事件的 version/build 与目标精确一致才转为 `succeeded`，安装后回到其他版本则记为 `rolled_back`。
+
+同一设备最多一条 active deployment；设备必须有三分钟内的在线 presence，且通用 `commands` 不能冒充 `ota_install`。当前不提供 campaign、定时调度、批量发布、离线队列或自动重试。
 
 设备冷启动的公开 Contract → signed-time → 严格 TLS 接入闭环，以及登记、activation、binding、reset、MQTT
 事件与媒体的代码反向工程流程图见 [`docs/flows/目录说明.md`](docs/flows/目录说明.md)。每个场景单独成篇；
