@@ -137,10 +137,21 @@ Gateway 不转发 ONVIF SOAP/RTSP 媒体，DP/PTZ 继续走 OpenAPI → MQTT。
 Internal App 配置，AWS access key 仍走 standard credential chain，不写入环境文件。
 
 本地开发优先复用 `127.0.0.1:5432/6379` 上已有的 PostgreSQL/Redis 进程，但必须使用独立的
-`aws_iot_gateway` 数据库和 Redis DB index（示例为 `/1`）。根工作区 `local-dev` skill 只探测、
-不启停用户已有的进程；端口为空时才使用 `deploy/local/compose.yaml` 启动 fallback 依赖。
-从根工作区运行 `docs/coding-rules/skills/local-dev/scripts/dev.sh up --env cwj` 时，会先同步执行显式
-seed runner，成功后才以前台生命周期启动 API。等价的手工 fallback 流程是：
+`aws_iot_gateway` 数据库和 Redis DB index（示例为 `/1`）。本仓 `tool/dev.sh` contract v1 拥有
+`.env.<name>` 校验、端口探测、`deploy/local/compose.yaml` fallback、构建、显式 seed 和 API 前台生命周期；
+它只复用、不停止开发者已有进程。聚合工作区 `local-dev` 的 `status/up/down/test` 只检查 contract version
+并委托本入口，避免不同聚合仓复制 Gateway 启动实现：
+
+```sh
+tool/dev.sh contract-version
+tool/dev.sh status --environment-id cwj
+tool/dev.sh up --environment-id cwj
+tool/dev.sh down --environment-id cwj
+tool/dev.sh test
+```
+
+`up` 会先同步执行显式 seed runner，成功后才以前台生命周期 `exec` API；Ctrl+C 只终止 API，保留共享
+依赖。等价的手工 fallback 流程是：
 
 ```sh
 docker compose --env-file .env.cwj -f deploy/local/compose.yaml up -d --wait

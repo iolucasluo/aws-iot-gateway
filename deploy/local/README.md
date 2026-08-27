@@ -2,11 +2,16 @@
 
 ## Database initialization
 
-根工作区的 cwj 统一入口会在 API 前显式执行可重复的 seed runner：
+Gateway-owned launcher 会在 API 前显式执行可重复的 seed runner；根工作区入口只委托同一 contract：
 
 ```sh
+tool/dev.sh up --environment-id cwj
+# 聚合工作区等价入口：
 docs/coding-rules/skills/local-dev/scripts/dev.sh up --env cwj
 ```
+
+`tool/dev.sh status/up/down/test` 的 contract version 为 `1`。`up` 只在 5432/6379 未监听时启动本 compose
+project 的 fallback service；`down` 只停止该 project，不停止开发者已有进程。
 
 手工使用 `deploy/local/compose.yaml` 的新库时，加载开发者自己的 `.env.<name>` 后执行同样流程：
 
