@@ -49,3 +49,24 @@ func TestProductDPSeedDefinesMinionCameraContract(t *testing.T) {
 		}
 	}
 }
+
+func TestProductDPSeedDefinesMachineCheckableDomains(t *testing.T) {
+	t.Parallel()
+
+	content, err := Files.ReadFile("002_product_dps.sql")
+	if err != nil {
+		t.Fatalf("read product DP seed: %v", err)
+	}
+	seed := string(content)
+	for _, fragment := range []string{
+		`"minimum":0,"maximum":100`,
+		`"enum":["runtime","all"]`,
+		`"enum":["start","stop"]`,
+		`"ack":{"files":"finalized recording metadata objects"`,
+		`"report_interval_semantics":"accepted for cross-repo compatibility but not applied by current firmware action"`,
+	} {
+		if !strings.Contains(seed, fragment) {
+			t.Errorf("product DP seed missing machine-checkable domain %q", fragment)
+		}
+	}
+}

@@ -58,6 +58,28 @@ func TestValidateCommandsChecksRequiredObjectFieldsWhenValueIsOmitted(t *testing
 	}
 }
 
+func TestValidateCommandsChecksNumericPropertyBounds(t *testing.T) {
+	t.Parallel()
+	definitions := []ProductDPDefinition{{
+		Code: "speaker_vol", Type: "object", Direction: "wo", Status: "active",
+		Spec: json.RawMessage(`{"required":["volume"],"properties":{"volume":{"type":"integer","minimum":0,"maximum":100}}}`),
+	}}
+
+	if err := ValidateCommands(definitions, []CommandInput{{
+		Code: "speaker_vol", Value: json.RawMessage(`{"volume":60}`),
+	}}); err != nil {
+		t.Fatalf("ValidateCommands() valid bounded value error = %v", err)
+	}
+	for _, value := range []string{`{"volume":-1}`, `{"volume":101}`} {
+		err := ValidateCommands(definitions, []CommandInput{{
+			Code: "speaker_vol", Value: json.RawMessage(value),
+		}})
+		if !errors.Is(err, ErrDPInvalidValue) {
+			t.Fatalf("ValidateCommands(%s) error = %v, want ErrDPInvalidValue", value, err)
+		}
+	}
+}
+
 func TestValidateCommandsRejectsLifecycleDPsFromGenericPath(t *testing.T) {
 	t.Parallel()
 	definitions := []ProductDPDefinition{

@@ -222,7 +222,39 @@ func validateProperty(value any, property map[string]any) error {
 	if err := validateDPValue(definition, raw); err != nil {
 		return err
 	}
+	if err := validateNumericBounds(raw, typeName, property); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateNumericBounds(raw json.RawMessage, typeName string, property map[string]any) error {
+	if typeName != "integer" && typeName != "int" && typeName != "number" && typeName != "float" {
+		return nil
+	}
+	number, err := json.Number(string(raw)).Float64()
+	if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
+		return errors.New("value must be a finite number")
+	}
+	if minimum, ok := propertyNumber(property["minimum"]); ok && number < minimum {
+		return fmt.Errorf("value must be >= %v", minimum)
+	}
+	if maximum, ok := propertyNumber(property["maximum"]); ok && number > maximum {
+		return fmt.Errorf("value must be <= %v", maximum)
+	}
+	return nil
+}
+
+func propertyNumber(value any) (float64, bool) {
+	switch number := value.(type) {
+	case float64:
+		return number, true
+	case json.Number:
+		parsed, err := number.Float64()
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
 }
 
 func validateEnum(value any, raw json.RawMessage) error {

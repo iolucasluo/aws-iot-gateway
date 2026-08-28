@@ -322,6 +322,32 @@ func TestProductSeedIsExplicitAndIdempotent(t *testing.T) {
 	if dpCount != 30 || minionDPCount != 28 {
 		t.Fatalf("seeded product DP counts = total %d/minion %d, want 30/28", dpCount, minionDPCount)
 	}
+	var minionDetailedCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM product_dps dp JOIN products p ON p.id=dp.product_id
+		WHERE p.pid='minion-cam-x1' AND jsonb_typeof(dp.spec->'properties')='object'
+	`).Scan(&minionDetailedCount); err != nil {
+		t.Fatalf("count detailed minion product DP specs: %v", err)
+	}
+	if minionDetailedCount != 28 {
+		t.Fatalf("detailed minion product DP specs = %d, want 28", minionDetailedCount)
+	}
+	var volumeMin, volumeMax, sdFilesAck string
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			volume.spec->'properties'->'volume'->>'minimum',
+			volume.spec->'properties'->'volume'->>'maximum',
+			files.spec->'ack'->>'files'
+		FROM product_dps volume
+		JOIN products vp ON vp.id=volume.product_id AND vp.pid='minion-cam-x1'
+		JOIN product_dps files ON files.code='sd_files' AND files.product_id=volume.product_id
+		WHERE volume.code='speaker_vol'
+	`).Scan(&volumeMin, &volumeMax, &sdFilesAck); err != nil {
+		t.Fatalf("load detailed minion DP spec examples: %v", err)
+	}
+	if volumeMin != "0" || volumeMax != "100" || sdFilesAck != "finalized recording metadata objects" {
+		t.Fatalf("detailed minion DP spec examples = volume %s..%s, sd_files=%q", volumeMin, volumeMax, sdFilesAck)
+	}
 }
 
 func TestMigrateKeepsLocalThumbnailOutboxStatusesLengthSafe(t *testing.T) {
