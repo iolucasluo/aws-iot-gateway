@@ -19,7 +19,7 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或 O
   pre-production `001_initial.sql` 时回填其历史上唯一合法的 `feeder-x1`，以便在不删除旧 activation/registry
   数据的前提下建立 PID 外键；fresh schema 不执行该数据回填。
 
-## 当前 schema 快照（19 张业务表）
+## 当前 schema 快照（25 张业务表）
 
 | 表 | 用途 | PK | 主要 FK / 删除语义 |
 |---|---|---|---|
@@ -37,6 +37,12 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或 O
 | `device_streams` | KVS stream grant 生命周期 | `id` | registry + binding（RESTRICT） |
 | `device_snapshots` | snapshot 对象状态 | `id` | registry + binding（RESTRICT） |
 | `device_recordings` | cloud/local recording 状态 | `id` | registry + binding（RESTRICT） |
+| `device_local_recordings` | SD v1 metadata/thumbnail projection | `id` | registry + source event（RESTRICT） |
+| `device_local_recording_tombstones` | 防止乱序 finalized 复活已删录像 | `id` | registry + source event（RESTRICT） |
+| `local_recording_cursors` | binding-scoped opaque pagination cursor | `token` | binding + registry（CASCADE） |
+| `local_recording_reconciliations` | 每设备 catalog 对账游标/代次 | `device_registry_id` | registry（CASCADE） |
+| `local_recording_reconciliation_sightings` | 完整扫描期间看到的 recording_id | composite | registry（CASCADE） |
+| `local_recording_thumbnail_outbox` | private thumbnail upload/reconcile intent | `id` | local recording（CASCADE） |
 | `webhook_outbox` | durable webhook delivery intent | `id` | `device_event_id → device_events`（CASCADE） |
 | `webhook_deliveries` | append-only webhook attempt | `id` | `webhook_outbox_id → webhook_outbox`（CASCADE） |
 | `device_lifecycle_outbox` | 运行证书回收补偿任务 | `id` | `device_registry_id → device_registry`（RESTRICT） |
@@ -58,3 +64,5 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或 O
 - `003_product_capabilities`：为已经应用旧 001/002 的产品目录补充只读 JSON capability ID 数组；fresh schema
   已由 001 直接包含同一字段与约束。
 - `004_single_device_ota`：增加签名固件版本和单设备 deployment；不增加 campaign、调度器或 AWS IoT Jobs。
+- `005_local_recording_projection`：新增 SD v1 metadata projection、binding-scoped opaque cursor 和 private thumbnail outbox；不上传录像主体。
+- `006_local_thumbnail_status_text`：将 thumbnail outbox 的 `status` 从定长 `varchar(16)` 改为 `text`，继续由 CHECK 约束限定合法状态，避免状态名长度与字段宽度漂移。

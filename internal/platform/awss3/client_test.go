@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"io"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,31 @@ func otaSHA256Base64(t *testing.T) string {
 	return base64.StdEncoding.EncodeToString(digest)
 }
 
+func TestPutURLWithSizeSignsContentLengthAndType(t *testing.T) {
+	t.Parallel()
+	client, err := NewClient(aws.Config{
+		Region:      "us-east-1",
+		Credentials: credentials.NewStaticCredentialsProvider("AKID", "SECRET", ""),
+	}, "media-bucket")
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	rawURL, err := client.PutURLWithSize(
+		context.Background(), "thumbnail.jpg", "image/jpeg", 123, 15*time.Minute,
+	)
+	if err != nil {
+		t.Fatalf("PutURLWithSize() error = %v", err)
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse presigned URL: %v", err)
+	}
+	signedHeaders := parsed.Query().Get("X-Amz-SignedHeaders")
+	if signedHeaders != "content-length;content-type;host" {
+		t.Fatalf("signed headers = %q", signedHeaders)
+	}
+}
+
 type s3APIStub struct {
 	body    string
 	headErr error
@@ -47,6 +73,9 @@ func (stub *s3APIStub) HeadObject(_ context.Context, input *s3.HeadObjectInput, 
 		return stub.head, stub.headErr
 	}
 	return &s3.HeadObjectOutput{}, stub.headErr
+}
+func (stub *s3APIStub) DeleteObject(context.Context, *s3.DeleteObjectInput, ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+	return &s3.DeleteObjectOutput{}, nil
 }
 
 func TestVerifyOTAObjectRequiresS3ValidatedSHA256Checksum(t *testing.T) {

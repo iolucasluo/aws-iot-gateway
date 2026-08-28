@@ -189,3 +189,37 @@ func TestCreateStreamRejectsInvalidRequestedCapabilities(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateStreamReturnsStrictPlaybackCapabilityGrant(t *testing.T) {
+	t.Parallel()
+	ack := map[string]any{
+		"code": float64(0), "action": "stream", "type": "webrtc", "start": float64(1),
+		"status": "ready", "viewer_client_id": "viewer-playback",
+		"capability_contract_version": "webrtc.v1", "firmware_version": "v1.2.3",
+		"supported": map[string]any{
+			"video_receive": true, "audio_receive": true, "audio_send": true,
+			"data_channels": []any{"explorex.control.v1"},
+		},
+		"accepted": map[string]any{
+			"video_receive": true, "audio_receive": false, "audio_send": false,
+			"data_channels": []any{"explorex.control.v1"},
+		},
+		"playback_control": map[string]any{
+			"contract":             "sd-playback.v1",
+			"ops":                  []any{"load", "play", "pause", "resume", "seek", "skip", "stop", "get_state"},
+			"progress_interval_ms": float64(500), "max_concurrent_sessions": float64(1),
+			"supports_rate": false,
+		},
+	}
+	service := NewStreamService(kvsStub{}, &commanderStub{ack: ack}, &streamRepositoryStub{},
+		"aws-iot-gateway-staging-", func() (string, error) { return "viewer-playback", nil })
+	result, err := service.Create(context.Background(), "livpet-staging", "device-id", "binding-id",
+		"fdr-0001", StreamCapabilities{VideoReceive: true, DataChannels: []string{ControlDataChannelProtocol}})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if result.PlaybackControl == nil || result.PlaybackControl.Contract != "sd-playback.v1" ||
+		len(result.PlaybackControl.Ops) != 8 || result.PlaybackControl.MaxConcurrentSessions != 1 {
+		t.Fatalf("playback capability = %#v", result.PlaybackControl)
+	}
+}

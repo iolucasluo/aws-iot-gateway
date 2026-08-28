@@ -151,7 +151,7 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		return false
 	}
 	parts := strings.Split(path, "/")
-	if parts[0] == "" || len(parts) > 3 {
+	if parts[0] == "" || len(parts) > 5 {
 		return false
 	}
 	operation := "detail"
@@ -172,6 +172,8 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		(operation == "snapshots" && len(parts) == 3 && request.Method == http.MethodGet) ||
 		(operation == "recordings" && len(parts) == 2 && (request.Method == http.MethodPost || request.Method == http.MethodGet)) ||
 		(operation == "recordings" && len(parts) == 3 && request.Method == http.MethodGet) ||
+		(operation == "recordings" && len(parts) == 5 && parts[2] == "local" &&
+			parts[4] == "thumbnail" && request.Method == http.MethodGet) ||
 		(operation == "feed-audio" && len(parts) == 2 && (request.Method == http.MethodPost || request.Method == http.MethodDelete)) ||
 		(operation == "ota-deployments" && len(parts) == 2 && request.Method == http.MethodPost) ||
 		(operation == "ota-deployments" && len(parts) == 3 && request.Method == http.MethodGet) ||
@@ -482,12 +484,65 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 			writeJSON(writer, http.StatusAccepted, result)
 			return true
 		}
+		if len(parts) == 5 && parts[2] == "local" && parts[4] == "thumbnail" {
+			content, err := s.assets.GetLocalRecordingThumbnail(
+				request.Context(), ownedBinding.ID, ownedBinding.DeviceSN, parts[3],
+			)
+			if err != nil {
+				writeMediaError(writer, err)
+				return true
+			}
+			writer.Header().Set("Content-Type", "image/jpeg")
+			writer.Header().Set("Cache-Control", "private, max-age=300")
+			writer.Header().Set("ETag", `"`+content.ETag+`"`)
+			writer.WriteHeader(http.StatusOK)
+			_, _ = writer.Write(content.Payload)
+			return true
+		}
 		if len(parts) == 3 && parts[2] == "local" {
-			offset, _ := strconv.Atoi(request.URL.Query().Get("offset"))
-			limit, _ := strconv.Atoi(request.URL.Query().Get("limit"))
+			if _, legacyOffset := request.URL.Query()["offset"]; legacyOffset {
+				offset, err := strconv.Atoi(request.URL.Query().Get("offset"))
+				if err != nil || offset < 0 || request.URL.Query().Get("cursor") != "" ||
+					request.URL.Query().Get("type") != "" {
+					writeError(writer, http.StatusBadRequest, "invalid_request",
+						"legacy offset pagination cannot be combined with cursor or type")
+					return true
+				}
+				limit := 20
+				if rawLimit := request.URL.Query().Get("limit"); rawLimit != "" {
+					parsed, parseErr := strconv.Atoi(rawLimit)
+					if parseErr != nil || parsed < 1 || parsed > 50 {
+						writeError(writer, http.StatusBadRequest, "invalid_request",
+							"legacy limit must be between 1 and 50")
+						return true
+					}
+					limit = parsed
+				}
+				result, legacyErr := s.assets.ListLegacyLocalRecordings(
+					request.Context(), principal.InternalAppID, ownedBinding.DeviceID,
+					ownedBinding.DeviceSN, request.URL.Query().Get("date"), offset, limit,
+				)
+				if legacyErr != nil {
+					writeMediaError(writer, legacyErr)
+					return true
+				}
+				writeJSON(writer, http.StatusOK, result)
+				return true
+			}
+			limit := 20
+			if rawLimit := request.URL.Query().Get("limit"); rawLimit != "" {
+				parsed, err := strconv.Atoi(rawLimit)
+				if err != nil || parsed < 1 || parsed > 100 {
+					writeError(writer, http.StatusBadRequest, "invalid_request",
+						"limit must be between 1 and 100")
+					return true
+				}
+				limit = parsed
+			}
 			result, err := s.assets.ListLocalRecordings(
-				request.Context(), principal.InternalAppID, ownedBinding.DeviceID, ownedBinding.DeviceSN,
-				request.URL.Query().Get("date"), offset, limit,
+				request.Context(), ownedBinding.ID, ownedBinding.DeviceSN,
+				request.URL.Query().Get("date"), request.URL.Query().Get("type"),
+				request.URL.Query().Get("cursor"), limit,
 			)
 			if err != nil {
 				writeMediaError(writer, err)

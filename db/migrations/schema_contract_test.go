@@ -194,3 +194,52 @@ func requireMigrationContains(t *testing.T, migration, fragment string) {
 		t.Errorf("migration missing %q", fragment)
 	}
 }
+
+func TestLocalRecordingProjectionMigrationIsNarrowAndFailClosed(t *testing.T) {
+	t.Parallel()
+	migration := readMigration(t, "005_local_recording_projection.up.sql")
+	for _, fragment := range []string{
+		"CREATE TABLE device_local_recordings (",
+		"device_local_recordings_identity_key",
+		"recording_id ~ '^rec_[0-9a-f]{32}$'",
+		"revision ~ '^rev_[0-9a-f]{64}$'",
+		"projection_status IN ('active', 'conflict', 'deleted')",
+		"recording_date date NOT NULL",
+		"thumbnail_status IN ('pending', 'uploading', 'ready', 'failed')",
+		"CREATE TABLE device_local_recording_tombstones (",
+		"CREATE TABLE local_recording_cursors (",
+		"CREATE TABLE local_recording_reconciliations (",
+		"started_at timestamptz NOT NULL DEFAULT now()",
+		"CREATE TABLE local_recording_reconciliation_sightings (",
+		"CREATE TABLE local_recording_thumbnail_outbox (",
+		"idx_local_recording_thumbnail_outbox_ready",
+		"'delete_pending', 'delete_processing', 'deleted'",
+		"ON DELETE CASCADE",
+	} {
+		requireMigrationContains(t, migration, fragment)
+	}
+	for _, forbidden := range []string{
+		"tenant_id", "product_id", "factory_id", "public_url", "video_object_key",
+	} {
+		if strings.Contains(strings.ToLower(migration), forbidden) {
+			t.Errorf("local recording migration contains forbidden platform/upload field %q", forbidden)
+		}
+	}
+}
+
+func TestLocalThumbnailStatusTextMigrationKeepsTheCheckConstraintFailClosed(t *testing.T) {
+	t.Parallel()
+	up := readMigration(t, "006_local_thumbnail_status_text.up.sql")
+	requireMigrationContains(t, up, "ALTER TABLE local_recording_thumbnail_outbox")
+	requireMigrationContains(t, up, "ALTER COLUMN status TYPE text")
+	for _, forbidden := range []string{"DROP CONSTRAINT", "DROP TABLE", "TRUNCATE", "DELETE FROM"} {
+		if strings.Contains(strings.ToUpper(up), forbidden) {
+			t.Errorf("local thumbnail status migration contains destructive fragment %q", forbidden)
+		}
+	}
+
+	down := readMigration(t, "006_local_thumbnail_status_text.down.sql")
+	requireMigrationContains(t, down, "SET status='delete_pending'")
+	requireMigrationContains(t, down, "WHERE status='delete_processing'")
+	requireMigrationContains(t, down, "ALTER COLUMN status TYPE varchar(16)")
+}

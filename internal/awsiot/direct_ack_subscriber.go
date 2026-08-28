@@ -232,6 +232,7 @@ func directIngestTopics(topicPrefix string) []string {
 		directACKTopic(topicPrefix),
 		"dt/" + topicPrefix + "/+/status",
 		"dt/" + topicPrefix + "/+/lwt",
+		"dt/" + topicPrefix + "/+/event",
 	}
 }
 

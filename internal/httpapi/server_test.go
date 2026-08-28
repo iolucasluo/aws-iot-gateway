@@ -853,7 +853,8 @@ func TestLivPetDeviceRoutesReachTheCompatibleDeviceOperationHandler(t *testing.T
 		{method: http.MethodPost, path: "/api/v1/openapi/devices/fdr-0001/recordings"},
 		{method: http.MethodGet, path: "/api/v1/openapi/devices/fdr-0001/recordings?limit=100"},
 		{method: http.MethodGet, path: "/api/v1/openapi/devices/fdr-0001/recordings/recording-1"},
-		{method: http.MethodGet, path: "/api/v1/openapi/devices/fdr-0001/recordings/local?offset=0&limit=200"},
+		{method: http.MethodGet, path: "/api/v1/openapi/devices/fdr-0001/recordings/local?limit=20"},
+		{method: http.MethodGet, path: "/api/v1/openapi/devices/fdr-0001/recordings/local/rec_0123456789abcdef0123456789abcdef/thumbnail"},
 		{method: http.MethodPost, path: "/api/v1/openapi/devices/fdr-0001/feed-audio"},
 	} {
 		request := signedInternalRequest(t, now, fmt.Sprintf("nested-route-%016d", index), endpoint.method, endpoint.path, nil)

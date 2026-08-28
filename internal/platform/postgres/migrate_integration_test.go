@@ -9,6 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/db/migrations"
 )
 
 func TestMigrateCreatesRequiredTablesAndGlobalBindingConstraint(t *testing.T) {
@@ -23,7 +25,10 @@ func TestMigrateCreatesRequiredTablesAndGlobalBindingConstraint(t *testing.T) {
 		"device_commands", "device_events", "device_schedules", "device_streams", "device_snapshots", "device_recordings",
 		"ota_firmware_versions", "device_ota_deployments",
 		"webhook_outbox", "webhook_deliveries", "device_lifecycle_outbox",
-		"idempotency_records", "audit_logs",
+		"idempotency_records", "audit_logs", "device_local_recordings",
+		"device_local_recording_tombstones", "local_recording_cursors",
+		"local_recording_reconciliations", "local_recording_reconciliation_sightings",
+		"local_recording_thumbnail_outbox",
 	} {
 		var exists bool
 		if err := pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists); err != nil {
@@ -126,6 +131,22 @@ func TestMigrateUpgradesLegacySquashedInitialWithoutDroppingData(t *testing.T) {
 			expires_at timestamptz NOT NULL,
 			created_at timestamptz NOT NULL DEFAULT now(),
 			updated_at timestamptz NOT NULL DEFAULT now()
+		);
+		CREATE TABLE device_bindings (
+			id uuid PRIMARY KEY,
+			device_registry_id uuid NOT NULL REFERENCES device_registry(id),
+			internal_app_id varchar(64) NOT NULL,
+			binding_external_user_id varchar(255) NOT NULL,
+			status varchar(16) NOT NULL,
+			created_at timestamptz NOT NULL DEFAULT now(),
+			updated_at timestamptz NOT NULL DEFAULT now()
+		);
+		CREATE TABLE device_events (
+			id uuid PRIMARY KEY,
+			device_registry_id uuid NOT NULL REFERENCES device_registry(id),
+			event_type varchar(64) NOT NULL,
+			data jsonb NOT NULL DEFAULT '{}'::jsonb,
+			received_at timestamptz NOT NULL DEFAULT now()
 		);
 		INSERT INTO device_registry (id, device_sn, thing_name, status) VALUES
 			('018f0000-0000-7000-8000-000000000011',
@@ -278,4 +299,119 @@ func TestProductSeedIsExplicitAndIdempotent(t *testing.T) {
 			t.Fatalf("%s capabilities = %v, want %v", pid, products[pid], capabilities)
 		}
 	}
+}
+
+func TestMigrateKeepsLocalThumbnailOutboxStatusesLengthSafe(t *testing.T) {
+	ctx := context.Background()
+	pool := newIsolatedMigrationPool(t, ctx)
+	if err := ApplyMigrations(ctx, pool); err != nil {
+		t.Fatalf("ApplyMigrations() error = %v", err)
+	}
+
+	var dataType string
+	var hasNoCharacterLimit bool
+	if err := pool.QueryRow(ctx, `
+		SELECT data_type, character_maximum_length IS NULL
+		FROM information_schema.columns
+		WHERE table_schema=current_schema()
+		  AND table_name='local_recording_thumbnail_outbox'
+		  AND column_name='status'
+	`).Scan(&dataType, &hasNoCharacterLimit); err != nil {
+		t.Fatalf("read local thumbnail outbox status type: %v", err)
+	}
+	if dataType != "text" || !hasNoCharacterLimit {
+		t.Fatalf("local thumbnail outbox status type = %s unlimited=%t, want text unlimited=true", dataType, hasNoCharacterLimit)
+	}
+
+	outboxID := seedLocalThumbnailOutboxStatusFixture(t, ctx, pool, "delete_pending")
+	if _, err := pool.Exec(ctx, `
+		UPDATE local_recording_thumbnail_outbox SET status='delete_processing' WHERE id=$1
+	`, outboxID); err != nil {
+		t.Fatalf("write longest valid local thumbnail status: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE local_recording_thumbnail_outbox SET status='not_a_valid_status' WHERE id=$1
+	`, outboxID); err == nil {
+		t.Fatal("invalid local thumbnail status was accepted")
+	} else {
+		var postgresError *pgconn.PgError
+		if !errors.As(err, &postgresError) || postgresError.Code != "23514" {
+			t.Fatalf("invalid local thumbnail status error = %v, want check violation 23514", err)
+		}
+	}
+}
+
+func TestLocalThumbnailStatusTextDownMigrationRestoresPreviousWidthSafely(t *testing.T) {
+	ctx := context.Background()
+	pool := newIsolatedMigrationPool(t, ctx)
+	if err := ApplyMigrations(ctx, pool); err != nil {
+		t.Fatalf("ApplyMigrations() error = %v", err)
+	}
+	outboxID := seedLocalThumbnailOutboxStatusFixture(t, ctx, pool, "delete_processing")
+	down, err := migrations.Files.ReadFile("006_local_thumbnail_status_text.down.sql")
+	if err != nil {
+		t.Fatalf("read local thumbnail status down migration: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(down)); err != nil {
+		t.Fatalf("apply local thumbnail status down migration: %v", err)
+	}
+
+	var status, dataType string
+	var maximumLength int
+	if err := pool.QueryRow(ctx, `
+		SELECT status FROM local_recording_thumbnail_outbox WHERE id=$1
+	`, outboxID).Scan(&status); err != nil {
+		t.Fatalf("read rolled back local thumbnail status: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT data_type, character_maximum_length
+		FROM information_schema.columns
+		WHERE table_schema=current_schema()
+		  AND table_name='local_recording_thumbnail_outbox'
+		  AND column_name='status'
+	`).Scan(&dataType, &maximumLength); err != nil {
+		t.Fatalf("read rolled back local thumbnail status type: %v", err)
+	}
+	if status != "delete_pending" || dataType != "character varying" || maximumLength != 16 {
+		t.Fatalf("rolled back local thumbnail status = %s type=%s length=%d", status, dataType, maximumLength)
+	}
+}
+
+func seedLocalThumbnailOutboxStatusFixture(
+	t *testing.T, ctx context.Context, pool *pgxpool.Pool, status string,
+) string {
+	t.Helper()
+	applyProductSeeds(t, ctx, pool)
+	const deviceID = "018f0000-0000-7000-8000-000000000051"
+	const recordingID = "018f0000-0000-7000-8000-000000000052"
+	const outboxID = "018f0000-0000-7000-8000-000000000053"
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO device_registry (id, device_sn, thing_name, pid, status)
+		VALUES ($1, 'fdr-thumbnail-status', 'fdr-thumbnail-status', 'feeder-x1', 'active')
+	`, deviceID); err != nil {
+		t.Fatalf("seed local thumbnail device: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO device_local_recordings (
+			id, device_registry_id, recording_id, revision, start_at, end_at,
+			recording_date, duration_ms, size_bytes, recording_type, codec,
+			width, height, fps_num, fps_den, playable, seekable,
+			thumbnail_status, thumbnail_etag, thumbnail_size_bytes
+		) VALUES (
+			$2, $1, 'rec_5123456789abcdef0123456789abcdef',
+			'rev_5123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+			'2026-08-28T00:00:00Z', '2026-08-28T00:01:00Z', '2026-08-28',
+			60000, 1024, 'manual', 'h264', 1920, 1080, 25, 1, true, true,
+			'failed', 'sha256:5123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef', 1234
+		)
+	`, deviceID, recordingID); err != nil {
+		t.Fatalf("seed local thumbnail recording: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO local_recording_thumbnail_outbox (id, local_recording_id, status)
+		VALUES ($1, $2, $3)
+	`, outboxID, recordingID, status); err != nil {
+		t.Fatalf("seed local thumbnail task: %v", err)
+	}
+	return outboxID
 }

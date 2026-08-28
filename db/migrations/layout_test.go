@@ -21,6 +21,10 @@ func TestMigrationLayoutKeepsInitialAndForwardCompatibilityPair(t *testing.T) {
 		"003_product_capabilities.up.sql",
 		"004_single_device_ota.down.sql",
 		"004_single_device_ota.up.sql",
+		"005_local_recording_projection.down.sql",
+		"005_local_recording_projection.up.sql",
+		"006_local_thumbnail_status_text.down.sql",
+		"006_local_thumbnail_status_text.up.sql",
 	}
 	if got := migrationNames(entries); len(got) != len(want) || fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("migration files = %v, want %v", got, want)
