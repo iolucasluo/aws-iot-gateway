@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "$(basename -- "$0")" in
+  aws-iot-gateway-db-seed) label=seed ;;
+  aws-iot-gateway) label=api ;;
+  *) exit 2 ;;
+esac
+
+printf '%s\n' "$label" >>"${GATEWAY_FAKE_CAPTURE:?}"

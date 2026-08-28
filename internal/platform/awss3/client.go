@@ -3,16 +3,21 @@ package awss3
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/ota"
 )
 
 type API interface {
@@ -30,10 +35,68 @@ type Client struct {
 
 func NewClient(config aws.Config, bucket string) (*Client, error) {
 	if bucket == "" {
-		return nil, fmt.Errorf("AWS S3 media bucket is required")
+		return nil, fmt.Errorf("AWS S3 bucket is required")
 	}
 	client := s3.NewFromConfig(config)
 	return &Client{client: client, presign: s3.NewPresignClient(client), bucket: bucket}, nil
+}
+
+func (client *Client) PrepareUpload(ctx context.Context, key string, size int64, sha256 string, ttl time.Duration) (ota.UploadTarget, error) {
+	if client == nil || client.presign == nil || key == "" || size <= 0 || sha256 == "" || ttl <= 0 {
+		return ota.UploadTarget{}, fmt.Errorf("presign OTA upload: invalid input")
+	}
+	checksum, err := sha256Base64(sha256)
+	if err != nil {
+		return ota.UploadTarget{}, fmt.Errorf("presign OTA upload: %w", err)
+	}
+	result, err := client.presign.PresignPutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(client.bucket), Key: aws.String(key),
+		ContentType: aws.String("application/gzip"), ContentLength: aws.Int64(size),
+		ChecksumSHA256: aws.String(checksum),
+	}, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return ota.UploadTarget{}, fmt.Errorf("presign OTA upload: %w", err)
+	}
+	return ota.UploadTarget{
+		URL: result.URL, Method: http.MethodPut,
+		Headers: map[string]string{
+			"Content-Type": "application/gzip", "Content-Length": strconv.FormatInt(size, 10),
+			"x-amz-checksum-sha256": checksum,
+		},
+		ExpiresAt: time.Now().UTC().Add(ttl),
+	}, nil
+}
+
+func (client *Client) Verify(ctx context.Context, key string, size int64, sha256 string) error {
+	if client == nil || client.client == nil || key == "" || size <= 0 || sha256 == "" {
+		return fmt.Errorf("verify OTA object: invalid input")
+	}
+	checksum, err := sha256Base64(sha256)
+	if err != nil {
+		return fmt.Errorf("verify OTA object: %w", err)
+	}
+	result, err := client.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(client.bucket), Key: aws.String(key), ChecksumMode: types.ChecksumModeEnabled,
+	})
+	if err != nil {
+		return fmt.Errorf("verify OTA object: %w", err)
+	}
+	if result.ContentLength == nil || *result.ContentLength != size || result.ChecksumSHA256 == nil || *result.ChecksumSHA256 != checksum {
+		return fmt.Errorf("verify OTA object: size or S3 checksum mismatch")
+	}
+	return nil
+}
+
+func sha256Base64(value string) (string, error) {
+	digest, err := hex.DecodeString(value)
+	if err != nil || len(digest) != 32 {
+		return "", fmt.Errorf("invalid SHA-256")
+	}
+	return base64.StdEncoding.EncodeToString(digest), nil
+}
+
+func (client *Client) DownloadURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	return client.GetURL(ctx, key, ttl)
 }
 
 func (client *Client) PutURL(ctx context.Context, key, contentType string, ttl time.Duration) (string, error) {

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -17,9 +19,11 @@ const (
 )
 
 var (
-	namespacePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`)
-	deviceSNPattern  = regexp.MustCompile(`^[A-Za-z0-9._~-]{1,64}$`)
-	uuidPattern      = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	namespacePattern             = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`)
+	deviceSNPattern              = regexp.MustCompile(`^[A-Za-z0-9._~-]{1,64}$`)
+	uuidPattern                  = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	localMediaTokenPattern       = regexp.MustCompile(`^[A-Za-z0-9_-]{8,63}$`)
+	localMediaFingerprintPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 type Event struct {
@@ -199,6 +203,10 @@ func (service *IngestService) handleMessage(ctx context.Context, message map[str
 			return fmt.Errorf("command ACK has an invalid session_id")
 		}
 		delete(message, "topic")
+		if (message["action"] == "local_media" || strings.HasPrefix(sessionID, "lm_")) &&
+			!safeLocalMediaACKForStorage(message, sessionID) {
+			return fmt.Errorf("local-media command ACK failed pre-storage validation")
+		}
 		return service.ackSink.Store(ctx, deviceSN, sessionID, message, ackRetention)
 	}
 	if parts[0] == "dt" && (parts[3] == "status" || parts[3] == "lwt") {
@@ -218,6 +226,69 @@ func (service *IngestService) handleMessage(ctx context.Context, message map[str
 		return err
 	}
 	return service.repository.Store(ctx, event)
+}
+
+func safeLocalMediaACKForStorage(message map[string]any, sessionID string) bool {
+	if message["action"] != "local_media" || message["session_id"] != sessionID ||
+		!localMediaTokenPattern.MatchString(sessionID) {
+		return false
+	}
+	code, codeOK := integer(message["code"])
+	if !codeOK {
+		return false
+	}
+	if code != 0 {
+		return len(message) == 3
+	}
+	if message["contract_version"] != "local-media.v1" || message["protocol"] != "onvif" ||
+		(message["result"] != "applied" && message["result"] != "duplicate") {
+		return false
+	}
+	revision, revisionOK := integer(message["revision"])
+	if !revisionOK || revision <= 0 {
+		return false
+	}
+	switch message["state"] {
+	case "disabled":
+		return len(message) == 8
+	case "ready":
+		if len(message) != 13 {
+			return false
+		}
+		expiresAt, expiresOK := integer(message["expires_at_epoch_sec"])
+		generation, generationOK := message["credential_generation"].(string)
+		fingerprint, fingerprintOK := message["credential_fingerprint"].(string)
+		onvifEndpoint, onvifOK := message["onvif_endpoint"].(string)
+		rtspBaseURI, rtspOK := message["rtsp_base_uri"].(string)
+		return expiresOK && expiresAt > 0 && generationOK &&
+			localMediaTokenPattern.MatchString(generation) && fingerprintOK &&
+			localMediaFingerprintPattern.MatchString(fingerprint) && onvifOK && rtspOK &&
+			safeLocalMediaLocatorsForStorage(onvifEndpoint, rtspBaseURI)
+	default:
+		return false
+	}
+}
+
+func safeLocalMediaLocatorsForStorage(onvifEndpoint, rtspBaseURI string) bool {
+	onvifURL, err := url.Parse(onvifEndpoint)
+	if err != nil || onvifURL.Scheme != "http" || onvifURL.User != nil ||
+		onvifURL.Port() != "8081" || onvifURL.Path != "/onvif/device_service" ||
+		onvifURL.RawQuery != "" || onvifURL.Fragment != "" {
+		return false
+	}
+	onvifIP := net.ParseIP(onvifURL.Hostname())
+	if onvifIP == nil || onvifIP.To4() == nil || !onvifIP.IsPrivate() ||
+		onvifIP.IsLoopback() || onvifIP.IsUnspecified() {
+		return false
+	}
+	rtspURL, err := url.Parse(rtspBaseURI)
+	if err != nil || rtspURL.Scheme != "rtsp" || rtspURL.User != nil ||
+		rtspURL.Port() != "554" || rtspURL.Path != "" || rtspURL.RawQuery != "" ||
+		rtspURL.Fragment != "" {
+		return false
+	}
+	rtspIP := net.ParseIP(rtspURL.Hostname())
+	return rtspIP != nil && rtspIP.To4() != nil && rtspIP.Equal(onvifIP)
 }
 
 func parseEvent(deviceSN string, message map[string]any) (Event, error) {

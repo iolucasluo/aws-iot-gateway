@@ -32,6 +32,55 @@ func TestCreateBindsShortLivedCodeToUserAndMethod(t *testing.T) {
 	}
 }
 
+func TestProductSupportsUsesTheActiveCatalogCapabilities(t *testing.T) {
+	t.Parallel()
+
+	service := NewService()
+	supported, err := service.ProductSupports(context.Background(), "feeder-x1", "local-media.v1")
+	if err != nil || !supported {
+		t.Fatalf("feeder local-media support = %t, %v", supported, err)
+	}
+	supported, err = service.ProductSupports(context.Background(), "minion-cam-x1", "local-media.v1")
+	if err != nil || supported {
+		t.Fatalf("minion local-media support = %t, %v", supported, err)
+	}
+	if _, err := service.ProductSupports(context.Background(), "unknown", "local-media.v1"); !errors.Is(err, ErrProductUnavailable) {
+		t.Fatalf("unknown product error = %v, want ErrProductUnavailable", err)
+	}
+	if _, err := service.ProductSupports(context.Background(), "feeder-x1", ""); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("empty capability error = %v, want ErrInvalidInput", err)
+	}
+}
+
+func TestProductCatalogFailsClosedForMalformedOrDuplicateCapabilities(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name         string
+		capabilities []string
+	}{
+		{name: "malformed", capabilities: []string{"local media"}},
+		{name: "duplicate", capabilities: []string{"webrtc.v1", "webrtc.v1"}},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			repository := NewMemoryRepository()
+			product := repository.products["feeder-x1"]
+			product.Capabilities = testCase.capabilities
+			repository.products["feeder-x1"] = product
+			service := NewServiceWithRepository(nil, repository)
+
+			if _, err := service.ListActiveProducts(context.Background()); err == nil {
+				t.Fatal("ListActiveProducts() accepted an unsafe capability catalog")
+			}
+			if _, err := service.ProductSupports(
+				context.Background(), "feeder-x1", "webrtc.v1",
+			); err == nil {
+				t.Fatal("ProductSupports() accepted an unsafe capability catalog")
+			}
+		})
+	}
+}
+
 func TestPrepareRequiresTheIssuedCodeAndReturnsOnlyADeviceInstallPayload(t *testing.T) {
 	t.Parallel()
 

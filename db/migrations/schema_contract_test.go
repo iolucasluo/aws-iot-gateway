@@ -28,6 +28,8 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 		"device_lifecycle_outbox",
 		"idempotency_records",
 		"audit_logs",
+		"ota_firmware_versions",
+		"device_ota_deployments",
 	} {
 		requireMigrationContains(t, initial, "CREATE TABLE "+table+" (")
 	}
@@ -41,6 +43,8 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 		"idx_device_recordings_history",
 		"idx_audit_logs_app_time",
 		"idx_device_lifecycle_outbox_ready",
+		"uniq_device_ota_deployments_active",
+		"idx_device_ota_deployments_history",
 	} {
 		requireMigrationContains(t, initial, "INDEX "+indexName)
 	}
@@ -59,6 +63,8 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 		"device_recordings",
 		"webhook_outbox",
 		"device_lifecycle_outbox",
+		"ota_firmware_versions",
+		"device_ota_deployments",
 	} {
 		requireMigrationContains(t, initial, "CREATE TRIGGER trg_"+table+"_updated_at")
 	}
@@ -74,6 +80,8 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 		"presence_online boolean NOT NULL DEFAULT false",
 		"CONSTRAINT device_registry_pid_fkey FOREIGN KEY (pid) REFERENCES products(pid)",
 		"CONSTRAINT device_activations_pid_fkey FOREIGN KEY (pid) REFERENCES products(pid)",
+		"capabilities jsonb NOT NULL DEFAULT '[]'::jsonb",
+		"CONSTRAINT products_capabilities_check",
 		"updated_at timestamptz NOT NULL DEFAULT now()",
 		"COMMENT ON TABLE device_schedules",
 	} {
@@ -95,6 +103,42 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 	} {
 		if strings.Contains(strings.ToLower(initial), strings.ToLower(forbidden)) {
 			t.Errorf("squashed initial schema contains forbidden legacy/platform fragment %q", forbidden)
+		}
+	}
+}
+
+func TestSingleDeviceOTAMigrationHasExecutionRecordsWithoutCampaignPlatform(t *testing.T) {
+	t.Parallel()
+	migration := readMigration(t, "006_single_device_ota.up.sql")
+	for _, fragment := range []string{
+		"CREATE TABLE IF NOT EXISTS ota_firmware_versions",
+		"CREATE TABLE IF NOT EXISTS device_ota_deployments",
+		"uniq_device_ota_deployments_active",
+		"firmware_version_id uuid NOT NULL",
+	} {
+		requireMigrationContains(t, migration, fragment)
+	}
+	for _, forbidden := range []string{"ota_campaigns", "aws_iot_jobs", "tenant_id", "project_id"} {
+		if strings.Contains(strings.ToLower(migration), forbidden) {
+			t.Errorf("single-device OTA migration contains platform fragment %q", forbidden)
+		}
+	}
+}
+
+func TestProductCapabilitiesMigrationUpgradesExistingCatalogWithoutProductDomainExpansion(t *testing.T) {
+	t.Parallel()
+	migration := readMigration(t, "005_product_capabilities.up.sql")
+	for _, fragment := range []string{
+		"ALTER TABLE products",
+		"ADD COLUMN IF NOT EXISTS capabilities jsonb",
+		"products_capabilities_check",
+		"jsonb_typeof(capabilities) = 'array'",
+	} {
+		requireMigrationContains(t, migration, fragment)
+	}
+	for _, forbidden := range []string{"CREATE TABLE", "INSERT INTO products", "DROP TABLE", "TRUNCATE"} {
+		if strings.Contains(strings.ToUpper(migration), forbidden) {
+			t.Errorf("product capability migration contains forbidden fragment %q", forbidden)
 		}
 	}
 }

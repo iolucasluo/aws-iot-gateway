@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ ${INTERNAL_APPS_JSON+x} ]]; then
+  echo "docker inherited INTERNAL_APPS_JSON" >&2
+  exit 1
+fi
+printf 'docker %s\n' "$*" >>"${GATEWAY_FAKE_CAPTURE:?}"

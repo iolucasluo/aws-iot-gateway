@@ -2,7 +2,8 @@
 
 本目录是 Gateway schema 的唯一权威源。这里只保留用户 activation、全局设备绑定、运行身份、设备控制、
 事件、媒体和 outbox。`products` 是 Gateway schema 自有的只读激活目录，不是旧 IoT 平台的 Product 域；没有
-Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或平台 OTA 表。
+Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或 OTA campaign/platform 表。Gateway
+只保留签名固件版本与单设备 deployment 执行事实。
 
 ## 文件与执行约定
 
@@ -18,11 +19,11 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或�
   pre-production `001_initial.sql` 时回填其历史上唯一合法的 `feeder-x1`，以便在不删除旧 activation/registry
   数据的前提下建立 PID 外键；fresh schema 不执行该数据回填。
 
-## 当前 schema 快照（23 张业务表）
+## 当前 schema 快照（25 张业务表）
 
 | 表 | 用途 | PK | 主要 FK / 删除语义 |
 |---|---|---|---|
-| `products` | 只读激活产品目录（PID、名称、active/disabled） | `id` | 被 registry/activation 以 PID RESTRICT 引用 |
+| `products` | 只读激活产品目录（PID、名称、状态、App 可消费的能力 ID） | `id` | 被 registry/activation 以 PID RESTRICT 引用 |
 | `device_registry` | 设备运行权威记录、ThingName、证书与 presence | `id` | — |
 | `device_activations` | internal app 用户激活 saga | `id` | `device_registry_id → device_registry`（nullable, RESTRICT） |
 | `device_activation_sessions` | activation 安装 session | `id` | `device_activation_id → device_activations`（CASCADE） |
@@ -30,6 +31,8 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或�
 | `device_tokens` | binding-scoped token hash | `id` | `device_binding_id → device_bindings`（RESTRICT） |
 | `device_commands` | MQTT command/ACK 状态 | `id` | `device_registry_id → device_registry`（RESTRICT） |
 | `device_events` | append-only 设备事件 | `id` | `device_registry_id → device_registry`（RESTRICT） |
+| `ota_firmware_versions` | 下游发布的签名 app OTA 版本；不保存签名私钥 | `id` | `pid → products`（RESTRICT） |
+| `device_ota_deployments` | 单设备 OTA 执行记录与重启确认结果 | `id` | registry + firmware version（RESTRICT） |
 | `device_schedules` | 每设备一份已确认 schedule 投影 | `device_registry_id` | `device_registry_id → device_registry`（RESTRICT） |
 | `device_streams` | KVS stream grant 生命周期 | `id` | registry + binding（RESTRICT） |
 | `device_snapshots` | snapshot 对象状态 | `id` | registry + binding（RESTRICT） |
@@ -58,7 +61,9 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或�
 - `002_legacy_product_catalog`：只对已登记旧版 `001_initial.sql` 且缺少 `device_activations.pid` 的 schema
   生效；创建最小产品目录、回填旧 activation PID、移除 registry 的隐式默认 PID，并建立 registry/activation
   到 `products(pid)` 的 RESTRICT 外键。fresh schema 为 no-op；为避免丢失历史数据，不提供自动 down。
-
 - `003_local_recording_projection`：新增 SD v1 metadata projection、binding-scoped opaque cursor 和 private thumbnail outbox；不上传录像主体。
 
 - `004_local_thumbnail_status_text`：将 thumbnail outbox 的 `status` 从定长 `varchar(16)` 改为 `text`，继续由 CHECK 约束限定合法状态，避免状态名长度与字段宽度漂移。
+- `005_product_capabilities`：为已经应用旧 001/002 的产品目录补充只读 JSON capability ID 数组；fresh schema
+  已由 001 直接包含同一字段与约束。
+- `006_single_device_ota`：增加签名固件版本和单设备 deployment；不增加 campaign、调度器或 AWS IoT Jobs。

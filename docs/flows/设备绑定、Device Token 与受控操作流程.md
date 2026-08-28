@@ -88,6 +88,7 @@ sequenceDiagram
 | `POST .../commands`、`PUT .../schedules` | 发送 MQTT command，按需等 ACK | 同上 |
 | `GET .../events` | 从 `device_events` 查询 | 同上 |
 | `POST/DELETE .../streams` | KVS viewer grant + device WebRTC ACK | 同上，stream 绑定 `device_binding_id` |
+| `POST/DELETE .../local-media-sessions` | capability 门禁 + typed MQTT ONVIF/RTSP 短租约 | 同上，临时凭据不落库 |
 | `POST/GET .../snapshots`、`.../recordings` | S3 presigned URL + 设备指令/状态 | 同上，asset 绑定 `device_binding_id` |
 | `POST/DELETE .../feed-audio` | S3 上传 + MQTT 音频指令 | 同上 |
 | `POST .../network-reconfiguration-authorizations` | 仅批准原绑定用户的换网请求 | 另有 owner/digest 校验，见重置流程 |
@@ -121,5 +122,6 @@ sequenceDiagram
 | 所有设备路由的统一准入 | `internal/httpapi/server.go`：`serveDeviceOperation` |
 | 指令与 ACK | `internal/modules/device/service.go` |
 | WebRTC capability negotiation | `internal/modules/media/stream.go` |
+| ONVIF/RTSP 短租约与严格 ACK | `internal/modules/media/local_media.go`、`internal/modules/device/service.go` |
 | binding/token schema 约束 | `db/migrations/001_initial.sql`、`db/migrations/schema_contract_test.go` |
 | 回归测试 | `go test -race -count=1 ./internal/internalauth ./internal/httpapi ./internal/modules/binding ./internal/modules/device ./internal/modules/media` |

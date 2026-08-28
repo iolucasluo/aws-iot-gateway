@@ -23,6 +23,7 @@ import (
 	devicemodule "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/device"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/events"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/media"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/ota"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/timebootstrap"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awskms"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awskvs"
@@ -69,6 +70,7 @@ func main() {
 	for _, app := range config.InternalApps {
 		credentials = append(credentials, internalauth.Credential{
 			InternalAppID: app.ID, APIKey: app.APIKey, APISecret: app.APISecret,
+			Permissions: app.Permissions,
 		})
 	}
 	verifier, err := internalauth.NewVerifier(credentials, nonceStore, time.Now)
@@ -130,6 +132,28 @@ func main() {
 		log.Fatalf("configure command repository: %v", err)
 	}
 	deviceService := devicemodule.NewService(deviceRuntime, ackStore, commandRepository, config.IoTTopicPrefix, nil)
+	otaRepository, err := gatewaypostgres.NewOTARepository(database)
+	if err != nil {
+		log.Fatalf("configure OTA repository: %v", err)
+	}
+	var otaArtifacts ota.ArtifactStore
+	if config.S3OTABucket != "" {
+		otaArtifacts, err = awss3.NewClient(awsConfig, config.S3OTABucket)
+		if err != nil {
+			log.Fatalf("configure OTA artifact store: %v", err)
+		}
+	}
+	otaService := ota.NewService(
+		otaRepository, otaArtifacts, deviceService, config.Environment,
+		config.OTADevArtifactAllowedOrigins, nil, time.Now,
+	)
+	localMediaRevisions, err := redisstore.NewLocalMediaRevisionStore(redis, config.Environment)
+	if err != nil {
+		log.Fatalf("configure local media revisions: %v", err)
+	}
+	localMediaService := media.NewLocalMediaService(
+		deviceService, localMediaRevisions, service, time.Now, nil,
+	)
 	recommissioner, err := binding.NewDeviceRecommissioner(deviceService)
 	if err != nil {
 		log.Fatalf("configure device recommissioner: %v", err)
@@ -198,7 +222,7 @@ func main() {
 		Addr: config.ListenAddress,
 		Handler: httpapi.NewInternalAPI(service, verifier, httpapi.Dependencies{
 			Binding: bindingService, Device: deviceService, Events: events.NewQueryService(eventRepository),
-			Media: streamService, Assets: assetService,
+			Media: streamService, LocalMedia: localMediaService, Assets: assetService, OTA: otaService,
 			TimeBootstrap: timeService, TimeBootstrapLimiter: rateLimiter,
 			DeviceRuntime: httpapi.DeviceRuntimeConfig{
 				AWSRegion: config.AWSRegion, CredentialEndpoint: config.IoTCredentialEndpoint,

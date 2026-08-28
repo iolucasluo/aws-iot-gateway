@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"regexp"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -16,6 +18,8 @@ import (
 )
 
 type EventRepository struct{ pool *pgxpool.Pool }
+
+var otaDeploymentIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 func NewEventRepository(pool *pgxpool.Pool) (*EventRepository, error) {
 	if pool == nil {
@@ -107,6 +111,61 @@ func (repository *EventRepository) Store(ctx context.Context, event events.Event
 				WHERE device_registry_id=$1 AND device_metadata->>'session_id'=$2
 			`, deviceID, sessionID, status, event.Data); err != nil {
 				return fmt.Errorf("apply recording completion event: %w", err)
+			}
+		}
+	}
+	if event.EventType == "ota_progress" {
+		deploymentID, state, reason, ok := otaProgressTransition(event.Data)
+		if ok {
+			var reasonValue any
+			if reason != "" {
+				reasonValue = reason
+			}
+			if _, err := transaction.Exec(ctx, `
+				UPDATE device_ota_deployments
+				SET state=$3, failure_reason=$4,
+				    completed_at=CASE WHEN $3='failed' THEN now() ELSE NULL END
+				WHERE id=$2 AND device_registry_id=$1 AND (
+				    ($3='downloading' AND state IN ('pending','accepted','downloading')) OR
+				    ($3='verifying' AND state IN ('pending','accepted','downloading','verifying')) OR
+				    ($3='installing' AND state IN ('pending','accepted','downloading','verifying','installing')) OR
+				    ($3='failed' AND state NOT IN ('succeeded','failed','rolled_back'))
+				)
+			`, deviceID, deploymentID, state, reasonValue); err != nil {
+				return fmt.Errorf("apply OTA progress event: %w", err)
+			}
+		}
+	}
+	if event.EventType == "boot" {
+		var deploymentID, targetVersion, deploymentState string
+		var targetBuild int64
+		err := transaction.QueryRow(ctx, `
+			SELECT id::text, target_version, target_build, state
+			FROM device_ota_deployments
+			WHERE device_registry_id=$1
+			  AND state IN ('accepted','downloading','verifying','installing')
+			FOR UPDATE
+		`, deviceID).Scan(&deploymentID, &targetVersion, &targetBuild, &deploymentState)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("locate active OTA deployment for boot: %w", err)
+		}
+		if err == nil {
+			state, ok := otaBootOutcome(event.Data, targetVersion, targetBuild)
+			if state == "rolled_back" && deploymentState != "installing" {
+				ok = false
+			}
+			if ok {
+				reason := any(nil)
+				if state == "rolled_back" {
+					reason = "boot_target_mismatch"
+				}
+				if _, err := transaction.Exec(ctx, `
+					UPDATE device_ota_deployments
+					SET state=$2, failure_reason=$3, completed_at=now()
+					WHERE id=$1 AND state IN ('accepted','downloading','verifying','installing')
+				`, deploymentID, state, reason); err != nil {
+					return fmt.Errorf("complete OTA deployment from boot: %w", err)
+				}
 			}
 		}
 	}
@@ -275,6 +334,38 @@ func projectLocalRecordingDeleted(ctx context.Context, transaction pgx.Tx, devic
 		return fmt.Errorf("delete empty local recording thumbnail intent: %w", err)
 	}
 	return nil
+}
+
+func otaProgressTransition(data map[string]any) (deploymentID, state, reason string, ok bool) {
+	deploymentID, idOK := data["deployment_id"].(string)
+	state, stateOK := data["state"].(string)
+	if !idOK || !otaDeploymentIDPattern.MatchString(deploymentID) || !stateOK {
+		return "", "", "", false
+	}
+	switch state {
+	case "downloading", "verifying", "installing", "failed":
+	default:
+		return "", "", "", false
+	}
+	reason, _ = data["reason"].(string)
+	if len(reason) > 128 {
+		return "", "", "", false
+	}
+	return deploymentID, state, reason, true
+}
+
+func otaBootOutcome(data map[string]any, targetVersion string, targetBuild int64) (string, bool) {
+	version, versionOK := data["version"].(string)
+	buildValue, buildOK := data["build"].(float64)
+	if !versionOK || version == "" || !buildOK || math.IsNaN(buildValue) ||
+		math.IsInf(buildValue, 0) || math.Trunc(buildValue) != buildValue ||
+		buildValue < 0 || buildValue >= 9223372036854775808.0 {
+		return "", false
+	}
+	if version == targetVersion && int64(buildValue) == targetBuild {
+		return "succeeded", true
+	}
+	return "rolled_back", true
 }
 
 func buildWebhookPayload(deliveryID string, event events.Event, pid string) (map[string]any, string) {

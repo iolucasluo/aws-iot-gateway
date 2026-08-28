@@ -1,11 +1,39 @@
 package postgres
 
 import (
+	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/events"
 )
+
+func TestOTAStateSQLAcceptsEarlyProgressWithoutRegressingOnACK(t *testing.T) {
+	t.Parallel()
+	eventSource, err := os.ReadFile("event_repository.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositorySource, err := os.ReadFile("ota_repository.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	progressSQL := string(eventSource)
+	ackSQL := string(repositorySource)
+	for _, expected := range []string{
+		"$3='downloading' AND state IN ('pending','accepted','downloading')",
+		"$3='verifying' AND state IN ('pending','accepted','downloading','verifying')",
+		"$3='installing' AND state IN ('pending','accepted','downloading','verifying','installing')",
+	} {
+		if !strings.Contains(progressSQL, expected) {
+			t.Fatalf("OTA progress SQL misses forward-only early-event transition %q", expected)
+		}
+	}
+	if !strings.Contains(ackSQL, "SET state=CASE WHEN $2='accepted' AND state <> 'pending' THEN state ELSE $2 END") {
+		t.Fatal("OTA ACK SQL must preserve a state already advanced by an early progress event")
+	}
+}
 
 func TestWebhookPayloadPreservesLivPetUnixSecondContract(t *testing.T) {
 	t.Parallel()
@@ -49,5 +77,42 @@ func TestWebhookPayloadOmitsUnknownDeviceOccurrenceButKeepsDeliveryTime(t *testi
 	}
 	if payload["ts"] != receivedAt.Unix() {
 		t.Fatalf("webhook ts = %#v", payload["ts"])
+	}
+}
+
+func TestOTAProgressAcceptsOnlyDeploymentScopedLifecycleStates(t *testing.T) {
+	t.Parallel()
+	deploymentID, state, reason, ok := otaProgressTransition(map[string]any{
+		"deployment_id": "11111111-1111-4111-8111-111111111111", "state": "verifying", "reason": "",
+	})
+	if !ok || deploymentID != "11111111-1111-4111-8111-111111111111" || state != "verifying" || reason != "" {
+		t.Fatalf("transition = %q %q %q %v", deploymentID, state, reason, ok)
+	}
+	for _, data := range []map[string]any{
+		{"state": "verifying"},
+		{"deployment_id": "11111111-1111-4111-8111-111111111111", "state": "succeeded"},
+		{"deployment_id": "11111111-1111-4111-8111-111111111111", "state": "campaigning"},
+	} {
+		if _, _, _, ok := otaProgressTransition(data); ok {
+			t.Fatalf("accepted invalid OTA progress: %#v", data)
+		}
+	}
+}
+
+func TestOTABootOutcomeRequiresExactTargetVersionAndBuild(t *testing.T) {
+	t.Parallel()
+	if state, ok := otaBootOutcome(map[string]any{"version": "v1.2.3", "build": float64(42)}, "v1.2.3", 42); !ok || state != "succeeded" {
+		t.Fatalf("matching boot outcome = %q %v", state, ok)
+	}
+	if state, ok := otaBootOutcome(map[string]any{"version": "v1.2.2", "build": float64(41)}, "v1.2.3", 42); !ok || state != "rolled_back" {
+		t.Fatalf("mismatched boot outcome = %q %v", state, ok)
+	}
+	for _, data := range []map[string]any{
+		{"version": "v1.2.3"},
+		{"version": "v1.2.3", "build": 42.5},
+	} {
+		if _, ok := otaBootOutcome(data, "v1.2.3", 42); ok {
+			t.Fatalf("accepted unprovable boot: %#v", data)
+		}
 	}
 }

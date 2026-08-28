@@ -2,11 +2,20 @@
 
 ## Database initialization
 
-根工作区的 cwj 统一入口会在 API 前显式执行可重复的 seed runner：
+Gateway-owned launcher 会在 API 前显式执行可重复的 seed runner；根工作区入口只委托同一 contract：
 
 ```sh
+tool/dev.sh up --environment-id cwj
+# 聚合工作区等价入口：
 docs/coding-rules/skills/local-dev/scripts/dev.sh up --env cwj
 ```
+
+`tool/dev.sh status/up/down/test` 的 contract version 为 `1`。`up` 按 `GATEWAY_LOCAL_*_PORT` 探测依赖，
+并要求 `DATABASE_URL`/`REDIS_URL` 使用匹配端口的 loopback endpoint；不满足时不会执行 compose、seed 或 API。
+为防止驱动 query 覆盖已校验目标，PostgreSQL query 只允许省略或精确 `sslmode=disable`，Redis query 必须省略。
+seed/API 使用的最终环境快照会再次校验。只有声明端口未监听时才启动固定名
+`aws-iot-gateway-local` compose project 的 fallback service；`down` 显式指定同一 project，不接受调用方
+`COMPOSE_PROJECT_NAME` 覆盖，也不停止开发者已有进程。
 
 手工使用 `deploy/local/compose.yaml` 的新库时，加载开发者自己的 `.env.<name>` 后执行同样流程：
 

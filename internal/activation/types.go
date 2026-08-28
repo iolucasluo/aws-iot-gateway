@@ -106,8 +106,9 @@ type Device struct {
 }
 
 type Product struct {
-	PID  string `json:"pid"`
-	Name string `json:"name"`
+	PID          string   `json:"pid"`
+	Name         string   `json:"name"`
+	Capabilities []string `json:"capabilities"`
 }
 
 type Record struct {

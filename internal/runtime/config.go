@@ -19,6 +19,16 @@ type InternalApp struct {
 	WebhookURL        string   `json:"webhook_url,omitempty"`
 	WebhookSecret     string   `json:"webhook_secret,omitempty"`
 	WebhookEventTypes []string `json:"webhook_event_types,omitempty"`
+	Permissions       []string `json:"permissions,omitempty"`
+}
+
+func (app InternalApp) HasPermission(permission string) bool {
+	for _, candidate := range app.Permissions {
+		if candidate == permission {
+			return true
+		}
+	}
+	return false
 }
 
 type Config struct {
@@ -35,6 +45,8 @@ type Config struct {
 	IngestQueueURL                   string
 	KVSChannelPrefix                 string
 	S3MediaBucket                    string
+	S3OTABucket                      string
+	OTADevArtifactAllowedOrigins     []string
 	TimeBootstrapKeyID               string
 	TimeBootstrapSigner              string
 	TimeBootstrapKMSKeyID            string
@@ -68,6 +80,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		IngestQueueURL:                   strings.TrimSpace(getenv("AWS_IOT_INGEST_QUEUE_URL")),
 		KVSChannelPrefix:                 strings.TrimSpace(getenv("AWS_KVS_CHANNEL_PREFIX")),
 		S3MediaBucket:                    strings.TrimSpace(getenv("AWS_S3_MEDIA_BUCKET")),
+		S3OTABucket:                      strings.TrimSpace(getenv("AWS_S3_OTA_BUCKET")),
 		TimeBootstrapKeyID:               strings.TrimSpace(getenv("TIME_BOOTSTRAP_KEY_ID")),
 		TimeBootstrapSigner:              valueOr(getenv("TIME_BOOTSTRAP_SIGNER"), "aws-kms"),
 		TimeBootstrapKMSKeyID:            strings.TrimSpace(getenv("TIME_BOOTSTRAP_KMS_KEY_ID")),
@@ -106,6 +119,37 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	}
 	if !regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`).MatchString(config.S3MediaBucket) {
 		return Config{}, fmt.Errorf("AWS_S3_MEDIA_BUCKET is invalid")
+	}
+	otaBucketPattern := regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
+	if config.S3OTABucket != "" && !otaBucketPattern.MatchString(config.S3OTABucket) {
+		return Config{}, fmt.Errorf("AWS_S3_OTA_BUCKET is invalid")
+	}
+	rawOTAOrigins := strings.TrimSpace(getenv("OTA_DEV_ARTIFACT_ALLOWED_ORIGINS"))
+	if rawOTAOrigins != "" {
+		if config.Environment != "development" {
+			return Config{}, fmt.Errorf("OTA_DEV_ARTIFACT_ALLOWED_ORIGINS is allowed only for development")
+		}
+		seenOrigins := map[string]struct{}{}
+		for _, rawOrigin := range strings.Split(rawOTAOrigins, ",") {
+			origin := strings.TrimSpace(rawOrigin)
+			parsed, err := url.Parse(origin)
+			if err != nil || parsed.User != nil || parsed.Host == "" ||
+				(parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Path != "" ||
+				parsed.RawQuery != "" || parsed.Fragment != "" {
+				return Config{}, fmt.Errorf("OTA_DEV_ARTIFACT_ALLOWED_ORIGINS contains an invalid origin")
+			}
+			if _, duplicate := seenOrigins[origin]; duplicate {
+				return Config{}, fmt.Errorf("OTA_DEV_ARTIFACT_ALLOWED_ORIGINS contains a duplicate origin")
+			}
+			seenOrigins[origin] = struct{}{}
+			config.OTADevArtifactAllowedOrigins = append(config.OTADevArtifactAllowedOrigins, origin)
+		}
+	}
+	if config.Environment != "development" && config.S3OTABucket == "" {
+		return Config{}, fmt.Errorf("AWS_S3_OTA_BUCKET is required outside development")
+	}
+	if config.Environment == "development" && config.S3OTABucket == "" && len(config.OTADevArtifactAllowedOrigins) == 0 {
+		return Config{}, fmt.Errorf("AWS_S3_OTA_BUCKET or OTA_DEV_ARTIFACT_ALLOWED_ORIGINS is required for development OTA")
 	}
 	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`).MatchString(config.TimeBootstrapKeyID) {
 		return Config{}, fmt.Errorf("TIME_BOOTSTRAP_KEY_ID is required and must be a safe COSE kid")
@@ -244,6 +288,18 @@ func validateInternalApps(apps []InternalApp) error {
 			}
 			seenEventTypes[eventType] = struct{}{}
 			app.WebhookEventTypes[eventIndex] = eventType
+		}
+		seenPermissions := make(map[string]struct{}, len(app.Permissions))
+		for permissionIndex, permission := range app.Permissions {
+			permission = strings.TrimSpace(permission)
+			if permission != "ota:publish" && permission != "ota:deploy" {
+				return fmt.Errorf("INTERNAL_APPS_JSON contains an invalid permission")
+			}
+			if _, duplicate := seenPermissions[permission]; duplicate {
+				return fmt.Errorf("INTERNAL_APPS_JSON contains a duplicate permission")
+			}
+			seenPermissions[permission] = struct{}{}
+			app.Permissions[permissionIndex] = permission
 		}
 	}
 	return nil
