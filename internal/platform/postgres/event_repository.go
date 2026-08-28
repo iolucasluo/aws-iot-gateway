@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/events"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/media"
 )
 
 type EventRepository struct{ pool *pgxpool.Pool }
@@ -83,6 +84,16 @@ func (repository *EventRepository) Store(ctx context.Context, event events.Event
 	if commandTag.RowsAffected() == 0 {
 		return transaction.Commit(ctx)
 	}
+	if event.EventType == "recording_finalized" {
+		if err := projectLocalRecordingFinalized(ctx, transaction, deviceID, event); err != nil {
+			return err
+		}
+	}
+	if event.EventType == "recording_deleted" {
+		if err := projectLocalRecordingDeleted(ctx, transaction, deviceID, event); err != nil {
+			return err
+		}
+	}
 	if event.EventType == "record_clip_done" {
 		sessionID, _ := event.Data["session_id"].(string)
 		code, codeOK := event.Data["code"].(float64)
@@ -117,6 +128,151 @@ func (repository *EventRepository) Store(ctx context.Context, event events.Event
 	}
 	if err := transaction.Commit(ctx); err != nil {
 		return fmt.Errorf("commit device event ingest: %w", err)
+	}
+	return nil
+}
+
+func projectLocalRecordingFinalized(ctx context.Context, transaction pgx.Tx, deviceID string, event events.Event) error {
+	payload, err := json.Marshal(event.Data)
+	if err != nil {
+		return fmt.Errorf("encode recording finalized event: %w", err)
+	}
+	finalized, err := media.ParseRecordingFinalizedV1(event.ID, payload)
+	if err != nil {
+		return fmt.Errorf("parse recording finalized event: %w", err)
+	}
+	startAt, _ := time.Parse(time.RFC3339, finalized.Recording.StartAt)
+	endAt, _ := time.Parse(time.RFC3339, finalized.Recording.EndAt)
+	var tombstoned bool
+	if err := transaction.QueryRow(ctx, `
+        SELECT EXISTS(
+            SELECT 1 FROM device_local_recording_tombstones
+            WHERE device_registry_id=$1 AND recording_id=$2
+        )
+    `, deviceID, finalized.Recording.RecordingID).Scan(&tombstoned); err != nil {
+		return fmt.Errorf("check local recording tombstone: %w", err)
+	}
+	if tombstoned {
+		return nil
+	}
+	projectionID, err := postgresUUID()
+	if err != nil {
+		return fmt.Errorf("generate local recording projection id: %w", err)
+	}
+	var storedID, projectionStatus, thumbnailStatus string
+	if err := transaction.QueryRow(ctx, `
+        INSERT INTO device_local_recordings (
+            id, device_registry_id, source_event_id, recording_id, revision,
+            start_at, end_at, recording_date, duration_ms, size_bytes, recording_type, codec,
+            width, height, fps_num, fps_den, playable, seekable,
+            thumbnail_status, thumbnail_etag, thumbnail_size_bytes
+        ) VALUES (
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,true,$17,'pending',$18,$19
+        )
+        ON CONFLICT (device_registry_id, recording_id) DO UPDATE SET
+            projection_status=CASE
+                WHEN device_local_recordings.projection_status='deleted' THEN 'deleted'
+                WHEN device_local_recordings.revision=EXCLUDED.revision
+                    THEN device_local_recordings.projection_status
+                ELSE 'conflict'
+            END,
+            conflicting_revision=CASE
+                WHEN device_local_recordings.projection_status='deleted'
+                    OR device_local_recordings.revision=EXCLUDED.revision
+                    THEN device_local_recordings.conflicting_revision
+                ELSE EXCLUDED.revision
+            END,
+            updated_at=now()
+        RETURNING id::text, projection_status, thumbnail_status
+    `, projectionID, deviceID, event.ID, finalized.Recording.RecordingID,
+		finalized.Recording.Revision, startAt, endAt, finalized.Recording.StartAt[:10],
+		finalized.Recording.DurationMS, finalized.Recording.SizeBytes, finalized.Recording.Type,
+		finalized.Recording.Codec, finalized.Recording.Width, finalized.Recording.Height,
+		finalized.Recording.FPSNum, finalized.Recording.FPSDen, finalized.Recording.Seekable,
+		finalized.Recording.ThumbnailETag, finalized.Thumbnail.SizeBytes,
+	).Scan(&storedID, &projectionStatus, &thumbnailStatus); err != nil {
+		return fmt.Errorf("upsert local recording projection: %w", err)
+	}
+	if projectionStatus != "active" || (thumbnailStatus != "pending" && thumbnailStatus != "failed") {
+		return nil
+	}
+	outboxID, err := postgresUUID()
+	if err != nil {
+		return fmt.Errorf("generate local recording thumbnail outbox id: %w", err)
+	}
+	if _, err := transaction.Exec(ctx, `
+        INSERT INTO local_recording_thumbnail_outbox (
+            id, local_recording_id, status, next_attempt_at
+        ) VALUES ($1,$2,'pending',now())
+        ON CONFLICT (local_recording_id) DO UPDATE SET
+            status=CASE
+                WHEN local_recording_thumbnail_outbox.status='ready' THEN 'ready'
+                ELSE 'pending'
+            END,
+            attempts=CASE
+                WHEN local_recording_thumbnail_outbox.status='ready' THEN local_recording_thumbnail_outbox.attempts
+                ELSE 0
+            END,
+            next_attempt_at=now(), last_error=NULL, updated_at=now()
+    `, outboxID, storedID); err != nil {
+		return fmt.Errorf("enqueue local recording thumbnail: %w", err)
+	}
+	return nil
+}
+
+func projectLocalRecordingDeleted(ctx context.Context, transaction pgx.Tx, deviceID string, event events.Event) error {
+	payload, err := json.Marshal(event.Data)
+	if err != nil {
+		return fmt.Errorf("encode recording deleted event: %w", err)
+	}
+	deleted, err := media.ParseRecordingDeletedV1(payload)
+	if err != nil {
+		return fmt.Errorf("parse recording deleted event: %w", err)
+	}
+	tombstoneID, err := postgresUUID()
+	if err != nil {
+		return fmt.Errorf("generate local recording tombstone id: %w", err)
+	}
+	deletedAt := event.ReceivedAt
+	if event.OccurredAt != nil {
+		deletedAt = *event.OccurredAt
+	}
+	if _, err := transaction.Exec(ctx, `
+        INSERT INTO device_local_recording_tombstones (
+            id, device_registry_id, source_event_id, recording_id, revision, deleted_at
+        ) VALUES ($1,$2,$3,$4,$5,$6)
+        ON CONFLICT (device_registry_id, recording_id) DO UPDATE SET
+            source_event_id=EXCLUDED.source_event_id,
+            revision=EXCLUDED.revision,
+            deleted_at=GREATEST(device_local_recording_tombstones.deleted_at, EXCLUDED.deleted_at)
+    `, tombstoneID, deviceID, event.ID, deleted.RecordingID, deleted.Revision, deletedAt); err != nil {
+		return fmt.Errorf("upsert local recording tombstone: %w", err)
+	}
+	if _, err := transaction.Exec(ctx, `
+        UPDATE device_local_recordings
+        SET projection_status='deleted', conflicting_revision=NULL, deleted_at=$3, thumbnail_status='failed', updated_at=now()
+        WHERE device_registry_id=$1 AND recording_id=$2 AND projection_status <> 'deleted'
+    `, deviceID, deleted.RecordingID, deletedAt); err != nil {
+		return fmt.Errorf("delete local recording projection: %w", err)
+	}
+	if _, err := transaction.Exec(ctx, `
+        UPDATE local_recording_thumbnail_outbox outbox
+        SET status='delete_pending', attempts=0, next_attempt_at=now(), last_error=NULL, updated_at=now()
+        FROM device_local_recordings recording
+        WHERE outbox.local_recording_id=recording.id
+          AND recording.device_registry_id=$1 AND recording.recording_id=$2
+          AND recording.thumbnail_object_key IS NOT NULL
+    `, deviceID, deleted.RecordingID); err != nil {
+		return fmt.Errorf("enqueue local recording thumbnail deletion: %w", err)
+	}
+	if _, err := transaction.Exec(ctx, `
+        DELETE FROM local_recording_thumbnail_outbox outbox
+        USING device_local_recordings recording
+        WHERE outbox.local_recording_id=recording.id
+          AND recording.device_registry_id=$1 AND recording.recording_id=$2
+          AND recording.thumbnail_object_key IS NULL
+    `, deviceID, deleted.RecordingID); err != nil {
+		return fmt.Errorf("delete empty local recording thumbnail intent: %w", err)
 	}
 	return nil
 }

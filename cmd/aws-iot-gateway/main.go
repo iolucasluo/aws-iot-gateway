@@ -32,6 +32,7 @@ import (
 	gatewaypostgres "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/postgres"
 	redisstore "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/redis"
 	gatewayruntime "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/runtime"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/worker"
 )
 
 func main() {
@@ -179,6 +180,20 @@ func main() {
 		log.Fatalf("configure snapshot converter: %v", err)
 	}
 	assetService := media.NewAssetService(mediaStore, deviceService, mediaRepository, config.Environment, snapshotConverter, nil)
+	localThumbnailWorker, err := worker.NewLocalThumbnailWorker(
+		mediaRepository, mediaStore, deviceService, config.Environment,
+	)
+	if err != nil {
+		log.Fatalf("configure local thumbnail worker: %v", err)
+	}
+	go runLocalThumbnailWorker(ctx, localThumbnailWorker)
+	localReconciliationWorker, err := worker.NewLocalReconciliationWorker(
+		mediaRepository, deviceService,
+	)
+	if err != nil {
+		log.Fatalf("configure local recording reconciliation worker: %v", err)
+	}
+	go runLocalReconciliationWorker(ctx, localReconciliationWorker)
 	server := &http.Server{
 		Addr: config.ListenAddress,
 		Handler: httpapi.NewInternalAPI(service, verifier, httpapi.Dependencies{
@@ -199,6 +214,39 @@ func main() {
 	log.Printf("aws-iot-gateway listening on %s", config.ListenAddress)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("serve gateway: %v", err)
+	}
+}
+
+func runLocalReconciliationWorker(
+	ctx context.Context,
+	reconciliationWorker *worker.LocalReconciliationWorker,
+) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := reconciliationWorker.PollOnce(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("local recording reconciliation failed: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func runLocalThumbnailWorker(ctx context.Context, thumbnailWorker *worker.LocalThumbnailWorker) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		if err := thumbnailWorker.PollOnce(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("local recording thumbnail worker failed: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }
 

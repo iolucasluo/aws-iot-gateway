@@ -17,12 +17,13 @@ func TestDirectACKTopicUsesExactNamespace(t *testing.T) {
 	}
 }
 
-func TestDirectIngestTopicsIncludeACKStatusAndLWT(t *testing.T) {
+func TestDirectIngestTopicsIncludeACKStatusLWTAndEvent(t *testing.T) {
 	t.Parallel()
 	want := []string{
 		"cmd/aws-iot-gateway-staging/+/res",
 		"dt/aws-iot-gateway-staging/+/status",
 		"dt/aws-iot-gateway-staging/+/lwt",
+		"dt/aws-iot-gateway-staging/+/event",
 	}
 	got := directIngestTopics("aws-iot-gateway-staging")
 	if len(got) != len(want) {

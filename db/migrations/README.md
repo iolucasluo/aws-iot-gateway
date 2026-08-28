@@ -18,7 +18,7 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或�
   pre-production `001_initial.sql` 时回填其历史上唯一合法的 `feeder-x1`，以便在不删除旧 activation/registry
   数据的前提下建立 PID 外键；fresh schema 不执行该数据回填。
 
-## 当前 schema 快照（17 张业务表）
+## 当前 schema 快照（23 张业务表）
 
 | 表 | 用途 | PK | 主要 FK / 删除语义 |
 |---|---|---|---|
@@ -34,6 +34,12 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或�
 | `device_streams` | KVS stream grant 生命周期 | `id` | registry + binding（RESTRICT） |
 | `device_snapshots` | snapshot 对象状态 | `id` | registry + binding（RESTRICT） |
 | `device_recordings` | cloud/local recording 状态 | `id` | registry + binding（RESTRICT） |
+| `device_local_recordings` | SD v1 metadata/thumbnail projection | `id` | registry + source event（RESTRICT） |
+| `device_local_recording_tombstones` | 防止乱序 finalized 复活已删录像 | `id` | registry + source event（RESTRICT） |
+| `local_recording_cursors` | binding-scoped opaque pagination cursor | `token` | binding + registry（CASCADE） |
+| `local_recording_reconciliations` | 每设备 catalog 对账游标/代次 | `device_registry_id` | registry（CASCADE） |
+| `local_recording_reconciliation_sightings` | 完整扫描期间看到的 recording_id | composite | registry（CASCADE） |
+| `local_recording_thumbnail_outbox` | private thumbnail upload/reconcile intent | `id` | local recording（CASCADE） |
 | `webhook_outbox` | durable webhook delivery intent | `id` | `device_event_id → device_events`（CASCADE） |
 | `webhook_deliveries` | append-only webhook attempt | `id` | `webhook_outbox_id → webhook_outbox`（CASCADE） |
 | `device_lifecycle_outbox` | 运行证书回收补偿任务 | `id` | `device_registry_id → device_registry`（RESTRICT） |
@@ -52,3 +58,7 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或�
 - `002_legacy_product_catalog`：只对已登记旧版 `001_initial.sql` 且缺少 `device_activations.pid` 的 schema
   生效；创建最小产品目录、回填旧 activation PID、移除 registry 的隐式默认 PID，并建立 registry/activation
   到 `products(pid)` 的 RESTRICT 外键。fresh schema 为 no-op；为避免丢失历史数据，不提供自动 down。
+
+- `003_local_recording_projection`：新增 SD v1 metadata projection、binding-scoped opaque cursor 和 private thumbnail outbox；不上传录像主体。
+
+- `004_local_thumbnail_status_text`：将 thumbnail outbox 的 `status` 从定长 `varchar(16)` 改为 `text`，继续由 CHECK 约束限定合法状态，避免状态名长度与字段宽度漂移。

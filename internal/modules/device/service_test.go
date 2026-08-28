@@ -1,6 +1,7 @@
 package device
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -84,6 +85,36 @@ func TestSendCommandsPreservesLivPetPayloadAndResponseShape(t *testing.T) {
 	}
 	if len(repository.commands) != 1 || repository.commands[0].Status != "acked" {
 		t.Fatalf("commands = %#v", repository.commands)
+	}
+}
+
+func TestSendCommandsRedactsEphemeralFieldsOnlyFromPersistence(t *testing.T) {
+	t.Parallel()
+	publisher := &publisherStub{}
+	repository := &commandRepositoryStub{}
+	service := NewService(publisher, ackWaiterStub{}, repository,
+		"aws-iot-gateway-staging", func() (string, error) { return "session-sensitive", nil })
+
+	_, err := service.SendCommands(context.Background(), "livpet-staging", "device-id", "fdr-0001", []CommandInput{{
+		Code:         "sd_thumbnail_v1",
+		Value:        json.RawMessage(`{"recording_id":"rec_0123456789abcdef0123456789abcdef","upload_url":"https://private.example/signed"}`),
+		RedactFields: []string{"upload_url"},
+	}}, false)
+	if err != nil {
+		t.Fatalf("SendCommands() error = %v", err)
+	}
+	if !bytes.Contains(publisher.payload, []byte("https://private.example/signed")) {
+		t.Fatalf("published payload lost upload URL: %s", publisher.payload)
+	}
+	if len(repository.commands) != 1 {
+		t.Fatalf("commands = %#v", repository.commands)
+	}
+	persisted, err := json.Marshal(repository.commands[0].Payload)
+	if err != nil {
+		t.Fatalf("marshal persisted payload: %v", err)
+	}
+	if bytes.Contains(persisted, []byte("upload_url")) || bytes.Contains(persisted, []byte("private.example")) {
+		t.Fatalf("persisted command leaked presigned URL: %s", persisted)
 	}
 }
 

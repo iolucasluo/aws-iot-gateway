@@ -27,9 +27,10 @@ var (
 )
 
 type CommandInput struct {
-	Code      string          `json:"code"`
-	Value     json.RawMessage `json:"value"`
-	CommandID string          `json:"command_id,omitempty"`
+	Code         string          `json:"code"`
+	Value        json.RawMessage `json:"value"`
+	CommandID    string          `json:"command_id,omitempty"`
+	RedactFields []string        `json:"-"`
 }
 
 type Command struct {
@@ -176,8 +177,12 @@ func (service *Service) SendCommands(
 		if err != nil {
 			return SendCommandsResult{}, ErrInvalidInput
 		}
+		persistedPayload, err := redactCommandFields(payload, input.RedactFields)
+		if err != nil {
+			return SendCommandsResult{}, ErrInvalidInput
+		}
 		command := Command{
-			ID: commandID, DeviceID: deviceID, InternalAppID: internalAppID, SessionID: sessionID, Payload: payload,
+			ID: commandID, DeviceID: deviceID, InternalAppID: internalAppID, SessionID: sessionID, Payload: persistedPayload,
 			Status: "pending", CreatedAt: time.Now().UTC(),
 		}
 		if err := service.repository.Create(ctx, command); err != nil {
@@ -208,24 +213,29 @@ func (service *Service) SendCommands(
 			return SendCommandsResult{}, err
 		}
 		code, ok := numericCode(ack["code"])
+		persistedACK, redactErr := redactCommandFields(ack, input.RedactFields)
+		if redactErr != nil {
+			_ = service.repository.Complete(ctx, commandID, "failed", nil, "invalid_device_response")
+			return SendCommandsResult{}, ErrInvalidDeviceResponse
+		}
 		if !ok {
-			_ = service.repository.Complete(ctx, commandID, "failed", ack, "invalid_device_response")
+			_ = service.repository.Complete(ctx, commandID, "failed", persistedACK, "invalid_device_response")
 			return SendCommandsResult{}, ErrInvalidDeviceResponse
 		}
 		switch code {
 		case -2:
-			_ = service.repository.Complete(ctx, commandID, "failed", ack, "device_busy")
+			_ = service.repository.Complete(ctx, commandID, "failed", persistedACK, "device_busy")
 			return SendCommandsResult{}, ErrDeviceBusy
 		case -6:
-			_ = service.repository.Complete(ctx, commandID, "failed", ack, "device_jammed")
+			_ = service.repository.Complete(ctx, commandID, "failed", persistedACK, "device_jammed")
 			return SendCommandsResult{}, ErrDeviceJammed
 		case 0:
-			if err := service.repository.Complete(ctx, commandID, "acked", ack, ""); err != nil {
+			if err := service.repository.Complete(ctx, commandID, "acked", persistedACK, ""); err != nil {
 				return SendCommandsResult{}, err
 			}
 			results = append(results, CommandResult{Index: index, Code: input.Code, Status: "success", CommandID: sessionID, Data: ack})
 		default:
-			if err := service.repository.Complete(ctx, commandID, "failed", ack, "device_rejected"); err != nil {
+			if err := service.repository.Complete(ctx, commandID, "failed", persistedACK, "device_rejected"); err != nil {
 				return SendCommandsResult{}, err
 			}
 			results = append(results, CommandResult{
@@ -313,6 +323,21 @@ func commandPayload(input CommandInput, sessionID string) (map[string]any, error
 		payload["value"] = value
 	}
 	return payload, nil
+}
+
+func redactCommandFields(payload map[string]any, fields []string) (map[string]any, error) {
+	result := make(map[string]any, len(payload))
+	for key, value := range payload {
+		result[key] = value
+	}
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" || field == "action" || field == "session_id" {
+			return nil, ErrInvalidInput
+		}
+		delete(result, field)
+	}
+	return result, nil
 }
 
 func marshalWithoutHTMLEscape(value any) ([]byte, error) {

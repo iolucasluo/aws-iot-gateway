@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -297,26 +298,107 @@ func (service *AssetService) ListRecordings(
 
 func (service *AssetService) ListLocalRecordings(
 	ctx context.Context,
+	bindingID, deviceSN, dateFilter, typeFilter, cursor string,
+	limit int,
+) (LocalRecordingPage, error) {
+	if bindingID == "" || deviceSN == "" {
+		return LocalRecordingPage{}, ErrInvalidInput
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		return LocalRecordingPage{}, ErrInvalidInput
+	}
+	repository, ok := service.repository.(LocalRecordingRepository)
+	if !ok {
+		return LocalRecordingPage{}, fmt.Errorf("local recording repository is unavailable")
+	}
+	projections, nextCursor, err := repository.ListLocalRecordingProjections(
+		ctx, bindingID, deviceSN, limit, cursor, dateFilter, typeFilter,
+	)
+	if err != nil {
+		return LocalRecordingPage{}, err
+	}
+	items := make([]LocalRecordingListItem, 0, len(projections))
+	for _, projection := range projections {
+		item := projection.LocalRecordingListItem
+		if item.Thumbnail.Status == "ready" && projection.ThumbnailObjectKey != "" {
+			item.Thumbnail.URL = "/api/v1/openapi/devices/" + url.PathEscape(deviceSN) +
+				"/recordings/local/" + url.PathEscape(item.RecordingID) + "/thumbnail"
+			item.Thumbnail.ExpiresAt = time.Now().UTC().Add(mediaDownloadTTL).Format(time.RFC3339)
+		}
+		items = append(items, item)
+	}
+	var nextCursorValue *string
+	if nextCursor != "" {
+		nextCursorValue = &nextCursor
+	}
+	return LocalRecordingPage{
+		Contract:   LocalRecordingCatalogContractV1,
+		Items:      items,
+		NextCursor: nextCursorValue,
+	}, nil
+}
+
+func (service *AssetService) ListLegacyLocalRecordings(
+	ctx context.Context,
 	internalAppID, deviceID, deviceSN, date string,
 	offset, limit int,
 ) (map[string]any, error) {
-	if limit <= 0 || limit > 50 {
-		limit = 20
+	if !service.valid(deviceID, deviceSN) || internalAppID == "" || offset < 0 || limit < 1 || limit > 50 {
+		return nil, ErrInvalidInput
 	}
 	value := map[string]any{"op": "list", "offset": offset, "limit": limit}
 	if date != "" {
 		value["date"] = date
 	}
-	payload, _ := json.Marshal(value)
-	result, err := service.commander.SendCommands(ctx, internalAppID, deviceID, deviceSN,
-		[]device.CommandInput{{Code: "sd_files", Value: payload}}, true)
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("encode legacy local recording request: %w", err)
+	}
+	result, err := service.commander.SendCommands(
+		ctx, internalAppID, deviceID, deviceSN,
+		[]device.CommandInput{{Code: "sd_files", Value: payload}}, true,
+	)
 	if err != nil {
 		return nil, err
 	}
 	if len(result.Results) != 1 {
-		return nil, fmt.Errorf("local recording response is incomplete")
+		return nil, fmt.Errorf("legacy local recording response is incomplete")
 	}
 	return result.Results[0].Data, nil
+}
+
+type LocalThumbnailContent struct {
+	Payload []byte
+	ETag    string
+}
+
+func (service *AssetService) GetLocalRecordingThumbnail(
+	ctx context.Context, bindingID, deviceSN, recordingID string,
+) (LocalThumbnailContent, error) {
+	if bindingID == "" || deviceSN == "" || !recordingIDPattern.MatchString(recordingID) {
+		return LocalThumbnailContent{}, ErrInvalidInput
+	}
+	repository, ok := service.repository.(LocalRecordingRepository)
+	if !ok {
+		return LocalThumbnailContent{}, fmt.Errorf("local recording repository is unavailable")
+	}
+	objectKey, etag, err := repository.GetLocalRecordingThumbnail(
+		ctx, bindingID, deviceSN, recordingID,
+	)
+	if err != nil {
+		return LocalThumbnailContent{}, err
+	}
+	payload, err := service.store.Download(ctx, objectKey, 256*1024)
+	if err != nil {
+		return LocalThumbnailContent{}, err
+	}
+	if !ValidateLocalThumbnailJPEG(payload, etag) {
+		return LocalThumbnailContent{}, fmt.Errorf("local recording thumbnail failed integrity validation")
+	}
+	return LocalThumbnailContent{Payload: payload, ETag: etag}, nil
 }
 
 func (service *AssetService) UploadFeedAudio(

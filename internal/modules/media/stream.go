@@ -70,16 +70,25 @@ func (capabilities StreamCapabilities) empty() bool {
 	return !capabilities.VideoReceive && !capabilities.AudioReceive && !capabilities.AudioSend && len(capabilities.DataChannels) == 0
 }
 
+type PlaybackControlCapability struct {
+	Contract              string   `json:"contract"`
+	Ops                   []string `json:"ops"`
+	ProgressIntervalMS    int      `json:"progress_interval_ms"`
+	MaxConcurrentSessions int      `json:"max_concurrent_sessions"`
+	SupportsRate          bool     `json:"supports_rate"`
+}
+
 type StreamResult struct {
-	StreamID                  string             `json:"stream_id"`
-	Provider                  string             `json:"provider"`
-	CapabilityContractVersion string             `json:"capability_contract_version"`
-	FirmwareVersion           string             `json:"firmware_version"`
-	SupportedCapabilities     StreamCapabilities `json:"supported_capabilities"`
-	GrantedCapabilities       StreamCapabilities `json:"granted_capabilities"`
-	Signaling                 Signaling          `json:"signaling"`
-	ICEServers                []awskvs.ICEServer `json:"ice_servers"`
-	ExpiresAt                 time.Time          `json:"expires_at"`
+	StreamID                  string                     `json:"stream_id"`
+	Provider                  string                     `json:"provider"`
+	CapabilityContractVersion string                     `json:"capability_contract_version"`
+	FirmwareVersion           string                     `json:"firmware_version"`
+	SupportedCapabilities     StreamCapabilities         `json:"supported_capabilities"`
+	GrantedCapabilities       StreamCapabilities         `json:"granted_capabilities"`
+	PlaybackControl           *PlaybackControlCapability `json:"playback_control,omitempty"`
+	Signaling                 Signaling                  `json:"signaling"`
+	ICEServers                []awskvs.ICEServer         `json:"ice_servers"`
+	ExpiresAt                 time.Time                  `json:"expires_at"`
 }
 
 type StreamService struct {
@@ -172,6 +181,7 @@ func (service *StreamService) create(
 		FirmwareVersion:           capabilityFacts.firmwareVersion,
 		SupportedCapabilities:     capabilityFacts.supported,
 		GrantedCapabilities:       capabilityFacts.accepted,
+		PlaybackControl:           capabilityFacts.playbackControl,
 		Signaling:                 Signaling{WSSURL: playback.WSSURL, ExpiresAt: playback.ExpiresAt},
 		ICEServers:                playback.ICEServers,
 		ExpiresAt:                 playback.ExpiresAt,
@@ -199,6 +209,7 @@ type capabilityFacts struct {
 	firmwareVersion string
 	supported       StreamCapabilities
 	accepted        StreamCapabilities
+	playbackControl *PlaybackControlCapability
 }
 
 func validateCapabilityACK(result device.SendCommandsResult, viewerID string, requested StreamCapabilities) (capabilityFacts, error) {
@@ -234,7 +245,76 @@ func validateCapabilityACK(result device.SendCommandsResult, viewerID string, re
 	if status != "ready" {
 		return capabilityFacts{}, ErrStreamRejected
 	}
-	return capabilityFacts{firmwareVersion: firmwareVersion, supported: supported, accepted: accepted}, nil
+	playbackControl, err := parsePlaybackControl(ack["playback_control"], accepted)
+	if err != nil {
+		return capabilityFacts{}, ErrStreamRejected
+	}
+	return capabilityFacts{
+		firmwareVersion: firmwareVersion, supported: supported, accepted: accepted,
+		playbackControl: playbackControl,
+	}, nil
+}
+
+func parsePlaybackControl(value any, accepted StreamCapabilities) (*PlaybackControlCapability, error) {
+	if value == nil {
+		return nil, nil
+	}
+	fields, ok := value.(map[string]any)
+	if !ok || len(fields) != 5 || !accepted.VideoReceive ||
+		!containsString(accepted.DataChannels, ControlDataChannelProtocol) {
+		return nil, ErrStreamRejected
+	}
+	contract, contractOK := fields["contract"].(string)
+	rawOps, opsOK := fields["ops"].([]any)
+	progress, progressOK := exactInt(fields["progress_interval_ms"])
+	maximum, maximumOK := exactInt(fields["max_concurrent_sessions"])
+	supportsRate, rateOK := fields["supports_rate"].(bool)
+	if !contractOK || contract != "sd-playback.v1" || !opsOK || !progressOK || progress != 500 ||
+		!maximumOK || maximum != 1 || !rateOK || supportsRate {
+		return nil, ErrStreamRejected
+	}
+	expected := []string{"load", "play", "pause", "resume", "seek", "skip", "stop", "get_state"}
+	if len(rawOps) != len(expected) {
+		return nil, ErrStreamRejected
+	}
+	ops := make([]string, len(expected))
+	for index := range expected {
+		operation, ok := rawOps[index].(string)
+		if !ok || operation != expected[index] {
+			return nil, ErrStreamRejected
+		}
+		ops[index] = operation
+	}
+	return &PlaybackControlCapability{
+		Contract: contract, Ops: ops, ProgressIntervalMS: progress,
+		MaxConcurrentSessions: maximum, SupportsRate: supportsRate,
+	}, nil
+}
+
+func exactInt(value any) (int, bool) {
+	switch number := value.(type) {
+	case float64:
+		integer := int(number)
+		return integer, float64(integer) == number
+	case int:
+		return number, true
+	case int64:
+		return int(number), int64(int(number)) == number
+	case json.Number:
+		parsed, err := number.Int64()
+		return int(parsed), err == nil && int64(int(parsed)) == parsed
+	default:
+		return 0, false
+	}
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func parseCapabilities(value any) (StreamCapabilities, error) {

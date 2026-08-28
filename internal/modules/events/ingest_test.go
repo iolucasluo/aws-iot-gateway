@@ -127,6 +127,8 @@ func TestIngestRejectsCrossEnvironmentAndMalformedIdentity(t *testing.T) {
 	for _, payload := range []string{
 		`{"topic":"cmd/another-env/fdr-0001/res","session_id":"session-1","code":0}`,
 		`{"topic":"dt/aws-iot-gateway-staging/fdr-0001/event","event_id":"not-a-uuid","event_type":"feed_done","boot_id":"boot","event_seq":1,"data":{}}`,
+		`{"topic":"dt/aws-iot-gateway-staging/fdr-0001/event","event_id":"018f0000-0000-7000-8000-000000000091","event_type":"feed_done","occurred_at":1718000000000,"boot_id":"5ce0b7f2-1f0a-4ed7-9f06-bf6ce8393148","event_seq":1,"event_seq":2,"monotonic_ms":1234,"time_quality":"trusted","time_source":"sntp","data":{"portions":2}}`,
+		`{"topic":"dt/aws-iot-gateway-staging/fdr-0001/event","event_id":"018f0000-0000-7000-8000-000000000092","event_type":"feed_done","occurred_at":1718000000000,"boot_id":"5ce0b7f2-1f0a-4ed7-9f06-bf6ce8393148","event_seq":9007199254740992,"monotonic_ms":1234,"time_quality":"trusted","time_source":"sntp","data":{"portions":2}}`,
 		`{"topic":"dt/aws-iot-gateway-staging/fdr-0001/status","online":false,"received_at_ms":1786704179000}`,
 		`{"topic":"dt/aws-iot-gateway-staging/fdr-0001/lwt","online":false}`,
 	} {
