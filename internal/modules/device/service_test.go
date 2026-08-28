@@ -43,6 +43,15 @@ func (waiter ackWaiterStub) Wait(context.Context, string, string, time.Duration)
 
 type commandRepositoryStub struct{ commands []Command }
 
+type productDPDefinitionLoaderStub struct {
+	definitions []ProductDPDefinition
+	err         error
+}
+
+func (loader productDPDefinitionLoaderStub) LoadProductDPDefinitions(_ context.Context, _ string) ([]ProductDPDefinition, error) {
+	return loader.definitions, loader.err
+}
+
 func (repository *commandRepositoryStub) Create(_ context.Context, command Command) error {
 	repository.commands = append(repository.commands, command)
 	return nil
@@ -87,6 +96,25 @@ func TestSendCommandsPreservesLivPetPayloadAndResponseShape(t *testing.T) {
 	}
 	if len(repository.commands) != 1 || repository.commands[0].Status != "acked" {
 		t.Fatalf("commands = %#v", repository.commands)
+	}
+}
+
+func TestSendDPCommandsRejectsUnknownDPBeforePersistenceOrPublish(t *testing.T) {
+	t.Parallel()
+	publisher := &publisherStub{}
+	repository := &commandRepositoryStub{}
+	service := NewServiceWithDP(publisher, ackWaiterStub{}, repository, "aws-iot-gateway-staging", nil,
+		productDPDefinitionLoaderStub{definitions: []ProductDPDefinition{{
+			Code: "video_res", Type: "object", Direction: "wo", Status: "active",
+		}}})
+
+	_, err := service.SendDPCommands(context.Background(), "livpet-staging", "device-id", "fdr-0001",
+		[]CommandInput{{Code: "not_registered", Value: json.RawMessage(`{}`)}}, false)
+	if !errors.Is(err, ErrDPUnknown) || !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("SendDPCommands() error = %v, want unknown DP invalid input", err)
+	}
+	if len(repository.commands) != 0 || len(publisher.payload) != 0 {
+		t.Fatalf("unknown DP mutated repository=%#v or published=%s", repository.commands, publisher.payload)
 	}
 }
 

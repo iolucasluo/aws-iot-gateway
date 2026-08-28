@@ -7,6 +7,7 @@
 | 编号 | 文件 | 说明 |
 |---|---|---|
 | 001 | `001_products.sql` | active 产品 PID：`feeder-x1`、`lamp-x1`、`minion-cam-x1` |
+| 002 | `002_product_dps.sql` | `feeder-x1` 和正式 PID `minion-cam-x1` 的通用 DP 合同 |
 
 由获授权的非生产数据库操作者显式执行仓库命令；命令会先幂等完成 migration，再按文件名顺序在单个事务中
 执行所有 seed：
@@ -20,7 +21,7 @@ GATEWAY_ENVIRONMENT=development DATABASE_URL='postgres://...' \
 [`deploy/staging/README.md`](../../deploy/staging/README.md)。执行器只接受 `development` 或 `staging`，空环境和
 `production` 均硬拒绝。不要把它改成 API/worker 启动时自动执行。
 
-该 seed 只初始化 Gateway 的只读 activation 产品目录，不创建设备实例。`device_registry` 仍必须由 activation 流程创建，并与 AWS IoT runtime identity 一致；本目录不得伪造 certificate、binding 或 token。
+这些 seed 初始化 Gateway 的只读 activation 产品目录和产品 DP 合同，不创建设备实例。`device_registry` 仍必须由 activation 流程创建，并与 AWS IoT runtime identity 一致；本目录不得伪造 certificate、binding 或 token。DP 合同后续仍通过 reviewed seed/migration 变更，不提供运行时 CRUD。
 
 后续确有稳定的非生产初始化前提时，新增 `NNN_<name>.sql`，并满足：
 

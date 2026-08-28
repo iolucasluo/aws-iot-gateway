@@ -28,3 +28,24 @@ func TestProductSeedDefinesGatewayActivationCatalog(t *testing.T) {
 		}
 	}
 }
+
+func TestProductDPSeedDefinesMinionCameraContract(t *testing.T) {
+	t.Parallel()
+
+	content, err := Files.ReadFile("002_product_dps.sql")
+	if err != nil {
+		t.Fatalf("read product DP seed: %v", err)
+	}
+	seed := string(content)
+	for _, fragment := range []string{
+		"INSERT INTO product_dps (id, product_id, code, type, direction, spec, status)",
+		"'minion-cam-x1'",
+		"'video_res'",
+		"'privacy_mode'",
+		"ON CONFLICT (product_id, code) DO UPDATE",
+	} {
+		if !strings.Contains(seed, fragment) {
+			t.Errorf("product DP seed missing %q", fragment)
+		}
+	}
+}

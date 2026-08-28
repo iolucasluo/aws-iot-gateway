@@ -60,3 +60,11 @@ pending -> activating -> installing -> finalizing -> activated
 - `local_media` 不是通用 DP command；PTZ、喂食和其他控制继续经过 OpenAPI → MQTT。
 - `lm_` session 前缀只属于 typed `local_media` 路径；通用 DP command 必须在落库和 MQTT
   publish 前拒绝该前缀，避免 ACK 路由冲突和副作用重试。
+
+## 产品 DP 合同
+
+- `products` 与 `product_dps` 是 Gateway-owned 的只读运行合同目录；产品/DP 变更必须通过 reviewed
+  migration/seed 完成，当前不提供运行时 CRUD。
+- 通用 `commands` 和 `schedules` 在写入 `device_commands` 或发布 MQTT 前，按设备登记的 PID 加载
+  `product_dps`，拒绝未知、disabled、只读方向或 JSON 形状不匹配的 DP；typed media、local media、OTA
+  和 recommission 仍走各自的受控服务路径。
