@@ -27,11 +27,12 @@ func (kvsStub) Playback(_ context.Context, channel awskvs.Channel, viewerID stri
 }
 
 type commanderStub struct {
-	input  device.CommandInput
-	ack    map[string]any
-	wait   bool
-	calls  int
-	result *device.SendCommandsResult
+	input   device.CommandInput
+	ack     map[string]any
+	wait    bool
+	calls   int
+	dpCalls int
+	result  *device.SendCommandsResult
 }
 
 func (commander *commanderStub) SendCommands(_ context.Context, _, _, _ string, commands []device.CommandInput, waitACK bool) (device.SendCommandsResult, error) {
@@ -42,6 +43,11 @@ func (commander *commanderStub) SendCommands(_ context.Context, _, _, _ string, 
 		return *commander.result, nil
 	}
 	return device.SendCommandsResult{Results: []device.CommandResult{{Status: "success", Data: commander.ack}}}, nil
+}
+
+func (commander *commanderStub) SendDPCommands(ctx context.Context, internalAppID, deviceID, deviceSN string, commands []device.CommandInput, waitACK bool) (device.SendCommandsResult, error) {
+	commander.dpCalls++
+	return commander.SendCommands(ctx, internalAppID, deviceID, deviceSN, commands, waitACK)
 }
 
 func TestCreateExactStreamRejectsPartialGrantAndRevokesViewer(t *testing.T) {
@@ -125,6 +131,9 @@ func TestCreateStreamReturnsShortLivedKVSViewerConfigAfterDeviceACK(t *testing.T
 	}
 	if commander.input.Code != "stream" {
 		t.Fatalf("command = %#v", commander.input)
+	}
+	if commander.dpCalls != 1 {
+		t.Fatalf("stream command bypassed product DP contract: dpCalls=%d", commander.dpCalls)
 	}
 	if result.CapabilityContractVersion != "webrtc.v1" || result.FirmwareVersion != "v0.0.0" ||
 		!result.SupportedCapabilities.AudioReceive || !result.GrantedCapabilities.VideoReceive {

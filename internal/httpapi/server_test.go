@@ -1258,6 +1258,10 @@ func (httpStreamCommander) SendCommands(_ context.Context, _, _, _ string, comma
 	}}}, nil
 }
 
+func (commander httpStreamCommander) SendDPCommands(ctx context.Context, internalAppID, deviceID, deviceSN string, commands []devicemodule.CommandInput, waitACK bool) (devicemodule.SendCommandsResult, error) {
+	return commander.SendCommands(ctx, internalAppID, deviceID, deviceSN, commands, waitACK)
+}
+
 type httpCapturingStreamCommander struct {
 	requested    media.StreamCapabilities
 	calls        int
@@ -1295,6 +1299,10 @@ func (commander *httpCapturingStreamCommander) SendCommands(_ context.Context, _
 			"supported": supported, "accepted": accepted,
 		},
 	}}}, nil
+}
+
+func (commander *httpCapturingStreamCommander) SendDPCommands(ctx context.Context, internalAppID, deviceID, deviceSN string, commands []devicemodule.CommandInput, waitACK bool) (devicemodule.SendCommandsResult, error) {
+	return commander.SendCommands(ctx, internalAppID, deviceID, deviceSN, commands, waitACK)
 }
 
 type httpStreamRepository struct{}

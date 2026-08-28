@@ -144,7 +144,7 @@ func (service *Service) GetShadow(ctx context.Context, deviceSN string) (any, er
 }
 
 func (service *Service) GetPTZStatus(ctx context.Context, internalAppID, deviceID, deviceSN string) (PTZStatus, error) {
-	result, err := service.SendCommands(ctx, internalAppID, deviceID, deviceSN, []CommandInput{{
+	result, err := service.SendDPCommands(ctx, internalAppID, deviceID, deviceSN, []CommandInput{{
 		Code: "ptz", Value: json.RawMessage(`{"op":"get_position"}`),
 	}}, true)
 	if err != nil {

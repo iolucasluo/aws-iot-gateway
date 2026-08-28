@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"strconv"
 	"strings"
 )
 
@@ -176,19 +177,73 @@ func validateObjectSpec(object map[string]any, raw json.RawMessage) error {
 		return nil
 	}
 	var spec struct {
-		Required   []string                  `json:"required"`
-		Properties map[string]map[string]any `json:"properties"`
-		AllowExtra *bool                     `json:"allow_extra"`
+		Required    []string                  `json:"required"`
+		Properties  map[string]map[string]any `json:"properties"`
+		AllowExtra  *bool                     `json:"allow_extra"`
+		Variants    *variantSpec              `json:"variants"`
+		Constraints map[string]any            `json:"constraints"`
 	}
 	if err := json.Unmarshal(raw, &spec); err != nil {
 		return errors.New("DP spec is invalid")
 	}
-	for _, field := range spec.Required {
+
+	required := spec.Required
+	properties := spec.Properties
+	allowExtra := spec.AllowExtra
+	constraints := spec.Constraints
+	if spec.Variants != nil {
+		variantField := strings.TrimSpace(spec.Variants.Field)
+		if variantField == "" {
+			return errors.New("DP variants field is required")
+		}
+		if variantValue, present := object[variantField]; present {
+			variant, ok := spec.Variants.Cases[variantValueKey(variantValue)]
+			if !ok {
+				return fmt.Errorf("unsupported %s value %q", variantField, variantValueKey(variantValue))
+			}
+			required = append(append([]string(nil), required...), variant.Required...)
+			properties = mergePropertySpecs(properties, variant.Properties)
+			if variant.AllowExtra != nil {
+				allowExtra = variant.AllowExtra
+			}
+			if variant.Constraints != nil {
+				constraints = variant.Constraints
+			}
+		}
+	}
+	if err := validateObjectFields(object, required, properties, allowExtra); err != nil {
+		return err
+	}
+	if err := validateObjectConstraints(object, constraints); err != nil {
+		return err
+	}
+	return nil
+}
+
+type variantSpec struct {
+	Field string                 `json:"field"`
+	Cases map[string]variantCase `json:"cases"`
+}
+
+type variantCase struct {
+	Required    []string                  `json:"required"`
+	Properties  map[string]map[string]any `json:"properties"`
+	AllowExtra  *bool                     `json:"allow_extra"`
+	Constraints map[string]any            `json:"constraints"`
+}
+
+func validateObjectFields(
+	object map[string]any,
+	required []string,
+	properties map[string]map[string]any,
+	allowExtra *bool,
+) error {
+	for _, field := range required {
 		if _, ok := object[field]; !ok {
 			return fmt.Errorf("missing required field %q", field)
 		}
 	}
-	for field, property := range spec.Properties {
+	for field, property := range properties {
 		value, present := object[field]
 		if !present {
 			continue
@@ -197,9 +252,9 @@ func validateObjectSpec(object map[string]any, raw json.RawMessage) error {
 			return fmt.Errorf("field %q: %w", field, err)
 		}
 	}
-	if spec.AllowExtra != nil && !*spec.AllowExtra {
+	if allowExtra != nil && !*allowExtra {
 		for field := range object {
-			if _, ok := spec.Properties[field]; !ok {
+			if _, ok := properties[field]; !ok {
 				return fmt.Errorf("unexpected field %q", field)
 			}
 		}
@@ -207,12 +262,102 @@ func validateObjectSpec(object map[string]any, raw json.RawMessage) error {
 	return nil
 }
 
+func mergePropertySpecs(base, overrides map[string]map[string]any) map[string]map[string]any {
+	merged := make(map[string]map[string]any, len(base)+len(overrides))
+	for field, property := range base {
+		merged[field] = property
+	}
+	for field, property := range overrides {
+		merged[field] = property
+	}
+	return merged
+}
+
+func variantValueKey(value any) string {
+	switch typed := value.(type) {
+	case json.Number:
+		return typed.String()
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(typed), 'f', -1, 32)
+	case string:
+		return typed
+	case bool:
+		return strconv.FormatBool(typed)
+	default:
+		return fmt.Sprint(value)
+	}
+}
+
+func validateObjectConstraints(object map[string]any, constraints map[string]any) error {
+	if len(constraints) == 0 {
+		return nil
+	}
+	if rawPositive, ok := constraints["positive"].([]any); ok {
+		for _, fieldValue := range rawPositive {
+			field, ok := fieldValue.(string)
+			if !ok {
+				return errors.New("positive constraint is invalid")
+			}
+			number, ok := finiteNumber(object[field])
+			if !ok || number <= 0 {
+				return fmt.Errorf("field %q must be > 0", field)
+			}
+		}
+	}
+	if rawSums, ok := constraints["max_sums"].(map[string]any); ok {
+		for expression, limitValue := range rawSums {
+			parts := strings.Split(expression, "+")
+			if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+				return errors.New("max_sums constraint is invalid")
+			}
+			left, leftOK := finiteNumber(object[strings.TrimSpace(parts[0])])
+			right, rightOK := finiteNumber(object[strings.TrimSpace(parts[1])])
+			limit, limitOK := finiteNumber(limitValue)
+			if !leftOK || !rightOK || !limitOK {
+				return fmt.Errorf("constraint %q contains a non-numeric value", expression)
+			}
+			if left+right > limit {
+				return fmt.Errorf("field sum %q must be <= %v", expression, limit)
+			}
+		}
+	} else if _, present := constraints["max_sums"]; present {
+		return errors.New("max_sums constraint is invalid")
+	}
+	return nil
+}
+
+func finiteNumber(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case json.Number:
+		parsed, err := typed.Float64()
+		return parsed, err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0)
+	case float64:
+		return typed, !math.IsNaN(typed) && !math.IsInf(typed, 0)
+	case float32:
+		parsed := float64(typed)
+		return parsed, !math.IsNaN(parsed) && !math.IsInf(parsed, 0)
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	default:
+		return 0, false
+	}
+}
+
 func validateProperty(value any, property map[string]any) error {
 	typeName, _ := property["type"].(string)
+	if strings.TrimSpace(typeName) == "" {
+		return errors.New("property type is required")
+	}
 	definition := ProductDPDefinition{Type: typeName}
-	if enum, ok := property["enum"]; ok {
-		definition.Type = "enum"
-		spec, _ := json.Marshal(map[string]any{"values": enum})
+	if typeName == "object" {
+		spec, err := json.Marshal(property)
+		if err != nil {
+			return errors.New("object property spec is invalid")
+		}
 		definition.Spec = spec
 	}
 	raw, err := json.Marshal(value)
@@ -222,8 +367,39 @@ func validateProperty(value any, property map[string]any) error {
 	if err := validateDPValue(definition, raw); err != nil {
 		return err
 	}
+	if enum, ok := property["enum"]; ok {
+		spec, _ := json.Marshal(map[string]any{"values": enum})
+		if err := validateEnum(value, spec); err != nil {
+			return err
+		}
+	}
+	if typeName == "array" {
+		if err := validateArrayItems(value, property); err != nil {
+			return err
+		}
+	}
 	if err := validateNumericBounds(raw, typeName, property); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateArrayItems(value any, property map[string]any) error {
+	items, ok := property["items"].(map[string]any)
+	if !ok {
+		if _, present := property["items"]; present {
+			return errors.New("array items spec is invalid")
+		}
+		return nil
+	}
+	array, ok := value.([]any)
+	if !ok {
+		return errors.New("value must be a JSON array")
+	}
+	for index, item := range array {
+		if err := validateProperty(item, items); err != nil {
+			return fmt.Errorf("array item %d: %w", index, err)
+		}
 	}
 	return nil
 }

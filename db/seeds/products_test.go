@@ -70,3 +70,26 @@ func TestProductDPSeedDefinesMachineCheckableDomains(t *testing.T) {
 		}
 	}
 }
+
+func TestProductDPSeedDefinesConditionalAndNestedSchemas(t *testing.T) {
+	t.Parallel()
+
+	content, err := Files.ReadFile("002_product_dps.sql")
+	if err != nil {
+		t.Fatalf("read product DP seed: %v", err)
+	}
+	seed := string(content)
+	for _, fragment := range []string{
+		`"variants":{"field":"op","cases":{"move"`,
+		`"variants":{"field":"mode","cases":{"0"`,
+		`"variants":{"field":"start","cases":{"1"`,
+		`"items":{"type":"string","enum":["explorex.control.v1"]}`,
+		`"constraints":{"positive":["width","height"],"max_sums":{"x+width":10000,"y+height":10000}}`,
+		`"op":{"type":"string","enum":["list"]}`,
+		`"date":{"type":"string"}`,
+	} {
+		if !strings.Contains(seed, fragment) {
+			t.Errorf("product DP seed missing conditional/nested schema %q", fragment)
+		}
+	}
+}

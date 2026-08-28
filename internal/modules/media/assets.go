@@ -82,7 +82,7 @@ type AssetRepository interface {
 
 type AssetService struct {
 	store       ObjectStore
-	commander   Commander
+	commander   DPCommander
 	repository  AssetRepository
 	converter   SnapshotConverter
 	environment string
@@ -90,7 +90,7 @@ type AssetService struct {
 	locks       snapshotLocks
 }
 
-func NewAssetService(store ObjectStore, commander Commander, repository AssetRepository, environment string, converter SnapshotConverter, newID func() (string, error)) *AssetService {
+func NewAssetService(store ObjectStore, commander DPCommander, repository AssetRepository, environment string, converter SnapshotConverter, newID func() (string, error)) *AssetService {
 	if newID == nil {
 		newID = randomUUID
 	}
@@ -123,7 +123,7 @@ func (service *AssetService) CreateSnapshot(
 		return SnapshotResult{}, err
 	}
 	value, _ := json.Marshal(map[string]any{"upload_url": uploadURL})
-	if _, err := service.commander.SendCommands(ctx, internalAppID, deviceID, deviceSN,
+	if _, err := service.commander.SendDPCommands(ctx, internalAppID, deviceID, deviceSN,
 		[]device.CommandInput{{Code: "snapshot", Value: value, CommandID: id}}, waitACK); err != nil {
 		_ = service.repository.SetSnapshotStatus(ctx, id, "failed")
 		return SnapshotResult{}, err
@@ -251,7 +251,7 @@ func (service *AssetService) CreateRecording(
 		return Recording{}, err
 	}
 	value, _ := json.Marshal(map[string]any{"duration": duration, "upload_url": uploadURL})
-	commandResult, err := service.commander.SendCommands(ctx, internalAppID, deviceID, deviceSN,
+	commandResult, err := service.commander.SendDPCommands(ctx, internalAppID, deviceID, deviceSN,
 		[]device.CommandInput{{Code: "record_clip", Value: value, CommandID: id}}, true)
 	if err != nil {
 		_ = service.repository.SetRecordingStatus(ctx, id, "failed")
@@ -357,7 +357,7 @@ func (service *AssetService) ListLegacyLocalRecordings(
 	if err != nil {
 		return nil, fmt.Errorf("encode legacy local recording request: %w", err)
 	}
-	result, err := service.commander.SendCommands(
+	result, err := service.commander.SendDPCommands(
 		ctx, internalAppID, deviceID, deviceSN,
 		[]device.CommandInput{{Code: "sd_files", Value: payload}}, true,
 	)
@@ -427,7 +427,7 @@ func (service *AssetService) UploadFeedAudio(
 	value, _ := json.Marshal(map[string]any{
 		"download_url": downloadURL, "sha256": sha256Hex, "file_size": len(payload),
 	})
-	if _, err := service.commander.SendCommands(ctx, internalAppID, deviceID, deviceSN,
+	if _, err := service.commander.SendDPCommands(ctx, internalAppID, deviceID, deviceSN,
 		[]device.CommandInput{{Code: "audio_update", Value: value, CommandID: id}}, true); err != nil {
 		return nil, err
 	}

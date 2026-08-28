@@ -204,6 +204,9 @@ func TestLegacyLocalRecordingOffsetCompatibilityUsesSdFiles(t *testing.T) {
 	if result["offset"] != float64(20) || commander.input.Code != "sd_files" || !commander.wait {
 		t.Fatalf("result=%#v command=%#v wait=%t", result, commander.input, commander.wait)
 	}
+	if commander.dpCalls != 1 {
+		t.Fatalf("sd_files command bypassed product DP contract: dpCalls=%d", commander.dpCalls)
+	}
 	var value map[string]any
 	if err := json.Unmarshal(commander.input.Value, &value); err != nil ||
 		value["op"] != "list" || value["offset"] != float64(20) || value["limit"] != float64(20) ||
