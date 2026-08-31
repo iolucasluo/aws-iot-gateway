@@ -29,6 +29,7 @@ func TestMigrateCreatesRequiredTablesAndGlobalBindingConstraint(t *testing.T) {
 		"device_local_recording_tombstones", "local_recording_cursors",
 		"local_recording_reconciliations", "local_recording_reconciliation_sightings",
 		"local_recording_thumbnail_outbox",
+		"device_component_bindings",
 	} {
 		var exists bool
 		if err := pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists); err != nil {

@@ -19,7 +19,7 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或 O
   pre-production `001_initial.sql` 时回填其历史上唯一合法的 `feeder-x1`，以便在不删除旧 activation/registry
   数据的前提下建立 PID 外键；fresh schema 不执行该数据回填。
 
-## 当前 schema 快照（26 张业务表）
+## 当前 schema 快照（27 张业务表）
 
 | 表 | 用途 | PK | 主要 FK / 删除语义 |
 |---|---|---|---|
@@ -29,6 +29,7 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或 O
 | `device_activations` | internal app 用户激活 saga | `id` | `device_registry_id → device_registry`（nullable, RESTRICT） |
 | `device_activation_sessions` | activation 安装 session | `id` | `device_activation_id → device_activations`（CASCADE） |
 | `device_bindings` | 全局唯一设备归属；用户字段含不可变 trigger | `id` | `device_registry_id → device_registry`（RESTRICT） |
+| `device_component_bindings` | 设备 capability 到 provider instance 的当前绑定事实 | `id` | registry + binding（RESTRICT）；每 capability 一个 active |
 | `device_tokens` | binding-scoped token hash | `id` | `device_binding_id → device_bindings`（RESTRICT） |
 | `device_commands` | MQTT command/ACK 状态 | `id` | `device_registry_id → device_registry`（RESTRICT） |
 | `device_events` | append-only 设备事件 | `id` | `device_registry_id → device_registry`（RESTRICT） |
@@ -69,3 +70,4 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或 O
 - `006_local_thumbnail_status_text`：将 thumbnail outbox 的 `status` 从定长 `varchar(16)` 改为 `text`，继续由 CHECK 约束限定合法状态，避免状态名长度与字段宽度漂移。
 - `007_product_dps`：增加 Gateway-owned `product_dps` 合同目录和按产品/code 唯一约束；通用 commands 在发布前按设备 PID
   加载 active DP 并校验存在性、状态、方向和 JSON 形状。产品/DP 仍只通过 reviewed seed/migration 维护。
+- `008_provider_composition`：增加 provider-neutral `device_component_bindings` 绑定事实；每台设备每项 capability 只允许一个 active provider instance，external ref 保持 opaque，不引入 tenant/Project/Factory 域。

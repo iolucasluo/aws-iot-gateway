@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/device"
-	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awskvs"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/provider"
 )
 
 const streamTTL = 5 * time.Minute
@@ -28,10 +28,16 @@ const (
 	ControlDataChannelProtocol = "explorex.control.v1"
 )
 
-type KVS interface {
-	EnsureChannel(context.Context, string) (awskvs.Channel, error)
-	Playback(context.Context, awskvs.Channel, string, time.Duration) (awskvs.PlaybackConfig, error)
-}
+// Provider-neutral aliases keep the narrow media port close to its consumer
+// while sharing the canonical capability types with other adapters.
+type ICEServer = provider.ICEServer
+type RealtimeChannel = provider.RealtimeChannel
+type RealtimePlayback = provider.RealtimePlayback
+type PlaybackProvider = provider.PlaybackProvider
+
+// KVS is retained as a source-compatible name for existing constructors while
+// its method types are provider-neutral. New code should use PlaybackProvider.
+type KVS = PlaybackProvider
 
 type Commander interface {
 	SendCommands(context.Context, string, string, string, []device.CommandInput, bool) (device.SendCommandsResult, error)
@@ -94,7 +100,7 @@ type StreamResult struct {
 	GrantedCapabilities       StreamCapabilities         `json:"granted_capabilities"`
 	PlaybackControl           *PlaybackControlCapability `json:"playback_control,omitempty"`
 	Signaling                 Signaling                  `json:"signaling"`
-	ICEServers                []awskvs.ICEServer         `json:"ice_servers"`
+	ICEServers                []ICEServer                `json:"ice_servers"`
 	ExpiresAt                 time.Time                  `json:"expires_at"`
 }
 
@@ -177,7 +183,7 @@ func (service *StreamService) create(
 	}
 	stream := Stream{
 		ID: viewerID, DeviceID: deviceID, DeviceSN: deviceSN, BindingID: bindingID,
-		ChannelARN: channel.ARN, Status: "ready", ExpiresAt: playback.ExpiresAt,
+		ChannelARN: channel.ExternalRef, Status: "ready", ExpiresAt: playback.ExpiresAt,
 	}
 	if err := service.repository.Create(ctx, stream); err != nil {
 		return StreamResult{}, err

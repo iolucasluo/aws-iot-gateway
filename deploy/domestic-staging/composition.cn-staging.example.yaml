@@ -44,4 +44,6 @@ bindings:
 
 policy:
   forbid_regions: [aws]
-  allow_mixed_provider: false
+  # 国内 staging 可以组合自建 MQTT、ExploreX signaling、OSS/COS 和国内 KMS；
+  # forbid_regions 仍保证 AWS 不进入该 composition 的数据面。
+  allow_mixed_provider: true

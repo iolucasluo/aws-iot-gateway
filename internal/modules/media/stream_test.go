@@ -14,12 +14,12 @@ import (
 type kvsStub struct{}
 
 func (kvsStub) EnsureChannel(_ context.Context, name string) (awskvs.Channel, error) {
-	return awskvs.Channel{Name: name, ARN: "arn:channel"}, nil
+	return awskvs.Channel{Name: name, ExternalRef: "arn:channel"}, nil
 }
 
 func (kvsStub) Playback(_ context.Context, channel awskvs.Channel, viewerID string, _ time.Duration) (awskvs.PlaybackConfig, error) {
 	return awskvs.PlaybackConfig{
-		Provider: "aws_kvs", ChannelName: channel.Name, ChannelARN: channel.ARN,
+		Provider: "aws_kvs", ChannelName: channel.Name, ExternalRef: channel.ExternalRef,
 		ClientID: viewerID, WSSURL: "wss://signal.example/live?signed=true",
 		ICEServers: []awskvs.ICEServer{{URLs: "stun:stun.example:443"}},
 		ExpiresAt:  time.Date(2026, 8, 13, 13, 5, 0, 0, time.UTC),

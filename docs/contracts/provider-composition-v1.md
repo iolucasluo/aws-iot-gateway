@@ -1,14 +1,15 @@
 # Provider Composition Contract v1
 
-状态：Draft（Phase 0；实现前必须由 Gateway、Anyka、App owner 验收）
+状态：Phase 2 implementation baseline；composition validator、provider-neutral ports 与绑定事实已落地；具体 runtime wiring、国内 adapter 和跨仓 HIL 仍需后续阶段验收。
 
 ## 0. 当前代码锚点
 
 - `cmd/aws-iot-gateway/main.go` 当前在单一启动路径中创建 AWS IoT、AWS KMS、AWS KVS、S3 和 AWS credential chain。
 - `internal/runtime/config.go` 当前强制 AWS IoT/KVS/S3 配置，非 development 的时间签名只允许 `aws-kms`。
 - `internal/activation/types.go` 和 `internal/httpapi/server.go` 当前把 AWS endpoint、role alias、region 和 KVS prefix 暴露在激活/运行时响应。
-- `internal/modules/media/stream.go` 当前的 `KVS` port 使用 `awskvs` 类型；`assets.go` 的 `ObjectStore` 和 OTA `ArtifactStore` 是可复用的现有切入点。
-- `internal/worker/ingest.go` 当前的队列 port 仍是 SQS-specific；`db/migrations/001_initial.sql` 当前保存 `aws_iot_endpoint`、`kvs_channel_arn` 和裸 `object_key`。
+- `internal/provider/composition.go` 提供严格 YAML composition 解码和启动前 fail-closed 校验；`internal/provider/ports.go` 定义共享的 messaging、identity、realtime、queue、signer 端口类型。
+- `internal/modules/media/stream.go` 的窄 media port 已改为 provider-neutral channel/playback 类型；`assets.go` 的 `ObjectStore` 和 OTA `ArtifactStore` 是可复用的现有切入点。
+- `internal/worker/ingest.go` 的队列 port 已收敛为 `provider.EventQueue`，AWS SQS 细节位于 `internal/platform/awssqs/`；`db/migrations/008_provider_composition.up.sql` 保存设备 capability 到 provider instance 的绑定事实。
 
 这些是需要逐阶段收敛的现状，不是 v1 契约允许继续扩散的模型。
 
@@ -118,7 +119,7 @@ type RealtimeProvider interface {
 
 ### 4.6 Event queue
 
-SQS-specific worker 必须收敛为 `EventQueue` port。队列消息处理需具备 receive、ack、visibility/lease、失败重试和 poison-message 观测语义。国内 staging 不得因 Gateway 进程启动而隐式访问 AWS SQS。
+SQS-specific worker 必须收敛为 `EventQueue` port。Phase 2 的最小 port 只暴露 provider-neutral 的 `Receive`、`Ack` 和 lease token；visibility/lease 时长、失败重试和 poison-message 观测由具体 adapter/队列策略实现，不能泄漏到领域层。国内 staging 不得因 Gateway 进程启动而隐式访问 AWS SQS。
 
 ### 4.7 Signer / Time bootstrap
 
@@ -185,6 +186,10 @@ Gateway 启动时必须校验：
 4. domestic composition 的 required data-plane、signer、queue 和 storage 不能解析到 AWS instance。
 5. 配置缺失、未知字段、重复 instance、过期 endpoint、trust anchor 不匹配均 fail closed。
 
+Phase 2 的最小实现把 `identity`、`messaging`、`signer` 作为所有设备组合的核心绑定；
+`realtime`、`object`、`artifact`、`twin`、`queue` 通过是否出现在 `bindings` 中显式选择，
+未绑定即保持可选，不为未启用能力创建假 provider。后续产品 profile 可再声明更窄的 required set。
+
 ## 7. HTTP/API 兼容
 
 新增 `installation.v2` 和 `realtime session v2` provider-neutral 响应；现有 AWS v1 响应保留至所有旧设备/App 完成迁移。
@@ -193,7 +198,7 @@ v2 不再输出 `aws_iot_endpoint`、`aws_region`、`aws_iot_role_alias`、`aws_
 
 ## 8. 持久化和生命周期
 
-新增 `device_component_bindings` 记录设备、capability、provider instance、external ref、版本、状态和撤销原因。原有 AWS 列保留迁移期，采用双读/双写和回填，不做破坏性 rename。
+新增 `device_component_bindings` 记录设备、binding、capability、provider instance、external ref、版本、状态和撤销原因；数据库 partial unique index 保证同一设备每项 capability 只有一个 active instance。原有 AWS 列保留迁移期，采用双读/双写和回填，不做破坏性 rename。
 
 生命周期必须覆盖：
 

@@ -1223,12 +1223,12 @@ func (*httpCommandRepository) Complete(context.Context, string, string, map[stri
 type httpKVS struct{}
 
 func (httpKVS) EnsureChannel(_ context.Context, name string) (awskvs.Channel, error) {
-	return awskvs.Channel{Name: name, ARN: "arn:aws:kinesisvideo:ap-east-1:123456789012:channel/test/1"}, nil
+	return awskvs.Channel{Name: name, ExternalRef: "arn:aws:kinesisvideo:ap-east-1:123456789012:channel/test/1"}, nil
 }
 
 func (httpKVS) Playback(_ context.Context, channel awskvs.Channel, viewerID string, _ time.Duration) (awskvs.PlaybackConfig, error) {
 	return awskvs.PlaybackConfig{
-		Provider: "aws_kvs", ChannelName: channel.Name, ChannelARN: channel.ARN, ClientID: viewerID,
+		Provider: "aws_kvs", ChannelName: channel.Name, ExternalRef: channel.ExternalRef, ClientID: viewerID,
 		WSSURL: "wss://signaling.example.test", ICEServers: []awskvs.ICEServer{{URLs: "stun:example.test:443"}},
 		ExpiresAt: time.UnixMilli(1_718_000_300_000),
 	}, nil

@@ -1,6 +1,6 @@
 # 国内 `cn-staging` 本地/ECS 模拟
 
-本目录是 Phase 1 的**基础设施等价模拟**，不是已经完成 provider 化的 Gateway 部署。当前 Gateway 二进制仍在启动时要求 AWS IoT/KVS/S3/KMS 配置，因此本阶段不会把它伪装成国内 ready；Gateway provider adapter 和国内 signaling 在后续 Phase 2/4 加入。
+本目录是 Phase 1 的**基础设施等价模拟**，不是已经完成 provider 化的 Gateway 部署。Phase 2 已固化 provider composition 校验和 provider-neutral ports，但当前 Gateway 二进制仍在启动时要求 AWS IoT/KVS/S3/KMS 配置；具体 provider adapter、runtime wiring 和国内 signaling 仍需后续阶段验收。
 
 ## 本地启动
 

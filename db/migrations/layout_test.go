@@ -28,9 +28,39 @@ func TestMigrationLayoutKeepsInitialAndForwardCompatibilityPair(t *testing.T) {
 		"006_local_thumbnail_status_text.up.sql",
 		"007_product_dps.down.sql",
 		"007_product_dps.up.sql",
+		"008_provider_composition.down.sql",
+		"008_provider_composition.up.sql",
 	}
 	if got := migrationNames(entries); len(got) != len(want) || fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("migration files = %v, want %v", got, want)
+	}
+}
+
+func TestProviderCompositionMigrationDefinesBindingScopedProviderFacts(t *testing.T) {
+	t.Parallel()
+
+	migration := readMigration(t, "008_provider_composition.up.sql")
+	for _, fragment := range []string{
+		"CREATE TABLE device_component_bindings",
+		"device_component_bindings_device_registry_id_fkey",
+		"device_component_bindings_device_binding_id_fkey",
+		"uniq_device_component_bindings_active",
+		"device_component_bindings_capability_check",
+		"device_component_bindings_status_check",
+		"CREATE TRIGGER trg_device_component_bindings_updated_at",
+		"COMMENT ON TRIGGER trg_device_component_bindings_updated_at",
+	} {
+		requireMigrationContains(t, migration, fragment)
+	}
+	for _, forbidden := range []string{"tenant_id", "project_id", "factory_id", "DROP TABLE", "TRUNCATE"} {
+		if strings.Contains(strings.ToLower(migration), strings.ToLower(forbidden)) {
+			t.Errorf("provider composition migration contains forbidden fragment %q", forbidden)
+		}
+	}
+
+	down := readMigration(t, "008_provider_composition.down.sql")
+	for _, fragment := range []string{"DROP TRIGGER", "DROP INDEX", "DROP TABLE device_component_bindings"} {
+		requireMigrationContains(t, down, fragment)
 	}
 }
 
