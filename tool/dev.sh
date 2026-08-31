@@ -149,6 +149,8 @@ validate_local_data_isolation() {
   local database_url=${DATABASE_URL:?DATABASE_URL is required}
   local redis_url=${REDIS_URL:?REDIS_URL is required}
   local database_query=
+  local environment_schema=${ENVIRONMENT_ID//-/_}
+  local search_path_pattern=
   local database_path=${database_url%%\?*}
   local database_name=${database_path##*/}
   local redis_path=${redis_url%%\?*}
@@ -156,8 +158,10 @@ validate_local_data_isolation() {
 
   if [[ "$database_url" == *\?* ]]; then
     database_query=${database_url#*\?}
-    if [[ "$database_query" != "sslmode=disable" ]]; then
-      echo "DATABASE_URL query must be empty or exactly sslmode=disable" >&2
+    search_path_pattern="^sslmode=disable&options=-csearch_path%3Dgateway_${environment_schema}(_v[1-9][0-9]*)?%2Cpublic$"
+    if [[ "$database_query" != "sslmode=disable" &&
+          ! "$database_query" =~ $search_path_pattern ]]; then
+      echo "DATABASE_URL query must be empty or exactly sslmode=disable, optionally with an environment-owned search_path" >&2
       exit 1
     fi
   fi

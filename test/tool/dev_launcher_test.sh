@@ -30,7 +30,7 @@ GATEWAY_ENVIRONMENT=development
 GATEWAY_LOCAL_POSTGRES_DATABASE=aws_iot_gateway
 GATEWAY_LOCAL_POSTGRES_PORT=5432
 GATEWAY_LOCAL_REDIS_PORT=6379
-DATABASE_URL=postgres://gateway:local-only@127.0.0.1:5432/aws_iot_gateway?sslmode=disable
+DATABASE_URL='postgres://gateway:local-only@127.0.0.1:5432/aws_iot_gateway?sslmode=disable'
 REDIS_URL=redis://127.0.0.1:6379/2
 INTERNAL_APPS_JSON='[{"id":"demo-local","api_key":"demo-key","api_secret":"$SECRET_MARKER"}]'
 EOF
@@ -70,6 +70,21 @@ test "$(sed -n '1p' "$CAPTURE_FILE")" = "go build -o $TMP_DIR/bin/aws-iot-gatewa
 test "$(sed -n '2p' "$CAPTURE_FILE")" = "go build -o $TMP_DIR/bin/aws-iot-gateway ./cmd/aws-iot-gateway"
 test "$(sed -n '3p' "$CAPTURE_FILE")" = seed
 test "$(sed -n '4p' "$CAPTURE_FILE")" = api
+
+: >"$CAPTURE_FILE"
+environment_schema=${ENVIRONMENT_ID//-/_}
+sed \
+  "s#?sslmode=disable#?sslmode=disable\\&options=-csearch_path%3Dgateway_${environment_schema}_v3%2Cpublic#" \
+  "$TMP_DIR/valid.env" >"$ENV_FILE"
+up_output=$($DEV_SH up --environment-id "$ENVIRONMENT_ID" 2>&1)
+if grep -Fq "$SECRET_MARKER" <<<"$up_output" || grep -Fq "$SECRET_MARKER" "$CAPTURE_FILE"; then
+  fail "Gateway launcher leaked INTERNAL_APPS_JSON secret with local search_path"
+fi
+test "$(wc -l <"$CAPTURE_FILE" | tr -d ' ')" = 4 || {
+  echo "unexpected search_path lifecycle:" >&2
+  cat "$CAPTURE_FILE" >&2
+  exit 1
+}
 
 : >"$CAPTURE_FILE"
 printf '0\n' >"$SOURCE_COUNT_FILE"
