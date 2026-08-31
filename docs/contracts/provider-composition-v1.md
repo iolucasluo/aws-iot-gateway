@@ -2,6 +2,16 @@
 
 状态：Draft（Phase 0；实现前必须由 Gateway、Anyka、App owner 验收）
 
+## 0. 当前代码锚点
+
+- `cmd/aws-iot-gateway/main.go` 当前在单一启动路径中创建 AWS IoT、AWS KMS、AWS KVS、S3 和 AWS credential chain。
+- `internal/runtime/config.go` 当前强制 AWS IoT/KVS/S3 配置，非 development 的时间签名只允许 `aws-kms`。
+- `internal/activation/types.go` 和 `internal/httpapi/server.go` 当前把 AWS endpoint、role alias、region 和 KVS prefix 暴露在激活/运行时响应。
+- `internal/modules/media/stream.go` 当前的 `KVS` port 使用 `awskvs` 类型；`assets.go` 的 `ObjectStore` 和 OTA `ArtifactStore` 是可复用的现有切入点。
+- `internal/worker/ingest.go` 当前的队列 port 仍是 SQS-specific；`db/migrations/001_initial.sql` 当前保存 `aws_iot_endpoint`、`kvs_channel_arn` 和裸 `object_key`。
+
+这些是需要逐阶段收敛的现状，不是 v1 契约允许继续扩散的模型。
+
 ## 1. 目的
 
 本契约定义 ExploreX 运行时如何把独立能力绑定到 provider instance。它解决的是“同一套业务内核按能力组合 AWS、国内云或自建服务”，不是把 AWS 代码复制成另一套国内代码。
