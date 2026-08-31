@@ -23,6 +23,15 @@ docker compose --env-file .env.cn-staging.local \
   -f deploy/domestic-staging/compose.yaml --profile object up -d --wait
 ```
 
+试产前置 contract（只验证边界，不把 NO-SHIP 变成可部署）：
+
+```sh
+bash deploy/domestic-staging/test_trial_contract.sh
+```
+
+该检查必须输出 `NO-SHIP`，直到 Gateway composition runtime wiring、真实 signaling
+service 和 feeder HIL 均有当前版本证据。
+
 停止只影响本 Compose project：
 
 ```sh
