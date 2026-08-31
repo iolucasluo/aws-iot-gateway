@@ -50,6 +50,24 @@ func TestProductDPSeedDefinesMinionCameraContract(t *testing.T) {
 	}
 }
 
+func TestProductDPSeedDefinesFeederContinuousRecordingDurations(t *testing.T) {
+	t.Parallel()
+
+	content, err := Files.ReadFile("002_product_dps.sql")
+	if err != nil {
+		t.Fatalf("read product DP seed: %v", err)
+	}
+	seed := string(content)
+	for _, fragment := range []string{
+		"'feeder-x1'), 'record_mode'",
+		`"segment_s":{"type":"integer","enum":[60,180,300]}`,
+	} {
+		if !strings.Contains(seed, fragment) {
+			t.Errorf("product DP seed missing continuous recording contract %q", fragment)
+		}
+	}
+}
+
 func TestProductDPSeedDefinesMachineCheckableDomains(t *testing.T) {
 	t.Parallel()
 
