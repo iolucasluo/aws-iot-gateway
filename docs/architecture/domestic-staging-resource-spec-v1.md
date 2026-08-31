@@ -140,9 +140,10 @@ ss -lntup
 
 ## 8. 资源清单验收门
 
-Phase 0 只验收“清单完整、owner 明确、无秘密”；不得以清单替代资源创建。
+Phase 0 只验收“清单完整、owner 明确、无秘密”；Phase 1 只验证本地/Docker 等价
+基础设施形状，不把它误报为真实国内云或 feeder HIL 已通过。不得以清单替代资源创建。
 
-进入 Phase 1 前必须有：
+进入 Phase 5 的真实国内 staging/HIL 前必须有：
 
 - [ ] DELL 只读硬件/软件检查输出。
 - [ ] Compose 服务图、端口、卷、备份和 secret 目录。
@@ -151,6 +152,10 @@ Phase 0 只验收“清单完整、owner 明确、无秘密”；不得以清单
 - [ ] WebRTC signaling/TURN 实施 owner 与板端 spike 入口。
 - [ ] 国内 signer 方案；禁止沿用 AWS KMS 隐性依赖。
 - [ ] OSS/COS bucket、生命周期、checksum 和最小权限方案。
+
+Phase 1 本地验收只要求：Compose `config`、四个必需服务 health、可选 MinIO
+health，以及 PostgreSQL/Redis/MQTT/TURN 的最小协议 smoke；DELL 预检若发现磁盘、
+防火墙或网络前置不满足，必须保持阻塞状态，不得用 Mac 本地结果替代。
 
 ## 9. 单 ECS 退出条件
 

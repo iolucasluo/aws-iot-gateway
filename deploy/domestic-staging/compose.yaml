@@ -1,0 +1,148 @@
+name: explorex-cn-staging
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${CN_STAGING_POSTGRES_USER:?CN_STAGING_POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${CN_STAGING_POSTGRES_PASSWORD:?CN_STAGING_POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${CN_STAGING_POSTGRES_DATABASE:?CN_STAGING_POSTGRES_DATABASE is required}
+    ports:
+      - "${CN_STAGING_STATE_BIND_ADDRESS:-127.0.0.1}:${CN_STAGING_POSTGRES_PORT:-55432}:5432"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - private
+      - host-access
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - "${CN_STAGING_REDIS_PASSWORD:?CN_STAGING_REDIS_PASSWORD is required}"
+    ports:
+      - "${CN_STAGING_STATE_BIND_ADDRESS:-127.0.0.1}:${CN_STAGING_REDIS_PORT:-56379}:6379"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - redis-cli -a "${CN_STAGING_REDIS_PASSWORD:?CN_STAGING_REDIS_PASSWORD is required}" ping | grep -q PONG
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - redis-data:/data
+    networks:
+      - private
+      - host-access
+    restart: unless-stopped
+
+  mqtt:
+    image: eclipse-mosquitto:2.0.20
+    ports:
+      - "${CN_STAGING_EDGE_BIND_ADDRESS:-127.0.0.1}:${CN_STAGING_MQTT_PORT:-51883}:1883"
+    volumes:
+      - ./mosquitto.local.conf:/mosquitto/config/mosquitto.conf:ro
+      - mqtt-data:/mosquitto/data
+      - mqtt-log:/mosquitto/log
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mosquitto_pub -h 127.0.0.1 -p 1883 -t phase1/health -n
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      - private
+      - edge
+    restart: unless-stopped
+
+  turn:
+    image: coturn/coturn:4.6.2
+    command:
+      - -n
+      - --log-file=stdout
+      - --no-cli
+      - --fingerprint
+      - --lt-cred-mech
+      - --realm=${CN_STAGING_TURN_REALM:?CN_STAGING_TURN_REALM is required}
+      - --user=${CN_STAGING_TURN_USER:?CN_STAGING_TURN_USER is required}:${CN_STAGING_TURN_PASSWORD:?CN_STAGING_TURN_PASSWORD is required}
+      - --min-port=49160
+      - --max-port=49200
+    ports:
+      - "${CN_STAGING_EDGE_BIND_ADDRESS:-127.0.0.1}:${CN_STAGING_TURN_UDP_PORT:-53478}:3478/udp"
+      - "${CN_STAGING_EDGE_BIND_ADDRESS:-127.0.0.1}:${CN_STAGING_TURN_TCP_PORT:-53478}:3478/tcp"
+      - "${CN_STAGING_EDGE_BIND_ADDRESS:-127.0.0.1}:49160-49200:49160-49200/udp"
+      - "${CN_STAGING_EDGE_BIND_ADDRESS:-127.0.0.1}:49160-49200:49160-49200/tcp"
+    healthcheck:
+      test:
+        - CMD
+        - turnutils_stunclient
+        - -p
+        - "3478"
+        - 127.0.0.1
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      - private
+      - edge
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2024-06-13T22-53-53Z
+    profiles:
+      - object
+    environment:
+      MINIO_ROOT_USER: ${CN_STAGING_MINIO_ROOT_USER:?CN_STAGING_MINIO_ROOT_USER is required when object profile is enabled}
+      MINIO_ROOT_PASSWORD: ${CN_STAGING_MINIO_ROOT_PASSWORD:?CN_STAGING_MINIO_ROOT_PASSWORD is required when object profile is enabled}
+    command:
+      - server
+      - /data
+      - --console-address
+      - :9001
+    ports:
+      - "${CN_STAGING_STATE_BIND_ADDRESS:-127.0.0.1}:${CN_STAGING_MINIO_API_PORT:-59000}:9000"
+      - "${CN_STAGING_STATE_BIND_ADDRESS:-127.0.0.1}:${CN_STAGING_MINIO_CONSOLE_PORT:-59001}:9001"
+    healthcheck:
+      test:
+        - CMD
+        - mc
+        - ready
+        - --quiet
+        - local
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - minio-data:/data
+    networks:
+      - private
+      - edge
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  mqtt-data:
+  mqtt-log:
+  minio-data:
+
+networks:
+  private:
+    driver: bridge
+    internal: true
+  edge:
+    driver: bridge
+  host-access:
+    driver: bridge
