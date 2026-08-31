@@ -25,11 +25,11 @@ AWS adapter 不决定用户授权或 activation 状态。
 - PostgreSQL 是业务权威存储；不得新增 JSON 文件或 Redis 业务状态。activation code/device token 只存 hash。
 - 配置必须显式校验。缺少 PostgreSQL、Redis、AWS region、device policy 或 internal app map 时启动失败；
   不增加静默默认 credential、账号或远端 endpoint。
-- application 不依赖 HTTP/AWS/PostgreSQL driver；保持 Go 格式。`products` 仅是 activation 的最小只读目录，
-  不引入 tenant/Project/Product CRUD/owner/Factory 平台抽象。
+- application 不依赖 HTTP/AWS/PostgreSQL driver；保持 Go 格式。`products`/`product_dps` 是 activation 与通用
+  command 校验所需的最小只读产品事实，不引入 tenant/Project/Product/DP CRUD/owner/Factory 平台抽象。
 
 ## 变更同步
 
 - 配置 key 变化：同步 `.env.example`、`internal/runtime/config.go`、配置测试和 README；真实值只进 Secret provider。
-- HTTP JSON 或状态机变化：同步 handler、activation service、两侧测试以及 App/Anyka 消费方。
+- HTTP JSON 或状态机变化：同步 handler、activation service、两侧测试以及 Demo App/TXW82x 固件消费方。
 - AWS adapter 变化：同步最小 `Client` 接口、fake 测试和 IAM 权限说明。

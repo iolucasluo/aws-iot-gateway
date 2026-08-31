@@ -43,6 +43,15 @@ func (waiter ackWaiterStub) Wait(context.Context, string, string, time.Duration)
 
 type commandRepositoryStub struct{ commands []Command }
 
+type productDPDefinitionLoaderStub struct {
+	definitions []ProductDPDefinition
+	err         error
+}
+
+func (loader productDPDefinitionLoaderStub) LoadProductDPDefinitions(_ context.Context, _ string) ([]ProductDPDefinition, error) {
+	return loader.definitions, loader.err
+}
+
 func (repository *commandRepositoryStub) Create(_ context.Context, command Command) error {
 	repository.commands = append(repository.commands, command)
 	return nil
@@ -90,33 +99,22 @@ func TestSendCommandsPreservesLivPetPayloadAndResponseShape(t *testing.T) {
 	}
 }
 
-func TestSendCommandsRedactsEphemeralFieldsOnlyFromPersistence(t *testing.T) {
+func TestSendDPCommandsRejectsUnknownDPBeforePersistenceOrPublish(t *testing.T) {
 	t.Parallel()
 	publisher := &publisherStub{}
 	repository := &commandRepositoryStub{}
-	service := NewService(publisher, ackWaiterStub{}, repository,
-		"aws-iot-gateway-staging", func() (string, error) { return "session-sensitive", nil })
+	service := NewServiceWithDP(publisher, ackWaiterStub{}, repository, "aws-iot-gateway-staging", nil,
+		productDPDefinitionLoaderStub{definitions: []ProductDPDefinition{{
+			Code: "video_res", Type: "object", Direction: "wo", Status: "active",
+		}}})
 
-	_, err := service.SendCommands(context.Background(), "livpet-staging", "device-id", "fdr-0001", []CommandInput{{
-		Code:         "sd_thumbnail_v1",
-		Value:        json.RawMessage(`{"recording_id":"rec_0123456789abcdef0123456789abcdef","upload_url":"https://private.example/signed"}`),
-		RedactFields: []string{"upload_url"},
-	}}, false)
-	if err != nil {
-		t.Fatalf("SendCommands() error = %v", err)
+	_, err := service.SendDPCommands(context.Background(), "livpet-staging", "device-id", "fdr-0001",
+		[]CommandInput{{Code: "not_registered", Value: json.RawMessage(`{}`)}}, false)
+	if !errors.Is(err, ErrDPUnknown) || !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("SendDPCommands() error = %v, want unknown DP invalid input", err)
 	}
-	if !bytes.Contains(publisher.payload, []byte("https://private.example/signed")) {
-		t.Fatalf("published payload lost upload URL: %s", publisher.payload)
-	}
-	if len(repository.commands) != 1 {
-		t.Fatalf("commands = %#v", repository.commands)
-	}
-	persisted, err := json.Marshal(repository.commands[0].Payload)
-	if err != nil {
-		t.Fatalf("marshal persisted payload: %v", err)
-	}
-	if bytes.Contains(persisted, []byte("upload_url")) || bytes.Contains(persisted, []byte("private.example")) {
-		t.Fatalf("persisted command leaked presigned URL: %s", persisted)
+	if len(repository.commands) != 0 || len(publisher.payload) != 0 {
+		t.Fatalf("unknown DP mutated repository=%#v or published=%s", repository.commands, publisher.payload)
 	}
 }
 
@@ -242,6 +240,36 @@ func TestSendCommandsRejectsReservedLocalMediaSessionBeforePersistenceOrPublish(
 	}
 	if len(repository.commands) != 0 || len(publisher.payload) != 0 {
 		t.Fatalf("reserved session mutated repository=%#v or published=%s", repository.commands, publisher.payload)
+	}
+}
+
+func TestSendCommandsRedactsEphemeralFieldsOnlyFromPersistence(t *testing.T) {
+	t.Parallel()
+	publisher := &publisherStub{}
+	repository := &commandRepositoryStub{}
+	service := NewService(publisher, ackWaiterStub{}, repository,
+		"aws-iot-gateway-staging", func() (string, error) { return "session-sensitive", nil })
+
+	_, err := service.SendCommands(context.Background(), "livpet-staging", "device-id", "fdr-0001", []CommandInput{{
+		Code:         "sd_thumbnail_v1",
+		Value:        json.RawMessage(`{"recording_id":"rec_0123456789abcdef0123456789abcdef","upload_url":"https://private.example/signed"}`),
+		RedactFields: []string{"upload_url"},
+	}}, false)
+	if err != nil {
+		t.Fatalf("SendCommands() error = %v", err)
+	}
+	if !bytes.Contains(publisher.payload, []byte("https://private.example/signed")) {
+		t.Fatalf("published payload lost upload URL: %s", publisher.payload)
+	}
+	if len(repository.commands) != 1 {
+		t.Fatalf("commands = %#v", repository.commands)
+	}
+	persisted, err := json.Marshal(repository.commands[0].Payload)
+	if err != nil {
+		t.Fatalf("marshal persisted payload: %v", err)
+	}
+	if bytes.Contains(persisted, []byte("upload_url")) || bytes.Contains(persisted, []byte("private.example")) {
+		t.Fatalf("persisted command leaked presigned URL: %s", persisted)
 	}
 }
 

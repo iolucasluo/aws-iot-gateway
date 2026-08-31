@@ -37,6 +37,13 @@ type Commander interface {
 	SendCommands(context.Context, string, string, string, []device.CommandInput, bool) (device.SendCommandsResult, error)
 }
 
+// DPCommander is the product-contract-aware command entry point. Typed
+// product DP services use it so their payloads cannot bypass product_dps
+// validation, while workers that speak internal protocols keep Commander.
+type DPCommander interface {
+	SendDPCommands(context.Context, string, string, string, []device.CommandInput, bool) (device.SendCommandsResult, error)
+}
+
 type Stream struct {
 	ID         string
 	DeviceID   string
@@ -93,13 +100,13 @@ type StreamResult struct {
 
 type StreamService struct {
 	kvs           KVS
-	commander     Commander
+	commander     DPCommander
 	repository    StreamRepository
 	channelPrefix string
 	newID         func() (string, error)
 }
 
-func NewStreamService(kvs KVS, commander Commander, repository StreamRepository, channelPrefix string, newID func() (string, error)) *StreamService {
+func NewStreamService(kvs KVS, commander DPCommander, repository StreamRepository, channelPrefix string, newID func() (string, error)) *StreamService {
 	if newID == nil {
 		newID = randomUUID
 	}
@@ -153,7 +160,7 @@ func (service *StreamService) create(
 		"type": "webrtc", "start": 1, "viewer_client_id": viewerID,
 		"requested_capabilities": requested,
 	})
-	commandResult, err := service.commander.SendCommands(ctx, internalAppID, deviceID, deviceSN,
+	commandResult, err := service.commander.SendDPCommands(ctx, internalAppID, deviceID, deviceSN,
 		[]device.CommandInput{{Code: "stream", Value: value}}, true)
 	if err != nil {
 		return StreamResult{}, err
@@ -164,7 +171,7 @@ func (service *StreamService) create(
 	}
 	if requireExactGrant && !capabilitiesEqual(capabilityFacts.accepted, requested) {
 		stopValue, _ := json.Marshal(map[string]any{"type": "webrtc", "start": 0, "viewer_client_id": viewerID})
-		_, _ = service.commander.SendCommands(ctx, internalAppID, deviceID, deviceSN,
+		_, _ = service.commander.SendDPCommands(ctx, internalAppID, deviceID, deviceSN,
 			[]device.CommandInput{{Code: "stream", Value: stopValue}}, false)
 		return StreamResult{}, ErrStreamCapabilityUnavailable
 	}
@@ -430,7 +437,7 @@ func (service *StreamService) Delete(ctx context.Context, internalAppID, deviceI
 		return ErrStreamNotFound
 	}
 	value, _ := json.Marshal(map[string]any{"type": "webrtc", "start": 0, "viewer_client_id": streamID})
-	if _, err := service.commander.SendCommands(ctx, internalAppID, deviceID, deviceSN,
+	if _, err := service.commander.SendDPCommands(ctx, internalAppID, deviceID, deviceSN,
 		[]device.CommandInput{{Code: "stream", Value: value}}, false); err != nil {
 		return err
 	}

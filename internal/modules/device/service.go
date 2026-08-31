@@ -94,15 +94,27 @@ type Service struct {
 	publisher   Publisher
 	ackWaiter   ACKWaiter
 	repository  CommandRepository
+	dpLoader    DPDefinitionLoader
 	topicPrefix string
 	newID       IDGenerator
 }
 
 func NewService(publisher Publisher, ackWaiter ACKWaiter, repository CommandRepository, topicPrefix string, newID IDGenerator) *Service {
+	return NewServiceWithDP(publisher, ackWaiter, repository, topicPrefix, newID, nil)
+}
+
+func NewServiceWithDP(
+	publisher Publisher,
+	ackWaiter ACKWaiter,
+	repository CommandRepository,
+	topicPrefix string,
+	newID IDGenerator,
+	dpLoader DPDefinitionLoader,
+) *Service {
 	if newID == nil {
 		newID = randomUUID
 	}
-	return &Service{publisher: publisher, ackWaiter: ackWaiter, repository: repository, topicPrefix: topicPrefix, newID: newID}
+	return &Service{publisher: publisher, ackWaiter: ackWaiter, repository: repository, dpLoader: dpLoader, topicPrefix: topicPrefix, newID: newID}
 }
 
 func (service *Service) GetShadow(ctx context.Context, deviceSN string) (any, error) {
@@ -132,7 +144,7 @@ func (service *Service) GetShadow(ctx context.Context, deviceSN string) (any, er
 }
 
 func (service *Service) GetPTZStatus(ctx context.Context, internalAppID, deviceID, deviceSN string) (PTZStatus, error) {
-	result, err := service.SendCommands(ctx, internalAppID, deviceID, deviceSN, []CommandInput{{
+	result, err := service.SendDPCommands(ctx, internalAppID, deviceID, deviceSN, []CommandInput{{
 		Code: "ptz", Value: json.RawMessage(`{"op":"get_position"}`),
 	}}, true)
 	if err != nil {

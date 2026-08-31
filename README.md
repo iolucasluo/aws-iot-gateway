@@ -1,6 +1,6 @@
 # aws-iot-gateway
 
-`aws-iot-gateway` 是 LivPet 和内部 Demo App 共用的 **Internal AWS API**。它拥有用户激活、全局唯一绑定、设备运行身份和受限设备操作；`products` 仅作为受控的只读激活/协议能力目录，不实现 Developer、Project、Product CRUD/owner、Factory、tenant、IDevID、RMA 或 OTA campaign 平台。OTA 只保留签名版本和单设备 deployment。
+`aws-iot-gateway` 是 LivPet 和内部 Demo App 共用的 **Internal AWS API**。它拥有用户激活、全局唯一绑定、设备运行身份和受限设备操作；`products` 与 `product_dps` 作为受控的只读激活/设备合同目录，不实现 Developer、Project、Product/DP CRUD/owner、Factory、tenant、IDevID、RMA 或 OTA campaign 平台。OTA 只保留签名版本和单设备 deployment。
 
 `/api/v1/openapi/*` 中的 `openapi` 只是 LivPet wire compatibility，产品和代码语义均使用 internal app。App 必须先读取受控产品目录并在创建 activation 时显式提交 active PID；Gateway 不再默认 `feeder-x1`。
 

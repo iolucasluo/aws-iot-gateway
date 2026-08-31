@@ -109,7 +109,7 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 
 func TestSingleDeviceOTAMigrationHasExecutionRecordsWithoutCampaignPlatform(t *testing.T) {
 	t.Parallel()
-	migration := readMigration(t, "006_single_device_ota.up.sql")
+	migration := readMigration(t, "004_single_device_ota.up.sql")
 	for _, fragment := range []string{
 		"CREATE TABLE IF NOT EXISTS ota_firmware_versions",
 		"CREATE TABLE IF NOT EXISTS device_ota_deployments",
@@ -127,7 +127,7 @@ func TestSingleDeviceOTAMigrationHasExecutionRecordsWithoutCampaignPlatform(t *t
 
 func TestProductCapabilitiesMigrationUpgradesExistingCatalogWithoutProductDomainExpansion(t *testing.T) {
 	t.Parallel()
-	migration := readMigration(t, "005_product_capabilities.up.sql")
+	migration := readMigration(t, "003_product_capabilities.up.sql")
 	for _, fragment := range []string{
 		"ALTER TABLE products",
 		"ADD COLUMN IF NOT EXISTS capabilities jsonb",
@@ -197,7 +197,7 @@ func requireMigrationContains(t *testing.T, migration, fragment string) {
 
 func TestLocalRecordingProjectionMigrationIsNarrowAndFailClosed(t *testing.T) {
 	t.Parallel()
-	migration := readMigration(t, "003_local_recording_projection.up.sql")
+	migration := readMigration(t, "005_local_recording_projection.up.sql")
 	for _, fragment := range []string{
 		"CREATE TABLE device_local_recordings (",
 		"device_local_recordings_identity_key",
@@ -229,7 +229,7 @@ func TestLocalRecordingProjectionMigrationIsNarrowAndFailClosed(t *testing.T) {
 
 func TestLocalThumbnailStatusTextMigrationKeepsTheCheckConstraintFailClosed(t *testing.T) {
 	t.Parallel()
-	up := readMigration(t, "004_local_thumbnail_status_text.up.sql")
+	up := readMigration(t, "006_local_thumbnail_status_text.up.sql")
 	requireMigrationContains(t, up, "ALTER TABLE local_recording_thumbnail_outbox")
 	requireMigrationContains(t, up, "ALTER COLUMN status TYPE text")
 	for _, forbidden := range []string{"DROP CONSTRAINT", "DROP TABLE", "TRUNCATE", "DELETE FROM"} {
@@ -238,7 +238,7 @@ func TestLocalThumbnailStatusTextMigrationKeepsTheCheckConstraintFailClosed(t *t
 		}
 	}
 
-	down := readMigration(t, "004_local_thumbnail_status_text.down.sql")
+	down := readMigration(t, "006_local_thumbnail_status_text.down.sql")
 	requireMigrationContains(t, down, "SET status='delete_pending'")
 	requireMigrationContains(t, down, "WHERE status='delete_processing'")
 	requireMigrationContains(t, down, "ALTER COLUMN status TYPE varchar(16)")

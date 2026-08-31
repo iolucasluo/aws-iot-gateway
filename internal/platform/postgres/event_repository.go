@@ -191,6 +191,38 @@ func (repository *EventRepository) Store(ctx context.Context, event events.Event
 	return nil
 }
 
+func otaProgressTransition(data map[string]any) (deploymentID, state, reason string, ok bool) {
+	deploymentID, idOK := data["deployment_id"].(string)
+	state, stateOK := data["state"].(string)
+	if !idOK || !otaDeploymentIDPattern.MatchString(deploymentID) || !stateOK {
+		return "", "", "", false
+	}
+	switch state {
+	case "downloading", "verifying", "installing", "failed":
+	default:
+		return "", "", "", false
+	}
+	reason, _ = data["reason"].(string)
+	if len(reason) > 128 {
+		return "", "", "", false
+	}
+	return deploymentID, state, reason, true
+}
+
+func otaBootOutcome(data map[string]any, targetVersion string, targetBuild int64) (string, bool) {
+	version, versionOK := data["version"].(string)
+	buildValue, buildOK := data["build"].(float64)
+	if !versionOK || version == "" || !buildOK || math.IsNaN(buildValue) ||
+		math.IsInf(buildValue, 0) || math.Trunc(buildValue) != buildValue ||
+		buildValue < 0 || buildValue >= 9223372036854775808.0 {
+		return "", false
+	}
+	if version == targetVersion && int64(buildValue) == targetBuild {
+		return "succeeded", true
+	}
+	return "rolled_back", true
+}
+
 func projectLocalRecordingFinalized(ctx context.Context, transaction pgx.Tx, deviceID string, event events.Event) error {
 	payload, err := json.Marshal(event.Data)
 	if err != nil {
@@ -334,38 +366,6 @@ func projectLocalRecordingDeleted(ctx context.Context, transaction pgx.Tx, devic
 		return fmt.Errorf("delete empty local recording thumbnail intent: %w", err)
 	}
 	return nil
-}
-
-func otaProgressTransition(data map[string]any) (deploymentID, state, reason string, ok bool) {
-	deploymentID, idOK := data["deployment_id"].(string)
-	state, stateOK := data["state"].(string)
-	if !idOK || !otaDeploymentIDPattern.MatchString(deploymentID) || !stateOK {
-		return "", "", "", false
-	}
-	switch state {
-	case "downloading", "verifying", "installing", "failed":
-	default:
-		return "", "", "", false
-	}
-	reason, _ = data["reason"].(string)
-	if len(reason) > 128 {
-		return "", "", "", false
-	}
-	return deploymentID, state, reason, true
-}
-
-func otaBootOutcome(data map[string]any, targetVersion string, targetBuild int64) (string, bool) {
-	version, versionOK := data["version"].(string)
-	buildValue, buildOK := data["build"].(float64)
-	if !versionOK || version == "" || !buildOK || math.IsNaN(buildValue) ||
-		math.IsInf(buildValue, 0) || math.Trunc(buildValue) != buildValue ||
-		buildValue < 0 || buildValue >= 9223372036854775808.0 {
-		return "", false
-	}
-	if version == targetVersion && int64(buildValue) == targetBuild {
-		return "succeeded", true
-	}
-	return "rolled_back", true
 }
 
 func buildWebhookPayload(deliveryID string, event events.Event, pid string) (map[string]any, string) {

@@ -21,7 +21,7 @@ func TestMigrateCreatesRequiredTablesAndGlobalBindingConstraint(t *testing.T) {
 	}
 
 	for _, table := range []string{
-		"products", "device_registry", "device_activations", "device_activation_sessions", "device_bindings", "device_tokens",
+		"products", "product_dps", "device_registry", "device_activations", "device_activation_sessions", "device_bindings", "device_tokens",
 		"device_commands", "device_events", "device_schedules", "device_streams", "device_snapshots", "device_recordings",
 		"ota_firmware_versions", "device_ota_deployments",
 		"webhook_outbox", "webhook_deliveries", "device_lifecycle_outbox",
@@ -61,6 +61,17 @@ func TestMigrateCreatesRequiredTablesAndGlobalBindingConstraint(t *testing.T) {
 	`, deviceID)
 	if err != nil {
 		t.Fatalf("insert device: %v", err)
+	}
+	dpRepository, err := NewProductDPRepository(pool)
+	if err != nil {
+		t.Fatalf("create product DP repository: %v", err)
+	}
+	definitions, err := dpRepository.LoadProductDPDefinitions(ctx, "fdr-00000000000000000000000000000001")
+	if err != nil {
+		t.Fatalf("load feeder product DPs: %v", err)
+	}
+	if len(definitions) != 2 || definitions[0].Code != "feed" || definitions[1].Code != "set_schedule" {
+		t.Fatalf("feeder product DPs = %#v, want feed/set_schedule", definitions)
 	}
 	_, err = pool.Exec(ctx, `
 		INSERT INTO device_bindings (id, device_registry_id, internal_app_id, binding_external_user_id, status)
@@ -299,6 +310,44 @@ func TestProductSeedIsExplicitAndIdempotent(t *testing.T) {
 			t.Fatalf("%s capabilities = %v, want %v", pid, products[pid], capabilities)
 		}
 	}
+	var dpCount, minionDPCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM product_dps`).Scan(&dpCount); err != nil {
+		t.Fatalf("count seeded product DPs: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM product_dps dp JOIN products p ON p.id=dp.product_id WHERE p.pid='minion-cam-x1'
+	`).Scan(&minionDPCount); err != nil {
+		t.Fatalf("count minion product DPs: %v", err)
+	}
+	if dpCount != 30 || minionDPCount != 28 {
+		t.Fatalf("seeded product DP counts = total %d/minion %d, want 30/28", dpCount, minionDPCount)
+	}
+	var minionDetailedCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM product_dps dp JOIN products p ON p.id=dp.product_id
+		WHERE p.pid='minion-cam-x1' AND jsonb_typeof(dp.spec->'properties')='object'
+	`).Scan(&minionDetailedCount); err != nil {
+		t.Fatalf("count detailed minion product DP specs: %v", err)
+	}
+	if minionDetailedCount != 28 {
+		t.Fatalf("detailed minion product DP specs = %d, want 28", minionDetailedCount)
+	}
+	var volumeMin, volumeMax, sdFilesAck string
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			volume.spec->'properties'->'volume'->>'minimum',
+			volume.spec->'properties'->'volume'->>'maximum',
+			files.spec->'ack'->>'files'
+		FROM product_dps volume
+		JOIN products vp ON vp.id=volume.product_id AND vp.pid='minion-cam-x1'
+		JOIN product_dps files ON files.code='sd_files' AND files.product_id=volume.product_id
+		WHERE volume.code='speaker_vol'
+	`).Scan(&volumeMin, &volumeMax, &sdFilesAck); err != nil {
+		t.Fatalf("load detailed minion DP spec examples: %v", err)
+	}
+	if volumeMin != "0" || volumeMax != "100" || sdFilesAck != "finalized recording metadata objects" {
+		t.Fatalf("detailed minion DP spec examples = volume %s..%s, sd_files=%q", volumeMin, volumeMax, sdFilesAck)
+	}
 }
 
 func TestMigrateKeepsLocalThumbnailOutboxStatusesLengthSafe(t *testing.T) {
@@ -348,7 +397,7 @@ func TestLocalThumbnailStatusTextDownMigrationRestoresPreviousWidthSafely(t *tes
 		t.Fatalf("ApplyMigrations() error = %v", err)
 	}
 	outboxID := seedLocalThumbnailOutboxStatusFixture(t, ctx, pool, "delete_processing")
-	down, err := migrations.Files.ReadFile("004_local_thumbnail_status_text.down.sql")
+	down, err := migrations.Files.ReadFile("006_local_thumbnail_status_text.down.sql")
 	if err != nil {
 		t.Fatalf("read local thumbnail status down migration: %v", err)
 	}

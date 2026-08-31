@@ -2,6 +2,6 @@
 -- blindly would corrupt a fresh database, so rollback requires a reviewed backup.
 DO $$
 BEGIN
-    RAISE EXCEPTION '006_single_device_ota cannot be rolled back automatically; restore a reviewed database backup instead';
+    RAISE EXCEPTION '004_single_device_ota cannot be rolled back automatically; restore a reviewed database backup instead';
 END;
 $$;

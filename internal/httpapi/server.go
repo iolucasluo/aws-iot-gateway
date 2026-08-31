@@ -676,7 +676,7 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "device service is unavailable")
 		return true
 	}
-	result, err := s.device.SendCommands(
+	result, err := s.device.SendDPCommands(
 		request.Context(), principal.InternalAppID, ownedBinding.DeviceID, ownedBinding.DeviceSN, commands, waitACK,
 	)
 	if err != nil {

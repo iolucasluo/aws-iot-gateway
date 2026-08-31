@@ -17,6 +17,17 @@ import (
 	"github.com/aws/smithy-go"
 )
 
+const otaSHA256Hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+func otaSHA256Base64(t *testing.T) string {
+	t.Helper()
+	digest, err := hex.DecodeString(otaSHA256Hex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.StdEncoding.EncodeToString(digest)
+}
+
 func TestPutURLWithSizeSignsContentLengthAndType(t *testing.T) {
 	t.Parallel()
 	client, err := NewClient(aws.Config{
@@ -40,17 +51,6 @@ func TestPutURLWithSizeSignsContentLengthAndType(t *testing.T) {
 	if signedHeaders != "content-length;content-type;host" {
 		t.Fatalf("signed headers = %q", signedHeaders)
 	}
-}
-
-const otaSHA256Hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-
-func otaSHA256Base64(t *testing.T) string {
-	t.Helper()
-	digest, err := hex.DecodeString(otaSHA256Hex)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return base64.StdEncoding.EncodeToString(digest)
 }
 
 type s3APIStub struct {
