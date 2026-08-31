@@ -1,6 +1,6 @@
 # 国内 `cn-staging` 本地/ECS 模拟
 
-本目录是 Phase 1 的**基础设施等价模拟**，不是已经完成 provider 化的 Gateway 部署。Phase 2 已固化 provider composition 校验和 provider-neutral ports，但当前 Gateway 二进制仍在启动时要求 AWS IoT/KVS/S3/KMS 配置；具体 provider adapter、runtime wiring 和国内 signaling 仍需后续阶段验收。
+本目录是国内 `cn-staging` 的**基础设施等价模拟**，不是已经完成 provider 化的 Gateway 部署。Phase 4 已固化 `explorex-signal-v1` adapter/client contract，但当前 Gateway 二进制仍在启动时要求 AWS IoT/KVS/S3/KMS 配置；该目录只启动 PostgreSQL、Redis、Mosquitto、coturn（及可选 MinIO），不伪造 signaling service。
 
 ## 本地启动
 
@@ -63,7 +63,7 @@ LAN 运行与本机 loopback 的差异：公网 DNS、HTTPS CA、运营商 NAT�
 | coturn | TURN 进程/端口形状验证 | 默认 loopback；无公网 HIL 结论 |
 | MinIO | 可选 ObjectStore 接口测试 | 仅 `object` profile、默认 loopback |
 | Gateway API | Phase 1 不启动 | 等 Phase 2 消除 AWS 强制依赖 |
-| RTC signaling | Phase 1 不伪造 | 等 Phase 4 实现并验收协议 |
+| RTC signaling | Phase 4 只固化 adapter/protocol | 不启动假服务；真实 signaling、Anyka HIL 和公网 TURN 另行验收 |
 
 ## 运行约束
 
