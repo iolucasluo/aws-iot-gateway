@@ -1,6 +1,6 @@
 # Provider Composition Contract v1
 
-状态：Phase 2 implementation baseline；composition validator、provider-neutral ports 与绑定事实已落地；具体 runtime wiring、国内 adapter 和跨仓 HIL 仍需后续阶段验收。
+状态：Phase 7.3 implementation baseline；composition validator、provider-neutral ports、国内 MQTT adapter 与 messaging factory 已落地；完整 API runtime wiring、其他国内 provider 和跨仓 HIL 仍需后续阶段验收。
 
 ## 0. 当前代码锚点
 
@@ -177,6 +177,8 @@ policy:
 ```
 
 以上 endpoint、bucket、secret ref 只是形状示例，不是可部署值；真实值只能进入 child 的 ignored local config 或批准的 secret provider。
+
+运行时装配顺序固定为：先由 `LoadProviderComposition` 完成 bounded、regular、non-symlink 和环境匹配校验，再由 `BuildMessaging` 解析 `bindings.messaging` 并构造对应 adapter，最后由调用方显式执行 provider `Health`。factory 不在未知 driver 上 fallback，也不在构造阶段隐式建立网络连接；当前已注册的 `mqtt_broker` 继续执行本节的 `mqtts`/mTLS 约束。AWS 主 API 的既有装配路径保持兼容，待 identity、signer、realtime 和 storage 等 provider 具备后再按同一顺序接入完整 composition runtime。
 
 ## 6. 依赖和 fail-closed 校验
 

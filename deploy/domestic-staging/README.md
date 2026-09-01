@@ -1,6 +1,6 @@
 # 国内 `cn-staging` 本地/ECS 模拟
 
-本目录是国内 `cn-staging` 的基础设施等价模拟。Phase 7.1 已提供显式的 composition preflight；但 Gateway API 的国内 MQTT/身份/媒体 runtime wiring 尚未完成。该目录只启动 PostgreSQL、Redis、Mosquitto、coturn（及可选 MinIO），不伪造 signaling service。
+本目录是国内 `cn-staging` 的基础设施等价模拟。Phase 7.3 已提供显式的 composition preflight 和 messaging factory smoke；但 Gateway API 的国内身份/媒体 runtime wiring 尚未完成。该目录只启动 PostgreSQL、Redis、Mosquitto、coturn（及可选 MinIO），不伪造 signaling service。
 
 ## 本地启动
 
@@ -107,7 +107,7 @@ LAN 运行与本机 loopback 的差异：公网 DNS、HTTPS CA、运营商 NAT�
 | Mosquitto | 国内 MQTT adapter 的本地 harness | `mqtt` 为匿名 loopback harness；`mqtt-mtls` 为证书认证/ACL profile，默认 loopback |
 | coturn | TURN 进程/端口形状验证 | 默认 loopback；无公网 HIL 结论 |
 | MinIO | 可选 ObjectStore 接口测试 | 仅 `object` profile、默认 loopback |
-| Gateway API | Phase 7.1 仍不启动；只提供 composition preflight | 等国内 MQTT/身份/对象/实时 provider wiring 完成后再接入 |
+| Gateway API | Phase 7.3 仍不启动完整 API；只提供 composition preflight + messaging factory smoke | 等国内身份/对象/实时 provider wiring 完成后再接入 |
 | RTC signaling | Phase 4 只固化 adapter/protocol | 不启动假服务；真实 signaling、Anyka HIL 和公网 TURN 另行验收 |
 
 ## 运行约束

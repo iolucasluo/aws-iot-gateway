@@ -30,7 +30,7 @@ fi
 MQTT_TLS_SERVER_IP=10.0.0.7 bash "$CERT_SCRIPT" "$CERT_DIR/lan-ip" >/dev/null
 openssl x509 -in "$CERT_DIR/lan-ip/server.crt" -noout -text | grep -Fq "IP Address:10.0.0.7"
 
-(cd "$ROOT" && go test -race -count=1 ./internal/platform/mqttbroker ./cmd/mqtt-provider-smoke)
+(cd "$ROOT" && go test -race -count=1 ./internal/runtime ./internal/platform/mqttbroker ./cmd/mqtt-provider-smoke)
 
 python3 - "$SCRIPT_DIR/mosquitto.mtls.conf" "$SCRIPT_DIR/mosquitto.mtls.acl.example" <<'PY'
 import pathlib
