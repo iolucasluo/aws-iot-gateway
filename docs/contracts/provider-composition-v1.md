@@ -73,6 +73,8 @@ type DeviceMessaging interface {
 
 每条命令必须携带 `device_id`、`binding_id`、`request_id`、过期时间和幂等语义；provider 选择不能由设备或 App 请求体覆盖。
 
+`mqtt_broker` 是 provider-neutral messaging port 的 MQTT 实现：运行时 endpoint 必须使用 `mqtts://`，并通过 operator-owned 的 CA、client certificate 和 private key 完成双向 TLS；这些路径不进入 composition 文件或 Git。client identity 由证书 subject 与 broker ACL 共同约束，禁止 anonymous listener。adapter 只允许发布/订阅其 composition 声明的 `cmd/<topic_prefix>/...` 与 `dt/<topic_prefix>/...` 命名空间，并拒绝无过期时间或已过期的消息。
+
 ### 4.3 Device State / Twin
 
 Twin 是可选能力。Gateway-owned 状态投影是跨 provider 的权威事实；AWS Shadow、国内 broker retained message 或其他 twin 均为 adapter 细节。没有 twin instance 时，设备仍必须能完成命令和事件协议。

@@ -67,6 +67,35 @@ services:
       - edge
     restart: unless-stopped
 
+  mqtt-mtls:
+    image: eclipse-mosquitto:2.0.20
+    profiles:
+      - mtls
+    entrypoint:
+      - /usr/sbin/mosquitto
+    command:
+      - -c
+      - /mosquitto/config/mosquitto.conf
+    ports:
+      - "${CN_STAGING_EDGE_BIND_ADDRESS:-127.0.0.1}:${CN_STAGING_MQTTS_PORT:-51884}:8883"
+    volumes:
+      - ./mosquitto.mtls.conf:/mosquitto/config/mosquitto.conf:ro
+      - ${CN_STAGING_MQTT_TLS_DIR:?CN_STAGING_MQTT_TLS_DIR is required for mtls profile}:/mosquitto/certs:ro
+      - ${CN_STAGING_MQTT_ACL_FILE:?CN_STAGING_MQTT_ACL_FILE is required for mtls profile}:/mosquitto/config/acl:ro
+      - mqtt-mtls-data:/mosquitto/data
+      - mqtt-mtls-log:/mosquitto/log
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mosquitto_pub -h 127.0.0.1 -p 8883 --cafile /mosquitto/certs/ca.crt --cert /mosquitto/certs/gateway-cn-staging.crt --key /mosquitto/certs/gateway-cn-staging.key -t cmd/cn-staging/health/req -n
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      - private
+      - edge
+    restart: unless-stopped
+
   turn:
     image: coturn/coturn:4.6.2
     command:
@@ -136,6 +165,8 @@ volumes:
   redis-data:
   mqtt-data:
   mqtt-log:
+  mqtt-mtls-data:
+  mqtt-mtls-log:
   minio-data:
 
 networks:

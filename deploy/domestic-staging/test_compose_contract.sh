@@ -16,6 +16,9 @@ CN_STAGING_POSTGRES_PORT=55432
 CN_STAGING_REDIS_PASSWORD=contract-only-redis-secret
 CN_STAGING_REDIS_PORT=56379
 CN_STAGING_MQTT_PORT=51883
+CN_STAGING_MQTTS_PORT=51884
+CN_STAGING_MQTT_TLS_DIR=/tmp/explorex-cn-staging-mqtt-tls
+CN_STAGING_MQTT_ACL_FILE=/tmp/explorex-cn-staging-mosquitto.acl
 CN_STAGING_TURN_REALM=cn-staging.local
 CN_STAGING_TURN_USER=turn-contract
 CN_STAGING_TURN_PASSWORD=contract-only-turn-secret
@@ -34,7 +37,8 @@ test -f "$COMPOSE_FILE" || {
 
 rendered=$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config --format json)
 rendered_with_object=$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" --profile object config --format json)
-python3 - "$rendered" "$rendered_with_object" <<'PY'
+rendered_with_mtls=$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" --profile mtls config --format json)
+python3 - "$rendered" "$rendered_with_object" "$rendered_with_mtls" <<'PY'
 import json
 import sys
 
@@ -89,6 +93,19 @@ if not minio or not minio.get("healthcheck"):
     raise SystemExit("object profile must provide a health-checked MinIO adapter harness")
 if any("127.0.0.1" not in str(port) for port in minio.get("ports", [])):
     raise SystemExit("MinIO test harness must bind loopback only")
+
+mtls_services = json.loads(sys.argv[3]).get("services", {})
+mqtt_tls = mtls_services.get("mqtt-mtls")
+if not mqtt_tls or not mqtt_tls.get("healthcheck"):
+    raise SystemExit("mtls profile must provide a health-checked MQTT TLS service")
+if not any(str(port.get("published")) == "51884" and port.get("host_ip") == "127.0.0.1" for port in mqtt_tls.get("ports", [])):
+    raise SystemExit("MQTT TLS service must publish the loopback MQTTS port")
+if set(mqtt_tls.get("networks", {})) != {"private", "edge"}:
+    raise SystemExit("MQTT TLS service must join only private and edge networks")
+if mqtt_tls.get("entrypoint") != ["/usr/sbin/mosquitto"]:
+    raise SystemExit("MQTT TLS service must bypass the entrypoint chown for read-only certs")
+if "cmd/cn-staging/health/req" not in str(mqtt_tls.get("healthcheck")):
+    raise SystemExit("MQTT TLS healthcheck must stay inside the gateway ACL namespace")
 PY
 
 if grep -Eqi '(aws|amazon|sqs|kvs|access[_-]?key|secret[_-]?key)' "$COMPOSE_FILE"; then

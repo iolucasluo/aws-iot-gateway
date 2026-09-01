@@ -54,9 +54,32 @@ docker compose --env-file .env.cn-staging.local \
 
 本地 MQTT listener 使用 loopback 发布端口和匿名测试配置，只能验证容器网络和协议 harness，不能用于 feeder HIL 或云 staging。国内设备接入必须在后续阶段切换到 MQTTS/mTLS、ACL 和受控证书。
 
+Phase 7.2 增加 `mtls` profile：它使用独立的 8883 listener、客户端证书认证和按证书 CN
+隔离的 ACL。证书、私钥和实际 ACL 文件只放在 operator-owned ignored 路径，不能提交到 Git。
+
+```sh
+# 先准备 CN_STAGING_MQTT_TLS_DIR/{ca.crt,server.crt,server.key,gateway-cn-staging.crt,gateway-cn-staging.key}
+# 并从 mosquitto.mtls.acl.example 复制为 CN_STAGING_MQTT_ACL_FILE
+# operator-owned composition copy 中 messaging endpoint 必须指向实际 mqtts://<host>:<port>
+docker compose --env-file .env.cn-staging.local \
+  -f deploy/domestic-staging/compose.yaml --profile mtls up -d --wait mqtt-mtls
+
+GATEWAY_ENVIRONMENT=staging \
+GATEWAY_PROVIDER_COMPOSITION_PATH=deploy/domestic-staging/composition.cn-staging.example.yaml \
+GATEWAY_MQTT_CLIENT_ID=gateway-cn-staging \
+GATEWAY_MQTT_TOPIC_PREFIX=cn-staging \
+GATEWAY_MQTT_CA_FILE=.runtime/cn-staging/mqtt-tls/ca.crt \
+GATEWAY_MQTT_CLIENT_CERT_FILE=.runtime/cn-staging/mqtt-tls/gateway-cn-staging.crt \
+GATEWAY_MQTT_CLIENT_KEY_FILE=.runtime/cn-staging/mqtt-tls/gateway-cn-staging.key \
+go run ./cmd/mqtt-provider-smoke
+```
+
+`mqtt-provider-smoke` 只通过 composition 绑定到 `mqtt_broker`，并验证 Gateway mTLS 客户端能连接；
+它不会启动 Gateway API，也不会把 MQTT 连接成功夸大为设备命令 ACK 或 feeder HIL 通过。
+
 ## DELL Ubuntu 等价运行
 
-DELL 可以作为单 ECS 的低并发 staging 模拟机。将 `.env.cn-staging.local` 放在 DELL 上的仓库根目录；只有在受控协议 harness 中才设置 `CN_STAGING_EDGE_BIND_ADDRESS` 为 LAN bind address。当前 Mosquitto 是匿名本地测试配置，不能用于 feeder/App HIL；真实 HIL 必须等待 Phase 3 的 MQTTS/mTLS/ACL profile。不要把 DELL 账号、密码、固定 LAN 地址或真实云凭据写进本目录。
+DELL 可以作为单 ECS 的低并发 staging 模拟机。将 `.env.cn-staging.local` 放在 DELL 上的仓库根目录；只有在受控协议 harness 中才设置 `CN_STAGING_EDGE_BIND_ADDRESS` 为 LAN bind address。`mqtt` 仍是匿名协议 harness；feeder/App HIL 必须使用 `mqtt-mtls` profile、受控证书和 ACL。不要把 DELL 账号、密码、固定 LAN 地址或真实云凭据写进本目录。
 
 在 DELL 上先做只读检查：
 
@@ -81,7 +104,7 @@ LAN 运行与本机 loopback 的差异：公网 DNS、HTTPS CA、运营商 NAT�
 |---|---|---|
 | PostgreSQL | Gateway 权威库等价进程 | 默认 loopback；不公网暴露 |
 | Redis | nonce/限流等短期协调 | 默认 loopback；不公网暴露 |
-| Mosquitto | 国内 MQTT adapter 的本地 harness | 默认 loopback 的测试端口；匿名仅限本地 |
+| Mosquitto | 国内 MQTT adapter 的本地 harness | `mqtt` 为匿名 loopback harness；`mqtt-mtls` 为证书认证/ACL profile，默认 loopback |
 | coturn | TURN 进程/端口形状验证 | 默认 loopback；无公网 HIL 结论 |
 | MinIO | 可选 ObjectStore 接口测试 | 仅 `object` profile、默认 loopback |
 | Gateway API | Phase 7.1 仍不启动；只提供 composition preflight | 等国内 MQTT/身份/对象/实时 provider wiring 完成后再接入 |

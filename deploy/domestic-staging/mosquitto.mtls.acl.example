@@ -1,0 +1,18 @@
+# The TLS client certificate subject CN is the MQTT username.
+# Gateway publishes commands and consumes device replies/telemetry.
+user gateway-cn-staging
+topic write cmd/cn-staging/+/req
+topic read cmd/cn-staging/+/res
+topic read dt/cn-staging/+/status
+topic read dt/cn-staging/+/lwt
+topic read dt/cn-staging/+/event
+
+# Feeder certificates can only consume commands for this environment and
+# publish their own replies/telemetry. The broker does not grant cross-env
+# wildcard access.
+user feeder-cn-staging
+topic read cmd/cn-staging/+/req
+topic write cmd/cn-staging/+/res
+topic write dt/cn-staging/+/status
+topic write dt/cn-staging/+/lwt
+topic write dt/cn-staging/+/event
