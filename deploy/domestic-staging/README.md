@@ -1,6 +1,6 @@
 # 国内 `cn-staging` 本地/ECS 模拟
 
-本目录是国内 `cn-staging` 的**基础设施等价模拟**，不是已经完成 provider 化的 Gateway 部署。Phase 4 已固化 `explorex-signal-v1` adapter/client contract，但当前 Gateway 二进制仍在启动时要求 AWS IoT/KVS/S3/KMS 配置；该目录只启动 PostgreSQL、Redis、Mosquitto、coturn（及可选 MinIO），不伪造 signaling service。
+本目录是国内 `cn-staging` 的基础设施等价模拟。Phase 7.1 已提供显式的 composition preflight；但 Gateway API 的国内 MQTT/身份/媒体 runtime wiring 尚未完成。该目录只启动 PostgreSQL、Redis、Mosquitto、coturn（及可选 MinIO），不伪造 signaling service。
 
 ## 本地启动
 
@@ -28,6 +28,19 @@ docker compose --env-file .env.cn-staging.local \
 ```sh
 bash deploy/domestic-staging/test_trial_contract.sh
 ```
+
+组合运行时入口（不启动 Gateway API，不访问 AWS）：
+
+```sh
+GATEWAY_ENVIRONMENT=staging \
+GATEWAY_PROVIDER_COMPOSITION_PATH=deploy/domestic-staging/composition.cn-staging.example.yaml \
+go run ./cmd/provider-composition-preflight
+bash deploy/domestic-staging/test_provider_preflight_contract.sh
+```
+
+preflight 只读取公开的 composition 形状，输出 instance 的 capability/driver；凭据引用、证书路径和
+bucket/key 值不会被打印。缺少显式路径、环境不匹配、国内组合包含 AWS data-plane 或文件越界时会
+fail closed。
 
 该检查必须输出 `NO-SHIP`，直到 Gateway composition runtime wiring、真实 signaling
 service 和 feeder HIL 均有当前版本证据。
@@ -71,7 +84,7 @@ LAN 运行与本机 loopback 的差异：公网 DNS、HTTPS CA、运营商 NAT�
 | Mosquitto | 国内 MQTT adapter 的本地 harness | 默认 loopback 的测试端口；匿名仅限本地 |
 | coturn | TURN 进程/端口形状验证 | 默认 loopback；无公网 HIL 结论 |
 | MinIO | 可选 ObjectStore 接口测试 | 仅 `object` profile、默认 loopback |
-| Gateway API | Phase 1 不启动 | 等 Phase 2 消除 AWS 强制依赖 |
+| Gateway API | Phase 7.1 仍不启动；只提供 composition preflight | 等国内 MQTT/身份/对象/实时 provider wiring 完成后再接入 |
 | RTC signaling | Phase 4 只固化 adapter/protocol | 不启动假服务；真实 signaling、Anyka HIL 和公网 TURN 另行验收 |
 
 ## 运行约束
