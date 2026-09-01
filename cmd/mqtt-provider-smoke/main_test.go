@@ -2,11 +2,25 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	gatewayruntime "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/runtime"
 )
+
+type bridgeSmokeCloser struct {
+	calls int
+}
+
+func (closer *bridgeSmokeCloser) Close() error {
+	closer.calls++
+	return nil
+}
 
 func TestRunRequiresMessagingCompositionAndTLSPaths(t *testing.T) {
 	t.Parallel()
@@ -96,5 +110,65 @@ policy:
 	}
 	if !strings.Contains(strings.ToLower(stderr.String()), "aws") {
 		t.Fatalf("stderr=%q, want domestic AWS data-plane rejection", stderr.String())
+	}
+}
+
+func TestBridgeWaitModeIsExplicitOptIn(t *testing.T) {
+	t.Parallel()
+
+	for value, want := range map[string]bool{"": false, "true": false, "0": false, "1": true, " 1 ": true} {
+		if got := bridgeWaitEnabled(func(string) string { return value }); got != want {
+			t.Fatalf("bridgeWaitEnabled(%q) = %t, want %t", value, got, want)
+		}
+	}
+}
+
+func TestWaitForBridgeMessageReturnsMetadataAndClosesSubscription(t *testing.T) {
+	t.Parallel()
+
+	closer := &bridgeSmokeCloser{}
+	message, err := waitForBridgeMessage(context.Background(), func(handler gatewayruntime.MessageHandler) (bridgeSubscription, error) {
+		if err := handler(context.Background(), "cmd/cn-staging/fdr-0001/res", []byte(`{"code":0}`)); err != nil {
+			t.Fatalf("handler() error = %v", err)
+		}
+		return closer, nil
+	})
+	if err != nil {
+		t.Fatalf("waitForBridgeMessage() error = %v", err)
+	}
+	if message.topic != "cmd/cn-staging/fdr-0001/res" || message.payloadBytes != len(`{"code":0}`) {
+		t.Fatalf("message = %#v", message)
+	}
+	if closer.calls != 1 {
+		t.Fatalf("subscription close calls = %d, want 1", closer.calls)
+	}
+}
+
+func TestWaitForBridgeMessageReturnsSubscribeError(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("subscribe failed")
+	_, err := waitForBridgeMessage(context.Background(), func(gatewayruntime.MessageHandler) (bridgeSubscription, error) {
+		return nil, wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("waitForBridgeMessage() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestWaitForBridgeMessageTimesOutAndClosesSubscription(t *testing.T) {
+	t.Parallel()
+
+	closer := &bridgeSmokeCloser{}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	_, err := waitForBridgeMessage(ctx, func(gatewayruntime.MessageHandler) (bridgeSubscription, error) {
+		return closer, nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waitForBridgeMessage() error = %v, want deadline exceeded", err)
+	}
+	if closer.calls != 1 {
+		t.Fatalf("subscription close calls = %d, want 1", closer.calls)
 	}
 }

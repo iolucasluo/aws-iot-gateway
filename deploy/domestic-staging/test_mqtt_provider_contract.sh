@@ -67,3 +67,4 @@ PY
 
 grep -Fq '/mosquitto/certs/gateway-cn-staging.crt' "$SCRIPT_DIR/compose.yaml"
 grep -Fq '/mosquitto/certs/gateway-cn-staging.key' "$SCRIPT_DIR/compose.yaml"
+grep -Fq 'GATEWAY_MQTT_SMOKE_WAIT_FOR_DEVICE_MESSAGE' "$ROOT/cmd/mqtt-provider-smoke/main.go"

@@ -1,6 +1,6 @@
 # Provider Composition Contract v1
 
-状态：Phase 7.4 implementation baseline；composition validator、provider-neutral ports、国内 MQTT adapter、messaging factory 与设备消息桥接已落地；完整 API runtime wiring、其他国内 provider 和跨仓 HIL 仍需后续阶段验收。
+状态：Phase 7.5 implementation baseline；composition validator、provider-neutral ports、国内 MQTT adapter、messaging factory、设备消息桥接与 DELL mTLS 集成 smoke 已落地；完整 API runtime wiring、其他国内 provider 和跨仓 HIL 仍需后续阶段验收。
 
 ## 0. 当前代码锚点
 
@@ -190,6 +190,8 @@ policy:
 以上 endpoint、bucket、secret ref 只是形状示例，不是可部署值；真实值只能进入 child 的 ignored local config 或批准的 secret provider。
 
 运行时装配顺序固定为：先由 `LoadProviderComposition` 完成 bounded、regular、non-symlink 和环境匹配校验，再由 `BuildMessaging` 解析 `bindings.messaging` 并构造对应 adapter，最后由调用方显式执行 provider `Health`。factory 不在未知 driver 上 fallback，也不在构造阶段隐式建立网络连接；当前已注册的 `mqtt_broker` 继续执行本节的 `mqtts`/mTLS 约束。AWS 主 API 的既有装配路径保持兼容，待 identity、signer、realtime 和 storage 等 provider 具备后再按同一顺序接入完整 composition runtime。
+
+`cmd/mqtt-provider-smoke` 的 `GATEWAY_MQTT_SMOKE_WAIT_FOR_DEVICE_MESSAGE=1` 是仅供 operator 使用的集成 harness：它复用同一 factory 和 `SubscribeDeviceMessages`，等待一条四类 canonical filter 消息后只输出 topic/长度，并在退出时关闭订阅。默认值关闭等待；该模式不写 ACK store、不解析业务 payload，也不改变 AWS-only 主装配。
 
 ## 6. 依赖和 fail-closed 校验
 

@@ -77,6 +77,26 @@ go run ./cmd/mqtt-provider-smoke
 `mqtt-provider-smoke` 只通过 composition 绑定到 `mqtt_broker`，并验证 Gateway mTLS 客户端能连接；
 它不会启动 Gateway API，也不会把 MQTT 连接成功夸大为设备命令 ACK 或 feeder HIL 通过。
 
+Phase 7.5 可显式开启 bridge wait harness，验证同一 mTLS provider 收到 feeder 证书发布的第一条
+ACK/status/event 消息。默认不等待消息，命令行为与旧 smoke 完全一致；开启后只输出收到消息的
+topic 和 payload 字节数，不打印 payload：
+
+```sh
+GATEWAY_MQTT_SMOKE_WAIT_FOR_DEVICE_MESSAGE=1 \
+GATEWAY_ENVIRONMENT=staging \
+GATEWAY_PROVIDER_COMPOSITION_PATH=deploy/domestic-staging/composition.cn-staging.example.yaml \
+GATEWAY_MQTT_CLIENT_ID=gateway-cn-staging \
+GATEWAY_MQTT_TOPIC_PREFIX=cn-staging \
+GATEWAY_MQTT_CA_FILE=.runtime/cn-staging/mqtt-tls/ca.crt \
+GATEWAY_MQTT_CLIENT_CERT_FILE=.runtime/cn-staging/mqtt-tls/gateway-cn-staging.crt \
+GATEWAY_MQTT_CLIENT_KEY_FILE=.runtime/cn-staging/mqtt-tls/gateway-cn-staging.key \
+go run ./cmd/mqtt-provider-smoke
+```
+
+等待期间由 operator-owned feeder certificate 向四类 canonical filter 之一发布测试消息；证书和
+私钥必须留在 ignored runtime 路径。该 harness 只证明 mTLS adapter 到 bridge callback 的传输，
+不替代 ACK store、event ingest、真实 feeder 或生产门禁。
+
 ## DELL Ubuntu 等价运行
 
 DELL 可以作为单 ECS 的低并发 staging 模拟机。将 `.env.cn-staging.local` 放在 DELL 上的仓库根目录；只有在受控协议 harness 中才设置 `CN_STAGING_EDGE_BIND_ADDRESS` 为 LAN bind address。`mqtt` 仍是匿名协议 harness；feeder/App HIL 必须使用 `mqtt-mtls` profile、受控证书和 ACL。不要把 DELL 账号、密码、固定 LAN 地址或真实云凭据写进本目录。
