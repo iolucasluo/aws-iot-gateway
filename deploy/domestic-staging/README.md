@@ -1,6 +1,6 @@
 # 国内 `cn-staging` 本地/ECS 模拟
 
-本目录是国内 `cn-staging` 的基础设施等价模拟。Phase 7.4 已提供显式的 composition preflight、messaging factory 和 provider-neutral 设备消息桥接单元验证基线；但 Gateway API 的国内身份/媒体 runtime wiring 尚未完成。该目录只启动 PostgreSQL、Redis、Mosquitto、coturn（及可选 MinIO），不伪造 signaling service。
+本目录是国内 `cn-staging` 的基础设施等价模拟。Phase 7.6 已提供显式的 composition preflight、国内 runtime capability audit、messaging factory 和 provider-neutral 设备消息桥接验证基线；但 Gateway API 的国内身份/媒体 runtime wiring 尚未完成。该目录只启动 PostgreSQL、Redis、Mosquitto、coturn（及可选 MinIO），不伪造 signaling service。
 
 ## 本地启动
 
@@ -36,11 +36,25 @@ GATEWAY_ENVIRONMENT=staging \
 GATEWAY_PROVIDER_COMPOSITION_PATH=deploy/domestic-staging/composition.cn-staging.example.yaml \
 go run ./cmd/provider-composition-preflight
 bash deploy/domestic-staging/test_provider_preflight_contract.sh
+bash deploy/domestic-staging/test_runtime_audit_contract.sh
 ```
 
 preflight 只读取公开的 composition 形状，输出 instance 的 capability/driver；凭据引用、证书路径和
 bucket/key 值不会被打印。缺少显式路径、环境不匹配、国内组合包含 AWS data-plane 或文件越界时会
 fail closed。
+
+runtime audit 是 preflight 之后的装配前检查，不启动 Gateway API，也不访问 AWS 或其他网络：
+
+```sh
+GATEWAY_ENVIRONMENT=staging \
+GATEWAY_PROVIDER_COMPOSITION_PATH=deploy/domestic-staging/composition.cn-staging.example.yaml \
+go run ./cmd/provider-composition-runtime-audit
+```
+
+当前示例 composition 的预期结果是退出码 `2`、首行 `provider composition runtime audit: BLOCKED`：
+`messaging/mqtt_broker` 会显示 `SUPPORTED`，身份、签名、实时和存储等尚未接入完整应用装配的
+binding 会显示 `BLOCKED` 及确定原因。退出码 `2` 是“组合语法有效但尚未可启动”的机器可读信号，
+不等于错误或试产放行；命令不输出 credential/bucket/key ref、endpoint 或任何秘密。
 
 该检查必须输出 `NO-SHIP`，直到 Gateway composition runtime wiring、真实 signaling
 service 和 feeder HIL 均有当前版本证据。
@@ -127,7 +141,7 @@ LAN 运行与本机 loopback 的差异：公网 DNS、HTTPS CA、运营商 NAT�
 | Mosquitto | 国内 MQTT adapter 的本地 harness | `mqtt` 为匿名 loopback harness；`mqtt-mtls` 为证书认证/ACL profile，默认 loopback |
 | coturn | TURN 进程/端口形状验证 | 默认 loopback；无公网 HIL 结论 |
 | MinIO | 可选 ObjectStore 接口测试 | 仅 `object` profile、默认 loopback |
-| Gateway API | Phase 7.3 仍不启动完整 API；只提供 composition preflight + messaging factory smoke | 等国内身份/对象/实时 provider wiring 完成后再接入 |
+| Gateway API | Phase 7.6 仍不启动完整 API；提供 composition preflight + runtime audit + messaging factory/bridge smoke | 等国内身份/对象/实时 provider wiring 完成后再接入共享应用 builder |
 | RTC signaling | Phase 4 只固化 adapter/protocol | 不启动假服务；真实 signaling、Anyka HIL 和公网 TURN 另行验收 |
 
 ## 运行约束
