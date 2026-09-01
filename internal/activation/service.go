@@ -13,6 +13,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -26,6 +27,8 @@ type Service struct {
 // The device publishes status every 60 seconds. Three missed heartbeats fail closed to offline
 // even if an MQTT LWT or its SQS delivery is lost.
 const deviceOnlineFreshness = 3 * time.Minute
+
+var productCapabilityPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,63}$`)
 
 func NewService() *Service {
 	return NewServiceWithRepository(nil, NewMemoryRepository())
@@ -42,11 +45,15 @@ func NewServiceWithRepository(provisioner Provisioner, repository Repository) *S
 func (service *Service) Create(ctx context.Context, input CreateInput) (Activation, error) {
 	if service.repository == nil || strings.TrimSpace(input.InternalAppID) == "" ||
 		strings.TrimSpace(input.BindingExternalUserID) == "" || strings.TrimSpace(input.IdempotencyKey) == "" ||
-		len(input.IdempotencyKey) > 128 || !input.Method.valid() {
+		len(input.IdempotencyKey) > 128 || !input.Method.valid() || strings.TrimSpace(input.PID) == "" {
 		return Activation{}, ErrInvalidInput
 	}
+	product, err := service.findActiveProduct(ctx, input.PID)
+	if err != nil {
+		return Activation{}, err
+	}
 	requestHash := sha256.Sum256([]byte(strings.Join([]string{
-		input.InternalAppID, input.BindingExternalUserID, string(input.Method),
+		input.InternalAppID, input.BindingExternalUserID, string(input.Method), product.PID,
 	}, "\n")))
 	if existing, err := service.repository.FindByIdempotency(ctx, input.InternalAppID, input.IdempotencyKey); err == nil {
 		if existing.Activation.RequestHash != requestHash {
@@ -65,7 +72,7 @@ func (service *Service) Create(ctx context.Context, input CreateInput) (Activati
 		return Activation{}, fmt.Errorf("generate activation code: %w", err)
 	}
 	value := Activation{
-		ID: id, Code: code, Method: input.Method, InternalAppID: input.InternalAppID,
+		ID: id, Code: code, Method: input.Method, PID: product.PID, InternalAppID: input.InternalAppID,
 		BindingExternalUserID: input.BindingExternalUserID, IdempotencyKey: input.IdempotencyKey,
 		RequestHash: requestHash, Status: StatusPending, ExpiresAt: service.now().Add(5 * time.Minute),
 	}
@@ -94,6 +101,9 @@ func (service *Service) Prepare(ctx context.Context, input PrepareInput) (Instal
 			return Installation{}, ErrActivationAlreadyPrepared
 		}
 		return record.Installation, nil
+	}
+	if _, err := service.findActiveProduct(ctx, record.Activation.PID); err != nil {
+		return Installation{}, err
 	}
 	deviceInternalID, err := randomUUID()
 	if err != nil {
@@ -127,7 +137,7 @@ func (service *Service) Prepare(ctx context.Context, input PrepareInput) (Instal
 	}
 	installation := Installation{
 		ActivationID: input.ActivationID, DeviceID: identity.DeviceID, CertificateID: identity.CertificateID,
-		Certificate: identity.CertificatePEM, Endpoint: identity.AWSIoTEndpoint, ProofNonce: nonce,
+		PID: record.Activation.PID, Certificate: identity.CertificatePEM, Endpoint: identity.AWSIoTEndpoint, ProofNonce: nonce,
 	}
 	completed, err := service.repository.CompletePreparation(ctx, input.ActivationID, installation)
 	if err != nil {
@@ -207,6 +217,79 @@ func (service *Service) ListDevicesForBinding(ctx context.Context, internalAppID
 		}
 	}
 	return devices, nil
+}
+
+func (service *Service) ListActiveProducts(ctx context.Context) ([]Product, error) {
+	if service.repository == nil {
+		return nil, ErrProductUnavailable
+	}
+	products, err := service.repository.ListActiveProducts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seenPIDs := make(map[string]struct{}, len(products))
+	for _, product := range products {
+		if strings.TrimSpace(product.PID) == "" || strings.TrimSpace(product.Name) == "" ||
+			validateProductCapabilities(product.Capabilities) != nil {
+			return nil, fmt.Errorf("active product catalog contains an invalid product")
+		}
+		if _, duplicate := seenPIDs[product.PID]; duplicate {
+			return nil, fmt.Errorf("active product catalog contains a duplicate pid")
+		}
+		seenPIDs[product.PID] = struct{}{}
+	}
+	return products, nil
+}
+
+func (service *Service) ProductSupports(ctx context.Context, pid, capability string) (bool, error) {
+	pid = strings.TrimSpace(pid)
+	capability = strings.TrimSpace(capability)
+	if pid == "" || capability == "" {
+		return false, ErrInvalidInput
+	}
+	product, err := service.findActiveProduct(ctx, pid)
+	if err != nil {
+		return false, err
+	}
+	for _, candidate := range product.Capabilities {
+		if candidate == capability {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (service *Service) findActiveProduct(ctx context.Context, pid string) (Product, error) {
+	if service.repository == nil {
+		return Product{}, ErrProductUnavailable
+	}
+	pid = strings.TrimSpace(pid)
+	product, err := service.repository.FindActiveProduct(ctx, pid)
+	if err != nil {
+		return Product{}, err
+	}
+	if product.PID != pid || strings.TrimSpace(product.Name) == "" ||
+		validateProductCapabilities(product.Capabilities) != nil {
+		return Product{}, fmt.Errorf("active product catalog returned an invalid product")
+	}
+	return product, nil
+}
+
+func validateProductCapabilities(capabilities []string) error {
+	if len(capabilities) > 32 {
+		return fmt.Errorf("too many product capabilities")
+	}
+	seen := make(map[string]struct{}, len(capabilities))
+	for _, capability := range capabilities {
+		if !productCapabilityPattern.MatchString(capability) {
+			return fmt.Errorf("invalid product capability")
+		}
+		if _, duplicate := seen[capability]; duplicate {
+			return fmt.Errorf("duplicate product capability")
+		}
+		seen[capability] = struct{}{}
+	}
+	return nil
 }
 
 func (service *Service) authorize(record Record, code string, expectedMethod Method) error {

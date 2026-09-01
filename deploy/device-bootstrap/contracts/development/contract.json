@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "kind": "gateway-device-bootstrap",
+  "environment": "development",
+  "gateway": {
+    "base_url": "http://192.168.11.131:14081"
+  },
+  "time_bootstrap": {
+    "url": "http://192.168.11.131:14081/api/v1/device-time/bootstrap",
+    "keys": [
+      {
+        "kid": "time-development-g1",
+        "spki_der_file": "time-bootstrap/time-development-g1.der",
+        "sha256": "fa50a477e14bbd2960b73eb367847387c9856a529e9f118d41e9f3d4f9dbc901"
+      }
+    ]
+  },
+  "provenance": {
+    "signer_backend": "local"
+  }
+}

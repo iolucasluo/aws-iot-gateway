@@ -37,6 +37,13 @@ type Commander interface {
 	SendCommands(context.Context, string, string, string, []device.CommandInput, bool) (device.SendCommandsResult, error)
 }
 
+// DPCommander is the product-contract-aware command entry point. Typed
+// product DP services use it so their payloads cannot bypass product_dps
+// validation, while workers that speak internal protocols keep Commander.
+type DPCommander interface {
+	SendDPCommands(context.Context, string, string, string, []device.CommandInput, bool) (device.SendCommandsResult, error)
+}
+
 type Stream struct {
 	ID         string
 	DeviceID   string
@@ -70,27 +77,36 @@ func (capabilities StreamCapabilities) empty() bool {
 	return !capabilities.VideoReceive && !capabilities.AudioReceive && !capabilities.AudioSend && len(capabilities.DataChannels) == 0
 }
 
+type PlaybackControlCapability struct {
+	Contract              string   `json:"contract"`
+	Ops                   []string `json:"ops"`
+	ProgressIntervalMS    int      `json:"progress_interval_ms"`
+	MaxConcurrentSessions int      `json:"max_concurrent_sessions"`
+	SupportsRate          bool     `json:"supports_rate"`
+}
+
 type StreamResult struct {
-	StreamID                  string             `json:"stream_id"`
-	Provider                  string             `json:"provider"`
-	CapabilityContractVersion string             `json:"capability_contract_version"`
-	FirmwareVersion           string             `json:"firmware_version"`
-	SupportedCapabilities     StreamCapabilities `json:"supported_capabilities"`
-	GrantedCapabilities       StreamCapabilities `json:"granted_capabilities"`
-	Signaling                 Signaling          `json:"signaling"`
-	ICEServers                []awskvs.ICEServer `json:"ice_servers"`
-	ExpiresAt                 time.Time          `json:"expires_at"`
+	StreamID                  string                     `json:"stream_id"`
+	Provider                  string                     `json:"provider"`
+	CapabilityContractVersion string                     `json:"capability_contract_version"`
+	FirmwareVersion           string                     `json:"firmware_version"`
+	SupportedCapabilities     StreamCapabilities         `json:"supported_capabilities"`
+	GrantedCapabilities       StreamCapabilities         `json:"granted_capabilities"`
+	PlaybackControl           *PlaybackControlCapability `json:"playback_control,omitempty"`
+	Signaling                 Signaling                  `json:"signaling"`
+	ICEServers                []awskvs.ICEServer         `json:"ice_servers"`
+	ExpiresAt                 time.Time                  `json:"expires_at"`
 }
 
 type StreamService struct {
 	kvs           KVS
-	commander     Commander
+	commander     DPCommander
 	repository    StreamRepository
 	channelPrefix string
 	newID         func() (string, error)
 }
 
-func NewStreamService(kvs KVS, commander Commander, repository StreamRepository, channelPrefix string, newID func() (string, error)) *StreamService {
+func NewStreamService(kvs KVS, commander DPCommander, repository StreamRepository, channelPrefix string, newID func() (string, error)) *StreamService {
 	if newID == nil {
 		newID = randomUUID
 	}
@@ -144,7 +160,7 @@ func (service *StreamService) create(
 		"type": "webrtc", "start": 1, "viewer_client_id": viewerID,
 		"requested_capabilities": requested,
 	})
-	commandResult, err := service.commander.SendCommands(ctx, internalAppID, deviceID, deviceSN,
+	commandResult, err := service.commander.SendDPCommands(ctx, internalAppID, deviceID, deviceSN,
 		[]device.CommandInput{{Code: "stream", Value: value}}, true)
 	if err != nil {
 		return StreamResult{}, err
@@ -155,7 +171,7 @@ func (service *StreamService) create(
 	}
 	if requireExactGrant && !capabilitiesEqual(capabilityFacts.accepted, requested) {
 		stopValue, _ := json.Marshal(map[string]any{"type": "webrtc", "start": 0, "viewer_client_id": viewerID})
-		_, _ = service.commander.SendCommands(ctx, internalAppID, deviceID, deviceSN,
+		_, _ = service.commander.SendDPCommands(ctx, internalAppID, deviceID, deviceSN,
 			[]device.CommandInput{{Code: "stream", Value: stopValue}}, false)
 		return StreamResult{}, ErrStreamCapabilityUnavailable
 	}
@@ -172,6 +188,7 @@ func (service *StreamService) create(
 		FirmwareVersion:           capabilityFacts.firmwareVersion,
 		SupportedCapabilities:     capabilityFacts.supported,
 		GrantedCapabilities:       capabilityFacts.accepted,
+		PlaybackControl:           capabilityFacts.playbackControl,
 		Signaling:                 Signaling{WSSURL: playback.WSSURL, ExpiresAt: playback.ExpiresAt},
 		ICEServers:                playback.ICEServers,
 		ExpiresAt:                 playback.ExpiresAt,
@@ -199,6 +216,7 @@ type capabilityFacts struct {
 	firmwareVersion string
 	supported       StreamCapabilities
 	accepted        StreamCapabilities
+	playbackControl *PlaybackControlCapability
 }
 
 func validateCapabilityACK(result device.SendCommandsResult, viewerID string, requested StreamCapabilities) (capabilityFacts, error) {
@@ -234,7 +252,76 @@ func validateCapabilityACK(result device.SendCommandsResult, viewerID string, re
 	if status != "ready" {
 		return capabilityFacts{}, ErrStreamRejected
 	}
-	return capabilityFacts{firmwareVersion: firmwareVersion, supported: supported, accepted: accepted}, nil
+	playbackControl, err := parsePlaybackControl(ack["playback_control"], accepted)
+	if err != nil {
+		return capabilityFacts{}, ErrStreamRejected
+	}
+	return capabilityFacts{
+		firmwareVersion: firmwareVersion, supported: supported, accepted: accepted,
+		playbackControl: playbackControl,
+	}, nil
+}
+
+func parsePlaybackControl(value any, accepted StreamCapabilities) (*PlaybackControlCapability, error) {
+	if value == nil {
+		return nil, nil
+	}
+	fields, ok := value.(map[string]any)
+	if !ok || len(fields) != 5 || !accepted.VideoReceive ||
+		!containsString(accepted.DataChannels, ControlDataChannelProtocol) {
+		return nil, ErrStreamRejected
+	}
+	contract, contractOK := fields["contract"].(string)
+	rawOps, opsOK := fields["ops"].([]any)
+	progress, progressOK := exactInt(fields["progress_interval_ms"])
+	maximum, maximumOK := exactInt(fields["max_concurrent_sessions"])
+	supportsRate, rateOK := fields["supports_rate"].(bool)
+	if !contractOK || contract != "sd-playback.v1" || !opsOK || !progressOK || progress != 500 ||
+		!maximumOK || maximum != 1 || !rateOK || supportsRate {
+		return nil, ErrStreamRejected
+	}
+	expected := []string{"load", "play", "pause", "resume", "seek", "skip", "stop", "get_state"}
+	if len(rawOps) != len(expected) {
+		return nil, ErrStreamRejected
+	}
+	ops := make([]string, len(expected))
+	for index := range expected {
+		operation, ok := rawOps[index].(string)
+		if !ok || operation != expected[index] {
+			return nil, ErrStreamRejected
+		}
+		ops[index] = operation
+	}
+	return &PlaybackControlCapability{
+		Contract: contract, Ops: ops, ProgressIntervalMS: progress,
+		MaxConcurrentSessions: maximum, SupportsRate: supportsRate,
+	}, nil
+}
+
+func exactInt(value any) (int, bool) {
+	switch number := value.(type) {
+	case float64:
+		integer := int(number)
+		return integer, float64(integer) == number
+	case int:
+		return number, true
+	case int64:
+		return int(number), int64(int(number)) == number
+	case json.Number:
+		parsed, err := number.Int64()
+		return int(parsed), err == nil && int64(int(parsed)) == parsed
+	default:
+		return 0, false
+	}
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func parseCapabilities(value any) (StreamCapabilities, error) {
@@ -350,7 +437,7 @@ func (service *StreamService) Delete(ctx context.Context, internalAppID, deviceI
 		return ErrStreamNotFound
 	}
 	value, _ := json.Marshal(map[string]any{"type": "webrtc", "start": 0, "viewer_client_id": streamID})
-	if _, err := service.commander.SendCommands(ctx, internalAppID, deviceID, deviceSN,
+	if _, err := service.commander.SendDPCommands(ctx, internalAppID, deviceID, deviceSN,
 		[]device.CommandInput{{Code: "stream", Value: value}}, false); err != nil {
 		return err
 	}

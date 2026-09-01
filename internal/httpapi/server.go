@@ -16,6 +16,7 @@ import (
 	devicemodule "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/device"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/events"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/media"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/ota"
 )
 
 type server struct {
@@ -24,7 +25,9 @@ type server struct {
 	device        *devicemodule.Service
 	events        *events.QueryService
 	media         *media.StreamService
+	localMedia    *media.LocalMediaService
 	assets        *media.AssetService
+	ota           *ota.Service
 	verifier      *internalauth.Verifier
 	timeBootstrap TimeBootstrapService
 	bootstrapRate TimeBootstrapLimiter
@@ -47,7 +50,9 @@ type Dependencies struct {
 	Device               *devicemodule.Service
 	Events               *events.QueryService
 	Media                *media.StreamService
+	LocalMedia           *media.LocalMediaService
 	Assets               *media.AssetService
+	OTA                  *ota.Service
 	TimeBootstrap        TimeBootstrapService
 	TimeBootstrapLimiter TimeBootstrapLimiter
 	DeviceRuntime        DeviceRuntimeConfig
@@ -60,7 +65,9 @@ func NewInternalAPI(service *activation.Service, verifier *internalauth.Verifier
 	}
 	return server{
 		activation: service, binding: dependency.Binding, device: dependency.Device,
-		events: dependency.Events, media: dependency.Media, assets: dependency.Assets, verifier: verifier,
+		events: dependency.Events, media: dependency.Media, localMedia: dependency.LocalMedia,
+		assets: dependency.Assets, verifier: verifier,
+		ota:           dependency.OTA,
 		timeBootstrap: dependency.TimeBootstrap, bootstrapRate: dependency.TimeBootstrapLimiter,
 		deviceRuntime: dependency.DeviceRuntime,
 	}
@@ -96,6 +103,19 @@ func (s server) serveInternalApp(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	switch {
+	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/openapi/ota/firmware-versions":
+		s.createOTAFirmwareVersion(writer, request)
+	case request.Method == http.MethodGet && request.URL.Path == "/api/v1/openapi/ota/firmware-versions":
+		s.listOTAFirmwareVersions(writer, request)
+	case request.Method == http.MethodPost && strings.HasPrefix(request.URL.Path, "/api/v1/openapi/ota/firmware-versions/") && strings.HasSuffix(request.URL.Path, "/complete"):
+		versionID := strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, "/api/v1/openapi/ota/firmware-versions/"), "/complete")
+		if versionID == "" || strings.Contains(versionID, "/") {
+			writeError(writer, http.StatusNotFound, "not_found", "endpoint not found")
+			return
+		}
+		s.completeOTAFirmwareVersion(writer, request, versionID)
+	case request.Method == http.MethodGet && request.URL.Path == "/api/v1/openapi/device-products":
+		s.listActiveProducts(writer, request)
 	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/openapi/device-activations":
 		s.createActivation(writer, request)
 	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/openapi/devices/list":
@@ -131,7 +151,7 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		return false
 	}
 	parts := strings.Split(path, "/")
-	if parts[0] == "" || len(parts) > 3 {
+	if parts[0] == "" || len(parts) > 5 {
 		return false
 	}
 	operation := "detail"
@@ -139,17 +159,24 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		operation = parts[1]
 	}
 	recognized := (operation == "detail" && request.Method == http.MethodGet) ||
+		(operation == "status" && request.Method == http.MethodGet) ||
 		(operation == "shadow" && request.Method == http.MethodGet) ||
 		(operation == "commands" && request.Method == http.MethodPost) ||
 		(operation == "schedules" && request.Method == http.MethodPut) ||
 		(operation == "events" && request.Method == http.MethodGet) ||
 		(operation == "streams" && len(parts) == 2 && request.Method == http.MethodPost) ||
 		(operation == "streams" && len(parts) == 3 && request.Method == http.MethodDelete) ||
+		(operation == "local-media-sessions" && len(parts) == 2 &&
+			(request.Method == http.MethodPost || request.Method == http.MethodDelete)) ||
 		(operation == "snapshots" && len(parts) == 2 && request.Method == http.MethodPost) ||
 		(operation == "snapshots" && len(parts) == 3 && request.Method == http.MethodGet) ||
 		(operation == "recordings" && len(parts) == 2 && (request.Method == http.MethodPost || request.Method == http.MethodGet)) ||
 		(operation == "recordings" && len(parts) == 3 && request.Method == http.MethodGet) ||
+		(operation == "recordings" && len(parts) == 5 && parts[2] == "local" &&
+			parts[4] == "thumbnail" && request.Method == http.MethodGet) ||
 		(operation == "feed-audio" && len(parts) == 2 && (request.Method == http.MethodPost || request.Method == http.MethodDelete)) ||
+		(operation == "ota-deployments" && len(parts) == 2 && request.Method == http.MethodPost) ||
+		(operation == "ota-deployments" && len(parts) == 3 && request.Method == http.MethodGet) ||
 		(operation == "network-reconfiguration-authorizations" && len(parts) == 2 && request.Method == http.MethodPost)
 	if !recognized {
 		return false
@@ -174,6 +201,37 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		return true
 	}
 	switch operation {
+	case "ota-deployments":
+		if !principal.HasPermission("ota:deploy") {
+			writeError(writer, http.StatusForbidden, "permission_denied", "ota:deploy permission is required")
+			return true
+		}
+		if s.ota == nil {
+			writeError(writer, http.StatusServiceUnavailable, "ota_service_unavailable", "OTA service is unavailable")
+			return true
+		}
+		if request.Method == http.MethodPost {
+			var body ota.CreateDeploymentInput
+			if !decodeJSON(writer, request, &body) {
+				return true
+			}
+			deployment, err := s.ota.CreateDeployment(request.Context(), principal.InternalAppID,
+				ownedBinding.DeviceID, ownedBinding.DeviceSN, body)
+			if err != nil {
+				writeOTAError(writer, err)
+				return true
+			}
+			writeJSON(writer, http.StatusAccepted, deployment)
+			return true
+		}
+		deployment, err := s.ota.GetDeployment(request.Context(), principal.InternalAppID,
+			ownedBinding.DeviceID, parts[2])
+		if err != nil {
+			writeOTAError(writer, err)
+			return true
+		}
+		writeJSON(writer, http.StatusOK, deployment)
+		return true
 	case "network-reconfiguration-authorizations":
 		var body struct {
 			BindingExternalUserID string `json:"binding_external_user_id"`
@@ -197,7 +255,7 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		return true
 	case "detail":
 		writeJSON(writer, http.StatusOK, map[string]any{
-			"device_sn": ownedBinding.DeviceSN, "pid": "feeder-x1", "status": "provisioned",
+			"device_sn": ownedBinding.DeviceSN, "pid": ownedBinding.PID, "status": "provisioned",
 			"binding_external_user_id": ownedBinding.BindingExternalUserID,
 		})
 		return true
@@ -212,6 +270,20 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 			return true
 		}
 		writeJSON(writer, http.StatusOK, shadow)
+		return true
+	case "status":
+		if s.device == nil {
+			writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "device service is unavailable")
+			return true
+		}
+		status, err := s.device.GetPTZStatus(
+			request.Context(), principal.InternalAppID, ownedBinding.DeviceID, ownedBinding.DeviceSN,
+		)
+		if err != nil {
+			writeDeviceError(writer, err)
+			return true
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"ptz": status})
 		return true
 	case "events":
 		if s.events == nil {
@@ -312,6 +384,51 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		writer.Header().Set("Pragma", "no-cache")
 		writeJSON(writer, http.StatusCreated, result)
 		return true
+	case "local-media-sessions":
+		writer.Header().Set("Cache-Control", "no-store")
+		writer.Header().Set("Pragma", "no-cache")
+		if s.localMedia == nil {
+			writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "local media service is unavailable")
+			return true
+		}
+		if request.Method == http.MethodDelete {
+			var body struct {
+				CredentialGeneration string `json:"credential_generation"`
+			}
+			if !decodeJSON(writer, request, &body) {
+				return true
+			}
+			result, err := s.localMedia.Close(
+				request.Context(), principal.InternalAppID, ownedBinding.PID, ownedBinding.DeviceSN,
+				body.CredentialGeneration,
+			)
+			if err != nil {
+				writeLocalMediaError(writer, err)
+				return true
+			}
+			writeJSON(writer, http.StatusOK, result)
+			return true
+		}
+		var body struct {
+			LeaseSeconds *int `json:"lease_seconds"`
+		}
+		if !decodeOptionalJSON(writer, request, &body) {
+			return true
+		}
+		leaseSeconds := 300
+		if body.LeaseSeconds != nil {
+			leaseSeconds = *body.LeaseSeconds
+		}
+		result, err := s.localMedia.Create(
+			request.Context(), principal.InternalAppID, ownedBinding.PID, ownedBinding.DeviceSN,
+			leaseSeconds,
+		)
+		if err != nil {
+			writeLocalMediaError(writer, err)
+			return true
+		}
+		writeJSON(writer, http.StatusCreated, result)
+		return true
 	case "snapshots":
 		if s.assets == nil {
 			writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "media asset service is unavailable")
@@ -367,12 +484,65 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 			writeJSON(writer, http.StatusAccepted, result)
 			return true
 		}
+		if len(parts) == 5 && parts[2] == "local" && parts[4] == "thumbnail" {
+			content, err := s.assets.GetLocalRecordingThumbnail(
+				request.Context(), ownedBinding.ID, ownedBinding.DeviceSN, parts[3],
+			)
+			if err != nil {
+				writeMediaError(writer, err)
+				return true
+			}
+			writer.Header().Set("Content-Type", "image/jpeg")
+			writer.Header().Set("Cache-Control", "private, max-age=300")
+			writer.Header().Set("ETag", `"`+content.ETag+`"`)
+			writer.WriteHeader(http.StatusOK)
+			_, _ = writer.Write(content.Payload)
+			return true
+		}
 		if len(parts) == 3 && parts[2] == "local" {
-			offset, _ := strconv.Atoi(request.URL.Query().Get("offset"))
-			limit, _ := strconv.Atoi(request.URL.Query().Get("limit"))
+			if _, legacyOffset := request.URL.Query()["offset"]; legacyOffset {
+				offset, err := strconv.Atoi(request.URL.Query().Get("offset"))
+				if err != nil || offset < 0 || request.URL.Query().Get("cursor") != "" ||
+					request.URL.Query().Get("type") != "" {
+					writeError(writer, http.StatusBadRequest, "invalid_request",
+						"legacy offset pagination cannot be combined with cursor or type")
+					return true
+				}
+				limit := 20
+				if rawLimit := request.URL.Query().Get("limit"); rawLimit != "" {
+					parsed, parseErr := strconv.Atoi(rawLimit)
+					if parseErr != nil || parsed < 1 || parsed > 50 {
+						writeError(writer, http.StatusBadRequest, "invalid_request",
+							"legacy limit must be between 1 and 50")
+						return true
+					}
+					limit = parsed
+				}
+				result, legacyErr := s.assets.ListLegacyLocalRecordings(
+					request.Context(), principal.InternalAppID, ownedBinding.DeviceID,
+					ownedBinding.DeviceSN, request.URL.Query().Get("date"), offset, limit,
+				)
+				if legacyErr != nil {
+					writeMediaError(writer, legacyErr)
+					return true
+				}
+				writeJSON(writer, http.StatusOK, result)
+				return true
+			}
+			limit := 20
+			if rawLimit := request.URL.Query().Get("limit"); rawLimit != "" {
+				parsed, err := strconv.Atoi(rawLimit)
+				if err != nil || parsed < 1 || parsed > 100 {
+					writeError(writer, http.StatusBadRequest, "invalid_request",
+						"limit must be between 1 and 100")
+					return true
+				}
+				limit = parsed
+			}
 			result, err := s.assets.ListLocalRecordings(
-				request.Context(), principal.InternalAppID, ownedBinding.DeviceID, ownedBinding.DeviceSN,
-				request.URL.Query().Get("date"), offset, limit,
+				request.Context(), ownedBinding.ID, ownedBinding.DeviceSN,
+				request.URL.Query().Get("date"), request.URL.Query().Get("type"),
+				request.URL.Query().Get("cursor"), limit,
 			)
 			if err != nil {
 				writeMediaError(writer, err)
@@ -506,7 +676,7 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "device service is unavailable")
 		return true
 	}
-	result, err := s.device.SendCommands(
+	result, err := s.device.SendDPCommands(
 		request.Context(), principal.InternalAppID, ownedBinding.DeviceID, ownedBinding.DeviceSN, commands, waitACK,
 	)
 	if err != nil {
@@ -585,7 +755,7 @@ func (s server) createActivation(writer http.ResponseWriter, request *http.Reque
 		Method                string `json:"method"`
 		BindingExternalUserID string `json:"binding_external_user_id"`
 		IdempotencyKey        string `json:"idempotency_key"`
-		PID                   string `json:"pid,omitempty"`
+		PID                   string `json:"pid"`
 		SessionID             string `json:"session_id,omitempty"`
 		ClientHelloCBOR       string `json:"client_hello_cbor,omitempty"`
 		DeviceHelloCBOR       string `json:"device_hello_cbor,omitempty"`
@@ -593,19 +763,26 @@ func (s server) createActivation(writer http.ResponseWriter, request *http.Reque
 	if !decodeJSON(writer, request, &body) {
 		return
 	}
-	if body.PID != "" && body.PID != "feeder-x1" {
-		writeError(writer, http.StatusBadRequest, "invalid_request", "pid must be feeder-x1")
-		return
-	}
 	created, err := s.activation.Create(request.Context(), activation.CreateInput{
 		InternalAppID: principal.InternalAppID, BindingExternalUserID: body.BindingExternalUserID,
-		IdempotencyKey: body.IdempotencyKey, Method: activation.Method(body.Method),
+		IdempotencyKey: body.IdempotencyKey, Method: activation.Method(body.Method), PID: body.PID,
 	})
 	if err != nil {
 		writeActivationError(writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusCreated, activationResponse{Activation: created, IncludeCode: true})
+}
+
+func (s server) listActiveProducts(writer http.ResponseWriter, request *http.Request) {
+	products, err := s.activation.ListActiveProducts(request.Context())
+	if err != nil {
+		writeActivationError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, struct {
+		Products []activation.Product `json:"products"`
+	}{Products: products})
 }
 
 func (s server) createActivationSession(writer http.ResponseWriter, request *http.Request, activationID string) {
@@ -698,7 +875,7 @@ func (s server) listDevices(writer http.ResponseWriter, request *http.Request) {
 			lastSeenAt = device.LastSeenAt.UTC().Format(time.RFC3339)
 		}
 		response = append(response, map[string]any{
-			"device_sn": device.ID, "pid": "feeder-x1", "status": device.Status,
+			"device_sn": device.ID, "pid": device.PID, "status": device.Status,
 			"nickname": "", "is_subscription": false,
 			"activation_id": device.ActivationID, "aws_iot_endpoint": device.Endpoint,
 			"binding_external_user_id": device.BindingExternalUserID,
@@ -816,7 +993,7 @@ func (s server) prepareDevice(writer http.ResponseWriter, request *http.Request,
 		"device_id": installation.DeviceID, "thing_name": installation.DeviceID,
 		"certificate_id":  installation.CertificateID,
 		"certificate_pem": installation.Certificate, "aws_iot_endpoint": installation.Endpoint,
-		"installation_nonce": installation.ProofNonce, "pid": "feeder-x1",
+		"installation_nonce": installation.ProofNonce, "pid": installation.PID,
 		"aws_region":                  s.deviceRuntime.AWSRegion,
 		"aws_iot_credential_endpoint": s.deviceRuntime.CredentialEndpoint,
 		"aws_iot_role_alias":          s.deviceRuntime.RoleAlias,
@@ -874,7 +1051,7 @@ func (response activationResponse) MarshalJSON() ([]byte, error) {
 	value := payload{
 		ActivationID: response.Activation.ID, Method: string(response.Activation.Method),
 		Status: status, ExpiresAt: response.Activation.ExpiresAt, Activated: activated,
-		DeviceSN: response.Activation.DeviceSN, PID: "feeder-x1",
+		DeviceSN: response.Activation.DeviceSN, PID: response.Activation.PID,
 	}
 	if response.IncludeCode {
 		value.ActivationCode = response.Activation.Code
@@ -892,10 +1069,84 @@ func decodeOptionalJSON(writer http.ResponseWriter, request *http.Request, targe
 	return decodeJSON(writer, request, target)
 }
 
+func (s server) createOTAFirmwareVersion(writer http.ResponseWriter, request *http.Request) {
+	principal, ok := InternalAppPrincipal(request.Context())
+	if !ok {
+		writeError(writer, http.StatusInternalServerError, "principal_missing", "internal app principal is unavailable")
+		return
+	}
+	if !principal.HasPermission("ota:publish") {
+		writeError(writer, http.StatusForbidden, "permission_denied", "ota:publish permission is required")
+		return
+	}
+	if s.ota == nil {
+		writeError(writer, http.StatusServiceUnavailable, "ota_service_unavailable", "OTA service is unavailable")
+		return
+	}
+	var body ota.CreateFirmwareVersionInput
+	if !decodeJSON(writer, request, &body) {
+		return
+	}
+	created, err := s.ota.CreateFirmwareVersion(request.Context(), principal.InternalAppID, body)
+	if err != nil {
+		writeOTAError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, created)
+}
+
+func (s server) completeOTAFirmwareVersion(writer http.ResponseWriter, request *http.Request, versionID string) {
+	principal, ok := InternalAppPrincipal(request.Context())
+	if !ok {
+		writeError(writer, http.StatusInternalServerError, "principal_missing", "internal app principal is unavailable")
+		return
+	}
+	if !principal.HasPermission("ota:publish") {
+		writeError(writer, http.StatusForbidden, "permission_denied", "ota:publish permission is required")
+		return
+	}
+	if s.ota == nil {
+		writeError(writer, http.StatusServiceUnavailable, "ota_service_unavailable", "OTA service is unavailable")
+		return
+	}
+	version, err := s.ota.CompleteFirmwareVersion(request.Context(), principal.InternalAppID, versionID)
+	if err != nil {
+		writeOTAError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"firmware_version": version})
+}
+
+func (s server) listOTAFirmwareVersions(writer http.ResponseWriter, request *http.Request) {
+	principal, ok := InternalAppPrincipal(request.Context())
+	if !ok {
+		writeError(writer, http.StatusInternalServerError, "principal_missing", "internal app principal is unavailable")
+		return
+	}
+	if !principal.HasPermission("ota:deploy") && !principal.HasPermission("ota:publish") {
+		writeError(writer, http.StatusForbidden, "permission_denied", "OTA permission is required")
+		return
+	}
+	if s.ota == nil {
+		writeError(writer, http.StatusServiceUnavailable, "ota_service_unavailable", "OTA service is unavailable")
+		return
+	}
+	versions, err := s.ota.ListAvailableFirmwareVersions(request.Context(), request.URL.Query().Get("pid"))
+	if err != nil {
+		writeOTAError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"firmware_versions": versions})
+}
+
 func decodeJSON(writer http.ResponseWriter, request *http.Request, target any) bool {
 	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 32<<10))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "request body is invalid")
+		return false
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		writeError(writer, http.StatusBadRequest, "invalid_request", "request body is invalid")
 		return false
 	}
@@ -931,8 +1182,27 @@ func writeDeviceError(writer http.ResponseWriter, err error) {
 		writeError(writer, http.StatusConflict, "device_jammed", "device is jammed")
 	case errors.Is(err, devicemodule.ErrPublishFailed):
 		writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "device command could not be published")
+	case errors.Is(err, devicemodule.ErrInvalidDeviceResponse):
+		writeError(writer, http.StatusBadGateway, "invalid_device_response", "device response is invalid")
 	default:
 		writeError(writer, http.StatusInternalServerError, "internal_error", "internal server error")
+	}
+}
+
+func writeOTAError(writer http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ota.ErrInvalidInput), errors.Is(err, ota.ErrSourceURLForbidden):
+		writeError(writer, http.StatusBadRequest, "invalid_ota_request", "OTA request is invalid")
+	case errors.Is(err, ota.ErrNotFound):
+		writeError(writer, http.StatusNotFound, "ota_not_found", "OTA record was not found")
+	case errors.Is(err, ota.ErrConflict):
+		writeError(writer, http.StatusConflict, "ota_conflict", "OTA request conflicts with current state")
+	case errors.Is(err, ota.ErrDeviceOffline):
+		writeError(writer, http.StatusConflict, "device_offline", "device must be online for OTA")
+	case errors.Is(err, ota.ErrDispatchFailed):
+		writeError(writer, http.StatusServiceUnavailable, "ota_dispatch_failed", "OTA deployment was recorded but dispatch failed")
+	default:
+		writeError(writer, http.StatusInternalServerError, "internal_error", "OTA operation failed")
 	}
 }
 
@@ -950,14 +1220,43 @@ func writeMediaError(writer http.ResponseWriter, err error) {
 		writeError(writer, http.StatusNotFound, "stream_not_found", "stream was not found")
 	case errors.Is(err, media.ErrSnapshotNotFound):
 		writeError(writer, http.StatusNotFound, "snapshot_not_found", "snapshot was not found")
+	case errors.Is(err, media.ErrSnapshotProcessing):
+		writeError(writer, http.StatusServiceUnavailable, "snapshot_processing_failed", "snapshot processing failed")
 	case errors.Is(err, media.ErrRecordingNotFound):
 		writeError(writer, http.StatusNotFound, "recording_not_found", "recording was not found")
 	case errors.Is(err, media.ErrRecordingRejected):
 		writeError(writer, http.StatusConflict, "recording_rejected", "device rejected recording start")
 	case errors.Is(err, devicemodule.ErrDeviceOffline):
 		writeError(writer, http.StatusConflict, "device_offline", "device is offline")
+	case errors.Is(err, devicemodule.ErrDeviceBusy):
+		writeError(writer, http.StatusConflict, "device_busy", "device is busy")
+	case errors.Is(err, devicemodule.ErrPublishFailed):
+		writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "device command could not be published")
 	default:
 		writeError(writer, http.StatusServiceUnavailable, "kvs_unavailable", "WebRTC playback is unavailable")
+	}
+}
+
+func writeLocalMediaError(writer http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, media.ErrInvalidInput), errors.Is(err, activation.ErrInvalidInput):
+		writeError(writer, http.StatusBadRequest, "invalid_request", "local media request is invalid")
+	case errors.Is(err, media.ErrLocalMediaUnsupported),
+		errors.Is(err, activation.ErrProductUnavailable):
+		writeError(writer, http.StatusConflict, "local_media_unsupported", "product does not support local media")
+	case errors.Is(err, media.ErrLocalMediaRejected):
+		writeError(writer, http.StatusConflict, "local_media_rejected", "device rejected local media")
+	case errors.Is(err, media.ErrInvalidLocalMediaResponse),
+		errors.Is(err, devicemodule.ErrInvalidDeviceResponse):
+		writeError(writer, http.StatusBadGateway, "invalid_local_media_response", "device local media response is invalid")
+	case errors.Is(err, devicemodule.ErrDeviceOffline):
+		writeError(writer, http.StatusConflict, "device_offline", "device is offline")
+	case errors.Is(err, devicemodule.ErrDeviceBusy):
+		writeError(writer, http.StatusConflict, "device_busy", "device is busy")
+	case errors.Is(err, devicemodule.ErrPublishFailed):
+		writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "device command could not be published")
+	default:
+		writeError(writer, http.StatusServiceUnavailable, "local_media_unavailable", "local media is unavailable")
 	}
 }
 
@@ -965,6 +1264,8 @@ func writeActivationError(writer http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, activation.ErrInvalidInput):
 		writeError(writer, http.StatusBadRequest, "invalid_request", "request is invalid")
+	case errors.Is(err, activation.ErrProductUnavailable):
+		writeError(writer, http.StatusBadRequest, "product_unavailable", "product is unavailable for activation")
 	case errors.Is(err, activation.ErrActivationNotFound):
 		writeError(writer, http.StatusNotFound, "activation_not_found", "activation was not found")
 	case errors.Is(err, activation.ErrActivationUnauthorized), errors.Is(err, activation.ErrInstallationProofInvalid):

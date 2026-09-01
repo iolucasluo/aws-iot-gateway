@@ -26,11 +26,22 @@ type Credential struct {
 	InternalAppID string
 	APIKey        string
 	APISecret     string
+	Permissions   []string
 }
 
 type Principal struct {
 	InternalAppID string
 	APIKey        string
+	Permissions   []string
+}
+
+func (principal Principal) HasPermission(permission string) bool {
+	for _, candidate := range principal.Permissions {
+		if candidate == permission {
+			return true
+		}
+	}
+	return false
 }
 
 type NonceStore interface {
@@ -64,6 +75,7 @@ func NewVerifier(credentials []Credential, nonces NonceStore, now func() time.Ti
 		if _, duplicate := seenApps[credential.InternalAppID]; duplicate {
 			return nil, fmt.Errorf("duplicate internal app id")
 		}
+		credential.Permissions = append([]string(nil), credential.Permissions...)
 		byKey[credential.APIKey] = credential
 		seenApps[credential.InternalAppID] = struct{}{}
 	}
@@ -96,7 +108,8 @@ func (verifier *Verifier) Authenticate(ctx context.Context, request SignatureReq
 	if !consumed {
 		return Principal{}, ErrNonceReplayed
 	}
-	return Principal{InternalAppID: credential.InternalAppID, APIKey: credential.APIKey}, nil
+	return Principal{InternalAppID: credential.InternalAppID, APIKey: credential.APIKey,
+		Permissions: append([]string(nil), credential.Permissions...)}, nil
 }
 
 func timestampTime(value string) (time.Time, error) {

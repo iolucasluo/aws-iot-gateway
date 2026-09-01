@@ -19,6 +19,7 @@ var (
 	ErrIdempotencyConflict       = errors.New("idempotency key conflicts with another request")
 	ErrActivationInProgress      = errors.New("activation already exists for idempotency key")
 	ErrDeviceBindingConflict     = errors.New("device already has an active binding")
+	ErrProductUnavailable        = errors.New("product is unavailable for activation")
 )
 
 type Method string
@@ -46,6 +47,7 @@ type CreateInput struct {
 	BindingExternalUserID string
 	IdempotencyKey        string
 	Method                Method
+	PID                   string
 }
 
 type PrepareInput struct {
@@ -65,6 +67,7 @@ type Activation struct {
 	ID                    string
 	Code                  string
 	Method                Method
+	PID                   string
 	InternalAppID         string
 	BindingExternalUserID string
 	IdempotencyKey        string
@@ -84,6 +87,7 @@ type PreparedIdentity struct {
 type Installation struct {
 	ActivationID  string
 	DeviceID      string
+	PID           string
 	CertificateID string
 	Certificate   string
 	Endpoint      string
@@ -93,11 +97,18 @@ type Installation struct {
 type Device struct {
 	ID                    string
 	ActivationID          string
+	PID                   string
 	Endpoint              string
 	BindingExternalUserID string
 	Status                string
 	Online                bool
 	LastSeenAt            *time.Time
+}
+
+type Product struct {
+	PID          string   `json:"pid"`
+	Name         string   `json:"name"`
+	Capabilities []string `json:"capabilities"`
 }
 
 type Record struct {
@@ -109,7 +120,13 @@ type Record struct {
 	FailureCode      string
 }
 
+type ProductCatalog interface {
+	FindActiveProduct(context.Context, string) (Product, error)
+	ListActiveProducts(context.Context) ([]Product, error)
+}
+
 type Repository interface {
+	ProductCatalog
 	Create(context.Context, Record) error
 	FindByID(context.Context, string) (Record, error)
 	FindByIdempotency(context.Context, string, string) (Record, error)

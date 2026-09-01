@@ -16,12 +16,26 @@ $$;
 COMMENT ON FUNCTION set_updated_at() IS
     '统一维护 Gateway 可变业务表 updated_at；调用方不得依赖手工更新时间戳。';
 
+CREATE TABLE products (
+    id uuid CONSTRAINT products_pkey PRIMARY KEY,
+    pid varchar(64) NOT NULL CONSTRAINT products_pid_key UNIQUE,
+    name varchar(128) NOT NULL,
+    status varchar(16) NOT NULL DEFAULT 'active'
+        CONSTRAINT products_status_check CHECK (status IN ('active', 'disabled')),
+    capabilities jsonb NOT NULL DEFAULT '[]'::jsonb
+        CONSTRAINT products_capabilities_check CHECK (jsonb_typeof(capabilities) = 'array'),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT products_pid_check CHECK (btrim(pid) <> ''),
+    CONSTRAINT products_name_check CHECK (btrim(name) <> '')
+);
+
 CREATE TABLE device_registry (
     id uuid CONSTRAINT device_registry_pkey PRIMARY KEY,
     device_sn varchar(64) NOT NULL CONSTRAINT device_registry_device_sn_key UNIQUE,
     thing_name varchar(128) NOT NULL CONSTRAINT device_registry_thing_name_key UNIQUE,
-    pid varchar(64) NOT NULL DEFAULT 'feeder-x1'
-        CONSTRAINT device_registry_pid_check CHECK (pid = 'feeder-x1'),
+    pid varchar(64) NOT NULL
+        CONSTRAINT device_registry_pid_check CHECK (btrim(pid) <> ''),
     certificate_id varchar(128),
     certificate_arn text,
     aws_iot_endpoint text,
@@ -33,7 +47,8 @@ CREATE TABLE device_registry (
     last_seen_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT device_registry_thing_name_check CHECK (thing_name = device_sn)
+    CONSTRAINT device_registry_thing_name_check CHECK (thing_name = device_sn),
+    CONSTRAINT device_registry_pid_fkey FOREIGN KEY (pid) REFERENCES products(pid) ON DELETE RESTRICT
 );
 
 CREATE TABLE device_activations (
@@ -42,6 +57,8 @@ CREATE TABLE device_activations (
     binding_external_user_id varchar(255) NOT NULL,
     method varchar(8) NOT NULL
         CONSTRAINT device_activations_method_check CHECK (method IN ('qr', 'ap', 'ble')),
+    pid varchar(64) NOT NULL
+        CONSTRAINT device_activations_pid_check CHECK (btrim(pid) <> ''),
     status varchar(24) NOT NULL
         CONSTRAINT device_activations_status_check CHECK (status IN (
             'pending', 'activating', 'installing', 'finalizing',
@@ -59,7 +76,8 @@ CREATE TABLE device_activations (
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT device_activations_internal_app_id_idempotency_key_key
-        UNIQUE (internal_app_id, idempotency_key)
+        UNIQUE (internal_app_id, idempotency_key),
+    CONSTRAINT device_activations_pid_fkey FOREIGN KEY (pid) REFERENCES products(pid) ON DELETE RESTRICT
 );
 
 CREATE INDEX idx_device_activations_owner_status
@@ -170,6 +188,79 @@ CREATE TABLE device_events (
 
 CREATE INDEX idx_device_events_history
     ON device_events (device_registry_id, event_type, received_at DESC, id DESC);
+
+CREATE TABLE ota_firmware_versions (
+    id uuid CONSTRAINT ota_firmware_versions_pkey PRIMARY KEY,
+    created_by_internal_app_id varchar(64) NOT NULL,
+    idempotency_key varchar(128) NOT NULL,
+    pid varchar(64) NOT NULL
+        CONSTRAINT ota_firmware_versions_pid_fkey REFERENCES products(pid) ON DELETE RESTRICT,
+    version varchar(64) NOT NULL,
+    firmware_build bigint NOT NULL
+        CONSTRAINT ota_firmware_versions_build_check CHECK (firmware_build > 0),
+    sha256 varchar(64) NOT NULL
+        CONSTRAINT ota_firmware_versions_sha256_check CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+    manifest_sha256 varchar(64) NOT NULL
+        CONSTRAINT ota_firmware_versions_manifest_sha256_check
+        CHECK (manifest_sha256 ~ '^[0-9a-f]{64}$'),
+    file_size bigint NOT NULL
+        CONSTRAINT ota_firmware_versions_file_size_check
+        CHECK (file_size > 0 AND file_size <= 3145728),
+    release_statement text NOT NULL,
+    signature text NOT NULL,
+    artifact_key text,
+    source_url text,
+    status varchar(16) NOT NULL
+        CONSTRAINT ota_firmware_versions_status_check CHECK (status IN ('uploading', 'available')),
+    available_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT ota_firmware_versions_artifact_source_check
+        CHECK ((artifact_key IS NOT NULL) <> (source_url IS NOT NULL)),
+    CONSTRAINT ota_firmware_versions_status_available_check
+        CHECK ((status = 'available' AND available_at IS NOT NULL) OR
+               (status = 'uploading' AND available_at IS NULL)),
+    CONSTRAINT ota_firmware_versions_publisher_idempotency_key
+        UNIQUE (created_by_internal_app_id, idempotency_key),
+    CONSTRAINT ota_firmware_versions_pid_version_key UNIQUE (pid, version),
+    CONSTRAINT ota_firmware_versions_pid_build_key UNIQUE (pid, firmware_build)
+);
+
+CREATE TABLE device_ota_deployments (
+    id uuid CONSTRAINT device_ota_deployments_pkey PRIMARY KEY,
+    device_registry_id uuid NOT NULL
+        CONSTRAINT device_ota_deployments_device_registry_id_fkey
+        REFERENCES device_registry(id) ON DELETE RESTRICT,
+    internal_app_id varchar(64) NOT NULL,
+    firmware_version_id uuid NOT NULL
+        CONSTRAINT device_ota_deployments_firmware_version_id_fkey
+        REFERENCES ota_firmware_versions(id) ON DELETE RESTRICT,
+    idempotency_key varchar(128) NOT NULL,
+    target_version varchar(64) NOT NULL,
+    target_build bigint NOT NULL
+        CONSTRAINT device_ota_deployments_target_build_check CHECK (target_build > 0),
+    state varchar(16) NOT NULL
+        CONSTRAINT device_ota_deployments_state_check CHECK (state IN (
+            'pending', 'accepted', 'downloading', 'verifying', 'installing',
+            'succeeded', 'failed', 'rolled_back'
+        )),
+    failure_reason varchar(128),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    completed_at timestamptz,
+    CONSTRAINT device_ota_deployments_owner_idempotency_key
+        UNIQUE (internal_app_id, device_registry_id, idempotency_key),
+    CONSTRAINT device_ota_deployments_completion_check CHECK (
+        (state IN ('succeeded', 'failed', 'rolled_back') AND completed_at IS NOT NULL) OR
+        (state NOT IN ('succeeded', 'failed', 'rolled_back') AND completed_at IS NULL)
+    )
+);
+
+CREATE UNIQUE INDEX uniq_device_ota_deployments_active
+    ON device_ota_deployments (device_registry_id)
+    WHERE state IN ('pending', 'accepted', 'downloading', 'verifying', 'installing');
+CREATE INDEX idx_device_ota_deployments_history
+    ON device_ota_deployments (device_registry_id, created_at DESC, id DESC);
 
 CREATE TABLE device_schedules (
     device_registry_id uuid
@@ -362,6 +453,9 @@ COMMENT ON TRIGGER trg_enforce_device_binding_user_invariant ON device_bindings 
 CREATE TRIGGER trg_device_registry_updated_at
     BEFORE UPDATE ON device_registry
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_products_updated_at
+    BEFORE UPDATE ON products
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_device_activations_updated_at
     BEFORE UPDATE ON device_activations
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -376,6 +470,12 @@ CREATE TRIGGER trg_device_tokens_updated_at
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_device_commands_updated_at
     BEFORE UPDATE ON device_commands
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_ota_firmware_versions_updated_at
+    BEFORE UPDATE ON ota_firmware_versions
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_device_ota_deployments_updated_at
+    BEFORE UPDATE ON device_ota_deployments
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_device_schedules_updated_at
     BEFORE UPDATE ON device_schedules

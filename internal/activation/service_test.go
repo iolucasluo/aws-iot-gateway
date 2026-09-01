@@ -32,6 +32,55 @@ func TestCreateBindsShortLivedCodeToUserAndMethod(t *testing.T) {
 	}
 }
 
+func TestProductSupportsUsesTheActiveCatalogCapabilities(t *testing.T) {
+	t.Parallel()
+
+	service := NewService()
+	supported, err := service.ProductSupports(context.Background(), "feeder-x1", "local-media.v1")
+	if err != nil || !supported {
+		t.Fatalf("feeder local-media support = %t, %v", supported, err)
+	}
+	supported, err = service.ProductSupports(context.Background(), "minion-cam-x1", "local-media.v1")
+	if err != nil || supported {
+		t.Fatalf("minion local-media support = %t, %v", supported, err)
+	}
+	if _, err := service.ProductSupports(context.Background(), "unknown", "local-media.v1"); !errors.Is(err, ErrProductUnavailable) {
+		t.Fatalf("unknown product error = %v, want ErrProductUnavailable", err)
+	}
+	if _, err := service.ProductSupports(context.Background(), "feeder-x1", ""); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("empty capability error = %v, want ErrInvalidInput", err)
+	}
+}
+
+func TestProductCatalogFailsClosedForMalformedOrDuplicateCapabilities(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name         string
+		capabilities []string
+	}{
+		{name: "malformed", capabilities: []string{"local media"}},
+		{name: "duplicate", capabilities: []string{"webrtc.v1", "webrtc.v1"}},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			repository := NewMemoryRepository()
+			product := repository.products["feeder-x1"]
+			product.Capabilities = testCase.capabilities
+			repository.products["feeder-x1"] = product
+			service := NewServiceWithRepository(nil, repository)
+
+			if _, err := service.ListActiveProducts(context.Background()); err == nil {
+				t.Fatal("ListActiveProducts() accepted an unsafe capability catalog")
+			}
+			if _, err := service.ProductSupports(
+				context.Background(), "feeder-x1", "webrtc.v1",
+			); err == nil {
+				t.Fatal("ProductSupports() accepted an unsafe capability catalog")
+			}
+		})
+	}
+}
+
 func TestPrepareRequiresTheIssuedCodeAndReturnsOnlyADeviceInstallPayload(t *testing.T) {
 	t.Parallel()
 
@@ -57,6 +106,28 @@ func TestPrepareRequiresTheIssuedCodeAndReturnsOnlyADeviceInstallPayload(t *test
 	}
 	if installation.Certificate == created.Code {
 		t.Fatal("Prepare() must never echo the activation code as certificate material")
+	}
+}
+
+func TestLampActivationPreservesProductPIDThroughInstallation(t *testing.T) {
+	t.Parallel()
+
+	service := NewServiceWith(fakeProvisioner{})
+	input := testCreateInput(MethodBLE)
+	input.PID = "lamp-x1"
+	input.IdempotencyKey = "lamp-product-identity"
+	created, err := service.Create(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	installation, err := service.Prepare(context.Background(), PrepareInput{
+		ActivationID: created.ID, Code: created.Code, CSRPEM: "lamp-csr", ExpectedMethod: MethodBLE,
+	})
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if created.PID != "lamp-x1" || installation.PID != "lamp-x1" {
+		t.Fatalf("lamp PID lost across activation: created=%q installation=%q", created.PID, installation.PID)
 	}
 }
 
@@ -328,6 +399,7 @@ func testCreateInput(method Method) CreateInput {
 	return CreateInput{
 		InternalAppID: "livpet-staging", BindingExternalUserID: "user-42",
 		IdempotencyKey: "operation-1-" + string(method), Method: method,
+		PID: "feeder-x1",
 	}
 }
 

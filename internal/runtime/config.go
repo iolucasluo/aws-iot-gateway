@@ -10,8 +10,6 @@ import (
 	"strings"
 )
 
-const FixedPID = "feeder-x1"
-
 var internalAppIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{2,63}$`)
 
 type InternalApp struct {
@@ -21,51 +19,79 @@ type InternalApp struct {
 	WebhookURL        string   `json:"webhook_url,omitempty"`
 	WebhookSecret     string   `json:"webhook_secret,omitempty"`
 	WebhookEventTypes []string `json:"webhook_event_types,omitempty"`
+	Permissions       []string `json:"permissions,omitempty"`
+}
+
+func (app InternalApp) HasPermission(permission string) bool {
+	for _, candidate := range app.Permissions {
+		if candidate == permission {
+			return true
+		}
+	}
+	return false
 }
 
 type Config struct {
-	ListenAddress         string
-	Environment           string
-	DatabaseURL           string
-	RedisURL              string
-	AWSRegion             string
-	DevicePolicyName      string
-	IoTTopicPrefix        string
-	IoTCredentialEndpoint string
-	IoTRoleAlias          string
-	IoTShadowName         string
-	IngestQueueURL        string
-	KVSChannelPrefix      string
-	S3MediaBucket         string
-	TimeBootstrapKeyID    string
-	TimeBootstrapKMSKeyID string
-	InternalApps          []InternalApp
+	ListenAddress                    string
+	Environment                      string
+	DatabaseURL                      string
+	RedisURL                         string
+	AWSRegion                        string
+	DevicePolicyName                 string
+	IoTTopicPrefix                   string
+	IoTCredentialEndpoint            string
+	IoTRoleAlias                     string
+	IoTShadowName                    string
+	IngestQueueURL                   string
+	KVSChannelPrefix                 string
+	S3MediaBucket                    string
+	S3OTABucket                      string
+	OTADevArtifactAllowedOrigins     []string
+	TimeBootstrapKeyID               string
+	TimeBootstrapSigner              string
+	TimeBootstrapKMSKeyID            string
+	TimeBootstrapLocalPrivateKeyPath string
+	InternalApps                     []InternalApp
+	DirectACKSubscriberEnabled       bool
 }
 
 func LoadConfig(getenv func(string) string) (Config, error) {
-	databaseURL, err := loadDatabaseURL(getenv)
+	databaseURL, err := LoadDatabaseURL(getenv)
+	if err != nil {
+		return Config{}, err
+	}
+	directACKSubscriberEnabled, err := parseOptionalBool(
+		"AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED", getenv("AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED"),
+	)
 	if err != nil {
 		return Config{}, err
 	}
 	config := Config{
-		ListenAddress:         valueOr(getenv("GATEWAY_LISTEN_ADDRESS"), ":14080"),
-		Environment:           valueOr(getenv("GATEWAY_ENVIRONMENT"), "development"),
-		DatabaseURL:           databaseURL,
-		RedisURL:              strings.TrimSpace(getenv("REDIS_URL")),
-		AWSRegion:             strings.TrimSpace(getenv("AWS_REGION")),
-		DevicePolicyName:      strings.TrimSpace(getenv("AWS_IOT_DEVICE_POLICY_NAME")),
-		IoTTopicPrefix:        strings.TrimSpace(getenv("AWS_IOT_TOPIC_PREFIX")),
-		IoTCredentialEndpoint: strings.TrimSpace(getenv("AWS_IOT_CREDENTIAL_PROVIDER_ENDPOINT")),
-		IoTRoleAlias:          strings.TrimSpace(getenv("AWS_IOT_ROLE_ALIAS")),
-		IoTShadowName:         strings.TrimSpace(getenv("AWS_IOT_SHADOW_NAME")),
-		IngestQueueURL:        strings.TrimSpace(getenv("AWS_IOT_INGEST_QUEUE_URL")),
-		KVSChannelPrefix:      strings.TrimSpace(getenv("AWS_KVS_CHANNEL_PREFIX")),
-		S3MediaBucket:         strings.TrimSpace(getenv("AWS_S3_MEDIA_BUCKET")),
-		TimeBootstrapKeyID:    strings.TrimSpace(getenv("TIME_BOOTSTRAP_KEY_ID")),
-		TimeBootstrapKMSKeyID: strings.TrimSpace(getenv("TIME_BOOTSTRAP_KMS_KEY_ID")),
+		ListenAddress:                    valueOr(getenv("GATEWAY_LISTEN_ADDRESS"), ":14080"),
+		Environment:                      valueOr(getenv("GATEWAY_ENVIRONMENT"), "development"),
+		DatabaseURL:                      databaseURL,
+		RedisURL:                         strings.TrimSpace(getenv("REDIS_URL")),
+		AWSRegion:                        strings.TrimSpace(getenv("AWS_REGION")),
+		DevicePolicyName:                 strings.TrimSpace(getenv("AWS_IOT_DEVICE_POLICY_NAME")),
+		IoTTopicPrefix:                   strings.TrimSpace(getenv("AWS_IOT_TOPIC_PREFIX")),
+		IoTCredentialEndpoint:            strings.TrimSpace(getenv("AWS_IOT_CREDENTIAL_PROVIDER_ENDPOINT")),
+		IoTRoleAlias:                     strings.TrimSpace(getenv("AWS_IOT_ROLE_ALIAS")),
+		IoTShadowName:                    strings.TrimSpace(getenv("AWS_IOT_SHADOW_NAME")),
+		IngestQueueURL:                   strings.TrimSpace(getenv("AWS_IOT_INGEST_QUEUE_URL")),
+		KVSChannelPrefix:                 strings.TrimSpace(getenv("AWS_KVS_CHANNEL_PREFIX")),
+		S3MediaBucket:                    strings.TrimSpace(getenv("AWS_S3_MEDIA_BUCKET")),
+		S3OTABucket:                      strings.TrimSpace(getenv("AWS_S3_OTA_BUCKET")),
+		TimeBootstrapKeyID:               strings.TrimSpace(getenv("TIME_BOOTSTRAP_KEY_ID")),
+		TimeBootstrapSigner:              valueOr(getenv("TIME_BOOTSTRAP_SIGNER"), "aws-kms"),
+		TimeBootstrapKMSKeyID:            strings.TrimSpace(getenv("TIME_BOOTSTRAP_KMS_KEY_ID")),
+		TimeBootstrapLocalPrivateKeyPath: strings.TrimSpace(getenv("TIME_BOOTSTRAP_LOCAL_PRIVATE_KEY_PATH")),
+		DirectACKSubscriberEnabled:       directACKSubscriberEnabled,
 	}
 	if !validEnvironment(config.Environment) {
 		return Config{}, fmt.Errorf("GATEWAY_ENVIRONMENT must be development, staging, or production")
+	}
+	if config.DirectACKSubscriberEnabled && config.Environment != "development" {
+		return Config{}, fmt.Errorf("AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED is allowed only when GATEWAY_ENVIRONMENT=development")
 	}
 	if config.AWSRegion == "" || config.DevicePolicyName == "" || config.IoTTopicPrefix == "" ||
 		config.IoTCredentialEndpoint == "" || config.IoTRoleAlias == "" || config.IoTShadowName == "" {
@@ -94,11 +120,64 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if !regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`).MatchString(config.S3MediaBucket) {
 		return Config{}, fmt.Errorf("AWS_S3_MEDIA_BUCKET is invalid")
 	}
+	otaBucketPattern := regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
+	if config.S3OTABucket != "" && !otaBucketPattern.MatchString(config.S3OTABucket) {
+		return Config{}, fmt.Errorf("AWS_S3_OTA_BUCKET is invalid")
+	}
+	rawOTAOrigins := strings.TrimSpace(getenv("OTA_DEV_ARTIFACT_ALLOWED_ORIGINS"))
+	if rawOTAOrigins != "" {
+		if config.Environment != "development" {
+			return Config{}, fmt.Errorf("OTA_DEV_ARTIFACT_ALLOWED_ORIGINS is allowed only for development")
+		}
+		seenOrigins := map[string]struct{}{}
+		for _, rawOrigin := range strings.Split(rawOTAOrigins, ",") {
+			origin := strings.TrimSpace(rawOrigin)
+			parsed, err := url.Parse(origin)
+			if err != nil || parsed.User != nil || parsed.Host == "" ||
+				(parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Path != "" ||
+				parsed.RawQuery != "" || parsed.Fragment != "" {
+				return Config{}, fmt.Errorf("OTA_DEV_ARTIFACT_ALLOWED_ORIGINS contains an invalid origin")
+			}
+			if _, duplicate := seenOrigins[origin]; duplicate {
+				return Config{}, fmt.Errorf("OTA_DEV_ARTIFACT_ALLOWED_ORIGINS contains a duplicate origin")
+			}
+			seenOrigins[origin] = struct{}{}
+			config.OTADevArtifactAllowedOrigins = append(config.OTADevArtifactAllowedOrigins, origin)
+		}
+	}
+	if config.Environment != "development" && config.S3OTABucket == "" {
+		return Config{}, fmt.Errorf("AWS_S3_OTA_BUCKET is required outside development")
+	}
+	if config.Environment == "development" && config.S3OTABucket == "" && len(config.OTADevArtifactAllowedOrigins) == 0 {
+		return Config{}, fmt.Errorf("AWS_S3_OTA_BUCKET or OTA_DEV_ARTIFACT_ALLOWED_ORIGINS is required for development OTA")
+	}
 	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`).MatchString(config.TimeBootstrapKeyID) {
 		return Config{}, fmt.Errorf("TIME_BOOTSTRAP_KEY_ID is required and must be a safe COSE kid")
 	}
-	if config.TimeBootstrapKMSKeyID == "" || len(config.TimeBootstrapKMSKeyID) > 2048 || strings.ContainsAny(config.TimeBootstrapKMSKeyID, "\r\n") {
-		return Config{}, fmt.Errorf("TIME_BOOTSTRAP_KMS_KEY_ID is required and invalid")
+	switch config.TimeBootstrapSigner {
+	case "local":
+		if config.Environment != "development" {
+			return Config{}, fmt.Errorf("TIME_BOOTSTRAP_SIGNER=local is allowed only for development")
+		}
+		if config.TimeBootstrapLocalPrivateKeyPath == "" ||
+			strings.ContainsAny(config.TimeBootstrapLocalPrivateKeyPath, "\r\n") {
+			return Config{}, fmt.Errorf("TIME_BOOTSTRAP_LOCAL_PRIVATE_KEY_PATH is required and invalid for local signer")
+		}
+		if config.TimeBootstrapKMSKeyID != "" {
+			return Config{}, fmt.Errorf("TIME_BOOTSTRAP_KMS_KEY_ID must be empty for local signer")
+		}
+	case "aws-kms":
+		if config.Environment == "development" {
+			return Config{}, fmt.Errorf("TIME_BOOTSTRAP_SIGNER=aws-kms is not allowed for development")
+		}
+		if config.TimeBootstrapKMSKeyID == "" || len(config.TimeBootstrapKMSKeyID) > 2048 || strings.ContainsAny(config.TimeBootstrapKMSKeyID, "\r\n") {
+			return Config{}, fmt.Errorf("TIME_BOOTSTRAP_KMS_KEY_ID is required and invalid for aws-kms signer")
+		}
+		if config.TimeBootstrapLocalPrivateKeyPath != "" {
+			return Config{}, fmt.Errorf("TIME_BOOTSTRAP_LOCAL_PRIVATE_KEY_PATH must be empty for aws-kms signer")
+		}
+	default:
+		return Config{}, fmt.Errorf("TIME_BOOTSTRAP_SIGNER must be local or aws-kms")
 	}
 	if err := validateServiceURL("DATABASE_URL", config.DatabaseURL, "postgres", "postgresql"); err != nil {
 		return Config{}, err
@@ -124,7 +203,19 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	return config, nil
 }
 
-func loadDatabaseURL(getenv func(string) string) (string, error) {
+func parseOptionalBool(name, value string) (bool, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s must be true or false", name)
+	}
+	return parsed, nil
+}
+
+func LoadDatabaseURL(getenv func(string) string) (string, error) {
 	if databaseURL := strings.TrimSpace(getenv("DATABASE_URL")); databaseURL != "" {
 		return databaseURL, nil
 	}
@@ -197,6 +288,18 @@ func validateInternalApps(apps []InternalApp) error {
 			}
 			seenEventTypes[eventType] = struct{}{}
 			app.WebhookEventTypes[eventIndex] = eventType
+		}
+		seenPermissions := make(map[string]struct{}, len(app.Permissions))
+		for permissionIndex, permission := range app.Permissions {
+			permission = strings.TrimSpace(permission)
+			if permission != "ota:publish" && permission != "ota:deploy" {
+				return fmt.Errorf("INTERNAL_APPS_JSON contains an invalid permission")
+			}
+			if _, duplicate := seenPermissions[permission]; duplicate {
+				return fmt.Errorf("INTERNAL_APPS_JSON contains a duplicate permission")
+			}
+			seenPermissions[permission] = struct{}{}
+			app.Permissions[permissionIndex] = permission
 		}
 	}
 	return nil

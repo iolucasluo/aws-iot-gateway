@@ -27,11 +27,12 @@ func (kvsStub) Playback(_ context.Context, channel awskvs.Channel, viewerID stri
 }
 
 type commanderStub struct {
-	input  device.CommandInput
-	ack    map[string]any
-	wait   bool
-	calls  int
-	result *device.SendCommandsResult
+	input   device.CommandInput
+	ack     map[string]any
+	wait    bool
+	calls   int
+	dpCalls int
+	result  *device.SendCommandsResult
 }
 
 func (commander *commanderStub) SendCommands(_ context.Context, _, _, _ string, commands []device.CommandInput, waitACK bool) (device.SendCommandsResult, error) {
@@ -42,6 +43,11 @@ func (commander *commanderStub) SendCommands(_ context.Context, _, _, _ string, 
 		return *commander.result, nil
 	}
 	return device.SendCommandsResult{Results: []device.CommandResult{{Status: "success", Data: commander.ack}}}, nil
+}
+
+func (commander *commanderStub) SendDPCommands(ctx context.Context, internalAppID, deviceID, deviceSN string, commands []device.CommandInput, waitACK bool) (device.SendCommandsResult, error) {
+	commander.dpCalls++
+	return commander.SendCommands(ctx, internalAppID, deviceID, deviceSN, commands, waitACK)
 }
 
 func TestCreateExactStreamRejectsPartialGrantAndRevokesViewer(t *testing.T) {
@@ -126,6 +132,9 @@ func TestCreateStreamReturnsShortLivedKVSViewerConfigAfterDeviceACK(t *testing.T
 	if commander.input.Code != "stream" {
 		t.Fatalf("command = %#v", commander.input)
 	}
+	if commander.dpCalls != 1 {
+		t.Fatalf("stream command bypassed product DP contract: dpCalls=%d", commander.dpCalls)
+	}
 	if result.CapabilityContractVersion != "webrtc.v1" || result.FirmwareVersion != "v0.0.0" ||
 		!result.SupportedCapabilities.AudioReceive || !result.GrantedCapabilities.VideoReceive {
 		t.Fatalf("capability response = %#v", result)
@@ -187,5 +196,39 @@ func TestCreateStreamRejectsInvalidRequestedCapabilities(t *testing.T) {
 		if _, err := service.Create(context.Background(), "livpet-staging", "device-id", "binding-id", "fdr-0001", requested); !errors.Is(err, ErrInvalidCapabilities) {
 			t.Fatalf("Create(%#v) error = %v, want ErrInvalidCapabilities", requested, err)
 		}
+	}
+}
+
+func TestCreateStreamReturnsStrictPlaybackCapabilityGrant(t *testing.T) {
+	t.Parallel()
+	ack := map[string]any{
+		"code": float64(0), "action": "stream", "type": "webrtc", "start": float64(1),
+		"status": "ready", "viewer_client_id": "viewer-playback",
+		"capability_contract_version": "webrtc.v1", "firmware_version": "v1.2.3",
+		"supported": map[string]any{
+			"video_receive": true, "audio_receive": true, "audio_send": true,
+			"data_channels": []any{"explorex.control.v1"},
+		},
+		"accepted": map[string]any{
+			"video_receive": true, "audio_receive": false, "audio_send": false,
+			"data_channels": []any{"explorex.control.v1"},
+		},
+		"playback_control": map[string]any{
+			"contract":             "sd-playback.v1",
+			"ops":                  []any{"load", "play", "pause", "resume", "seek", "skip", "stop", "get_state"},
+			"progress_interval_ms": float64(500), "max_concurrent_sessions": float64(1),
+			"supports_rate": false,
+		},
+	}
+	service := NewStreamService(kvsStub{}, &commanderStub{ack: ack}, &streamRepositoryStub{},
+		"aws-iot-gateway-staging-", func() (string, error) { return "viewer-playback", nil })
+	result, err := service.Create(context.Background(), "livpet-staging", "device-id", "binding-id",
+		"fdr-0001", StreamCapabilities{VideoReceive: true, DataChannels: []string{ControlDataChannelProtocol}})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if result.PlaybackControl == nil || result.PlaybackControl.Contract != "sd-playback.v1" ||
+		len(result.PlaybackControl.Ops) != 8 || result.PlaybackControl.MaxConcurrentSessions != 1 {
+		t.Fatalf("playback capability = %#v", result.PlaybackControl)
 	}
 }
