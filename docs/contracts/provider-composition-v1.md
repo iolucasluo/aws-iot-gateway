@@ -1,6 +1,6 @@
 # Provider Composition Contract v1
 
-状态：Phase 7.6 implementation baseline；composition validator、provider-neutral ports、国内 MQTT adapter、messaging factory、设备消息桥接、DELL mTLS 集成 smoke 和国内运行时能力审计门已落地；完整 API runtime wiring、其他国内 provider 和跨仓 HIL 仍需后续阶段验收。
+状态：Phase 7.7 implementation baseline；composition validator、provider-neutral ports、国内 MQTT adapter、messaging factory、设备消息桥接、DELL mTLS 集成 smoke、国内运行时能力审计门和 identity/signer compatibility bridge 已落地；完整 API runtime wiring、其他国内 provider 和跨仓 HIL 仍需后续阶段验收。
 
 ## 0. 当前代码锚点
 
@@ -49,6 +49,12 @@ Instance ID、composition ID 和协议版本均使用小写 ASCII `[a-z0-9][a-z0
 ### 4.1 Identity / Provisioning
 
 输入为设备 CSR、PID、activation context；输出为 provider-neutral `IdentityRef`、证书材料和公开 endpoint。设备 private key 只能在设备侧生成；Gateway 不接受 private key。
+
+`internal/runtime/identity_bridge.go` 的 `IdentityRuntime` 将一个 `DeviceIdentity` client 绑定到 composition 选定的
+provider instance。它在调用 provider 前校验 `DeviceID`/`PID`/CSR 的边界，在返回值和后续
+`Activate`/`Rotate`/`Revoke` 前要求 `ProviderInstance` 精确匹配绑定，并拒绝缺少 external/certificate
+identity、证书 PEM、`mqtts://`/`https://` endpoint、控制字符或 private-key 材料的引用。该 wrapper 不生成
+证书、不持有私钥、不定义 CA API；实际 `ca_mqtt_identity` adapter 必须由后续 owning provider 注入。
 
 最小语义：
 
@@ -138,6 +144,12 @@ SQS-specific worker 必须收敛为 `EventQueue` port。Phase 2 的最小 port �
 
 时间 bootstrap 使用 `crypto.Signer` 语义。AWS KMS、国内 KMS/HSM 和 development local signer 是不同 adapter；staging 不得为了绕过配置校验使用长期本地私钥。
 
+`internal/runtime/signer_bridge.go` 的 `CryptoSigner` 将 provider `Signer` 的 digest-only 端口适配为
+`crypto.Signer`：只接受 32-byte `SHA-256` digest，要求注入的 public key 为 ECDSA P-256，并验证 provider
+返回的 ASN.1 ECDSA signature 能通过该公钥校验后才交给 time bootstrap。返回值会复制，provider 错误和
+invalid signature 均 fail closed。该 bridge 不选择或实现任何 KMS/HSM 协议；`domestic_kms` 仍需真实
+provider adapter、公开公钥获取和 health/timeout 契约后才能注册。
+
 ## 5. Composition 文档形状
 
 部署只提供一个已审查的 composition 文件，示例：
@@ -191,7 +203,7 @@ policy:
 
 运行时装配顺序固定为：先由 `LoadProviderComposition` 完成 bounded、regular、non-symlink 和环境匹配校验，再由 `BuildMessaging` 解析 `bindings.messaging` 并构造对应 adapter，最后由调用方显式执行 provider `Health`。factory 不在未知 driver 上 fallback，也不在构造阶段隐式建立网络连接；当前已注册的 `mqtt_broker` 继续执行本节的 `mqtts`/mTLS 约束。AWS 主 API 的既有装配路径保持兼容，待 identity、signer、realtime 和 storage 等 provider 具备后再按同一顺序接入完整 composition runtime。
 
-`BuildDomesticRuntimePlan` 是完整应用装配前的离线审计门：它再次校验 composition，要求 `metadata.region` 以 `cn` 开头，并按 binding 的稳定字典序报告当前已注册 adapter 或阻塞原因。该函数只返回非敏感的 capability/driver/状态，不读取运行配置、不创建 SDK client、不解析 endpoint/credential/bucket/key ref，也不执行网络 I/O。`cmd/provider-composition-runtime-audit` 将结果格式化为可审计文本：退出码 `0` 表示所有显式 binding 都有应用 adapter，退出码 `2` 表示 composition 合法但仍有未接入 binding，退出码 `1` 表示 composition/环境无效。当前国内注册表只有 `messaging/mqtt_broker`；`ca_mqtt_identity`、`domestic_kms`、`explorex_signal` 及 OSS/COS、queue、twin 等绑定在完整 application wiring 前保持 `BLOCKED`。该命令不能替代 API server，也不会改变 AWS-only 主装配。
+`BuildDomesticRuntimePlan` 是完整应用装配前的离线审计门：它再次校验 composition，要求 `metadata.region` 以 `cn` 开头，并按 binding 的稳定字典序报告当前已注册 adapter 或阻塞原因。该函数只返回非敏感的 capability/driver/状态，不读取运行配置、不创建 SDK client、不解析 endpoint/credential/bucket/key ref，也不执行网络 I/O。`cmd/provider-composition-runtime-audit` 将结果格式化为可审计文本：退出码 `0` 表示所有显式 binding 都有应用 adapter，退出码 `2` 表示 composition 合法但仍有未接入 binding，退出码 `1` 表示 composition/环境无效。当前国内注册表只有 `messaging/mqtt_broker`；`ca_mqtt_identity`、`domestic_kms`、`explorex_signal` 及 OSS/COS、queue、twin 等绑定在完整 application wiring 前保持 `BLOCKED`。Identity/Signer bridge 只提供端口边界校验和兼容类型，不改变该注册表状态。该命令不能替代 API server，也不会改变 AWS-only 主装配。
 
 `cmd/mqtt-provider-smoke` 的 `GATEWAY_MQTT_SMOKE_WAIT_FOR_DEVICE_MESSAGE=1` 是仅供 operator 使用的集成 harness：它复用同一 factory 和 `SubscribeDeviceMessages`，等待一条四类 canonical filter 消息后只输出 topic/长度，并在退出时关闭订阅。默认值关闭等待；该模式不写 ACK store、不解析业务 payload，也不改变 AWS-only 主装配。
 
