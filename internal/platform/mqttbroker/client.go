@@ -70,11 +70,16 @@ func NewClient(config Config) (*Client, error) {
 	if !topicPrefixPattern.MatchString(topicPrefix) {
 		return nil, fmt.Errorf("MQTT topic prefix is invalid")
 	}
-	for name, path := range map[string]string{
-		"CAFile": config.CAFile, "ClientCertFile": config.ClientCertFile, "ClientKeyFile": config.ClientKeyFile,
+	for _, material := range []struct {
+		name string
+		path string
+	}{
+		{name: "CAFile", path: config.CAFile},
+		{name: "ClientCertFile", path: config.ClientCertFile},
+		{name: "ClientKeyFile", path: config.ClientKeyFile},
 	} {
-		if strings.TrimSpace(path) == "" || strings.ContainsAny(path, "\r\n") {
-			return nil, fmt.Errorf("MQTT %s is required and invalid", name)
+		if strings.TrimSpace(material.path) == "" || strings.ContainsAny(material.path, "\r\n") {
+			return nil, fmt.Errorf("MQTT %s is required and invalid", material.name)
 		}
 	}
 	tlsConfig, err := loadTLSConfig(config, parsed.Hostname())
