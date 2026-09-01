@@ -1,6 +1,6 @@
 # Provider Composition Contract v1
 
-状态：Phase 7.3 implementation baseline；composition validator、provider-neutral ports、国内 MQTT adapter 与 messaging factory 已落地；完整 API runtime wiring、其他国内 provider 和跨仓 HIL 仍需后续阶段验收。
+状态：Phase 7.4 implementation baseline；composition validator、provider-neutral ports、国内 MQTT adapter、messaging factory 与设备消息桥接已落地；完整 API runtime wiring、其他国内 provider 和跨仓 HIL 仍需后续阶段验收。
 
 ## 0. 当前代码锚点
 
@@ -65,8 +65,8 @@ Revoke → 撤销并记录原因
 
 ```go
 type DeviceMessaging interface {
-    Publish(context.Context, Message) error
-    Subscribe(context.Context, Subscription) (SubscriptionHandle, error)
+    Publish(context.Context, DeviceMessage) error
+    Subscribe(context.Context, DeviceSubscription) (SubscriptionHandle, error)
     Health(context.Context) error
 }
 ```
@@ -74,6 +74,17 @@ type DeviceMessaging interface {
 每条命令必须携带 `device_id`、`binding_id`、`request_id`、过期时间和幂等语义；provider 选择不能由设备或 App 请求体覆盖。
 
 `mqtt_broker` 是 provider-neutral messaging port 的 MQTT 实现：运行时 endpoint 必须使用 `mqtts://`，并通过 operator-owned 的 CA、client certificate 和 private key 完成双向 TLS；这些路径不进入 composition 文件或 Git。client identity 由证书 subject 与 broker ACL 共同约束，禁止 anonymous listener。adapter 只允许发布/订阅其 composition 声明的 `cmd/<topic_prefix>/...` 与 `dt/<topic_prefix>/...` 命名空间，并拒绝无过期时间或已过期的消息。
+
+Gateway runtime 通过 `internal/runtime/messaging_bridge.go` 将该 port 适配到既有设备模块的窄 `Publisher` 接口，并把设备入站消息交给通用 `MessageHandler`。`DevicePublisher` 为每条出站消息统一补齐 30 秒短 TTL、复制 payload；`SubscribeDeviceMessages` 只注册以下四类固定过滤器：
+
+```text
+cmd/<topic_prefix>/+/res
+dt/<topic_prefix>/+/status
+dt/<topic_prefix>/+/lwt
+dt/<topic_prefix>/+/event
+```
+
+桥接层不解析 ACK、presence 或 event payload，也不导入 `modules/device`、`modules/events`；这些语义仍由业务模块负责。部分订阅失败会关闭已创建句柄并 fail closed，`SubscriptionSet.Close` 并发幂等。这样同一桥接可复用于国内 MQTT、自建 broker 或其他实现 `DeviceMessaging` 的 provider，AWS-only 主装配路径保持不变。
 
 ### 4.3 Device State / Twin
 
