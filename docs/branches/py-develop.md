@@ -22,14 +22,14 @@
 ## 实施计划与当前状态
 
 - [x] 创建分支日志文件 — owner: aws-iot-gateway；files: docs/branches/py-develop.md；verify: V1
-- [ ] 创建 py/develop 分支 — owner: aws-iot-gateway；files: Git ref；depends: 日志 commit；verify: V2
+- [x] 创建 py/develop 分支 — owner: aws-iot-gateway；files: Git ref；depends: 日志 commit a07f0cb；verify: V2
 
 ## 验证计划与证据
 
 | ID | 测试 / 检查 owner 与 cwd | 准确命令或检查 | 预期证据 | 实际证据 |
 |---|---|---|---|---|
-| V1 | aws-iot-gateway；cwd: 当前子仓根 | git status --short、git rev-parse HEAD | 仅分支日志待提交，无参考实现 dirty | 待执行 |
-| V2 | aws-iot-gateway；cwd: 当前子仓根 | git branch --show-current、git rev-parse py/develop | 当前为 py/develop，分支从固定 commit 创建 | 待执行 |
+| V1 | aws-iot-gateway；cwd: 当前子仓根 | git status --short、git rev-parse HEAD | 仅分支日志待提交，无参考实现 dirty | 已验证：a07f0cb 仅提交分支日志，工作树无业务 dirty |
+| V2 | aws-iot-gateway；cwd: 当前子仓根 | git branch --show-current、git rev-parse py/develop | 当前为 py/develop，分支从固定 commit 创建 | 已验证：当前分支为 py/develop；HEAD a07f0cb，基于 84f44dc |
 
 ## 全局约束与未决问题
 
@@ -46,4 +46,4 @@
 - **开发工作区**：普通 checkout；参考 child repository
 - **修改前基线**：当前为 detached HEAD，工作树干净
 - **MR / 合并状态**：未创建
-- **备注**：本次只建立本地分支，不 push。
+- **备注**：本地 py/develop 已创建；尚未 push。
