@@ -1,6 +1,6 @@
 # 国内 `cn-staging` 本地/ECS 模拟
 
-本目录是国内 `cn-staging` 的基础设施等价模拟。Phase 7.7 已提供显式的 composition preflight、国内 runtime capability audit、identity/signer compatibility bridge、messaging factory 和 provider-neutral 设备消息桥接验证基线；但 Gateway API 的国内身份/媒体 runtime wiring 尚未完成。该目录只启动 PostgreSQL、Redis、Mosquitto、coturn（及可选 MinIO），不伪造 signaling service。
+本目录是国内 `cn-staging` 的基础设施等价模拟。Phase 7.8 已提供显式的 composition preflight、国内 runtime capability audit、identity/signer compatibility bridge、provider adapter intake gate、messaging factory 和 provider-neutral 设备消息桥接验证基线；但 Gateway API 的国内身份/媒体 runtime wiring 尚未完成。该目录只启动 PostgreSQL、Redis、Mosquitto、coturn（及可选 MinIO），不伪造 signaling service。
 
 ## 本地启动
 
@@ -56,10 +56,13 @@ go run ./cmd/provider-composition-runtime-audit
 binding 会显示 `BLOCKED` 及确定原因。退出码 `2` 是“组合语法有效但尚未可启动”的机器可读信号，
 不等于错误或试产放行；命令不输出 credential/bucket/key ref、endpoint 或任何秘密。
 
-Phase 7.7 的 identity/signer bridge 只有 host-side contract：它校验 provider instance、IdentityRef、
+当前 identity/signer bridge 只有 host-side contract：它校验 provider instance、IdentityRef、
 证书材料、endpoint 和 SHA-256/ECDSA P-256 签名边界，不实现 CA/KMS 网络协议。DELL 当前没有受审查的
 CA/KMS 服务，因此不上传假证书、假私钥或 fake provider；`ca_mqtt_identity`、`domestic_kms` 仍由
 runtime audit 标记为 `BLOCKED`。
+
+真实 provider adapter 的进入条件、secret/trust-root ownership、生命周期、超时/重试、持久化、回滚和三维安全证据，统一见
+[`docs/contracts/domestic-provider-adapter-intake-v1.md`](../../docs/contracts/domestic-provider-adapter-intake-v1.md)。没有官方协议和 sandbox 证据时，intake 保持 `INTAKE-BLOCKED`，不注册 fake provider、不启动完整国内 API。
 
 该检查必须输出 `NO-SHIP`，直到 Gateway composition runtime wiring、真实 signaling
 service 和 feeder HIL 均有当前版本证据。
@@ -146,7 +149,7 @@ LAN 运行与本机 loopback 的差异：公网 DNS、HTTPS CA、运营商 NAT�
 | Mosquitto | 国内 MQTT adapter 的本地 harness | `mqtt` 为匿名 loopback harness；`mqtt-mtls` 为证书认证/ACL profile，默认 loopback |
 | coturn | TURN 进程/端口形状验证 | 默认 loopback；无公网 HIL 结论 |
 | MinIO | 可选 ObjectStore 接口测试 | 仅 `object` profile、默认 loopback |
-| Gateway API | Phase 7.7 仍不启动完整 API；提供 composition preflight + runtime audit + identity/signer bridge + messaging factory/bridge smoke | 等真实国内身份/签名/对象/实时 provider wiring 完成后再接入共享应用 builder |
+| Gateway API | Phase 7.8 仍不启动完整 API；提供 composition preflight + runtime audit + identity/signer bridge + provider intake gate + messaging factory/bridge smoke | 等真实国内身份/签名/对象/实时 provider wiring 完成后再接入共享应用 builder |
 | RTC signaling | Phase 4 只固化 adapter/protocol | 不启动假服务；真实 signaling、Anyka HIL 和公网 TURN 另行验收 |
 
 ## 运行约束

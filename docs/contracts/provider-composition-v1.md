@@ -1,6 +1,6 @@
 # Provider Composition Contract v1
 
-状态：Phase 7.7 implementation baseline；composition validator、provider-neutral ports、国内 MQTT adapter、messaging factory、设备消息桥接、DELL mTLS 集成 smoke、国内运行时能力审计门和 identity/signer compatibility bridge 已落地；完整 API runtime wiring、其他国内 provider 和跨仓 HIL 仍需后续阶段验收。
+状态：Phase 7.8 provider intake baseline；composition validator、provider-neutral ports、国内 MQTT adapter、messaging factory、设备消息桥接、DELL mTLS 集成 smoke、国内运行时能力审计门、identity/signer compatibility bridge 和国内 provider intake gate 已落地；完整 API runtime wiring、其他国内 provider 和跨仓 HIL 仍需后续阶段验收。
 
 ## 0. 当前代码锚点
 
@@ -8,6 +8,7 @@
 - `internal/runtime/config.go` 当前强制 AWS IoT/KVS/S3 配置，非 development 的时间签名只允许 `aws-kms`。
 - `internal/activation/types.go` 和 `internal/httpapi/server.go` 当前把 AWS endpoint、role alias、region 和 KVS prefix 暴露在激活/运行时响应。
 - `internal/provider/composition.go` 提供严格 YAML composition 解码和启动前 fail-closed 校验；`internal/provider/ports.go` 定义共享的 messaging、identity、realtime、queue、signer 端口类型。
+- `docs/contracts/domestic-provider-adapter-intake-v1.md` 定义真实国内 provider adapter 进入 TDD/运行时注册前的协议、权限、生命周期、失败/重试、持久化、回滚和三维安全证据门。
 - `internal/modules/media/stream.go` 的窄 media port 已改为 provider-neutral channel/playback 类型；`assets.go` 的 `ObjectStore` 和 OTA `ArtifactStore` 是可复用的现有切入点。
 - `internal/worker/ingest.go` 的队列 port 已收敛为 `provider.EventQueue`，AWS SQS 细节位于 `internal/platform/awssqs/`；`db/migrations/008_provider_composition.up.sql` 保存设备 capability 到 provider instance 的绑定事实。
 
@@ -148,7 +149,8 @@ SQS-specific worker 必须收敛为 `EventQueue` port。Phase 2 的最小 port �
 `crypto.Signer`：只接受 32-byte `SHA-256` digest，要求注入的 public key 为 ECDSA P-256，并验证 provider
 返回的 ASN.1 ECDSA signature 能通过该公钥校验后才交给 time bootstrap。返回值会复制，provider 错误和
 invalid signature 均 fail closed。该 bridge 不选择或实现任何 KMS/HSM 协议；`domestic_kms` 仍需真实
-provider adapter、公开公钥获取和 health/timeout 契约后才能注册。
+provider adapter、公开公钥获取和 health/timeout 契约后才能注册。真实 provider 的进入条件和 evidence package 见
+[`domestic-provider-adapter-intake-v1.md`](domestic-provider-adapter-intake-v1.md)；该 intake gate 不替代协议实现，也不把文档当作运行证据。
 
 ## 5. Composition 文档形状
 
