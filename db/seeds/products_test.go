@@ -111,3 +111,24 @@ func TestProductDPSeedDefinesConditionalAndNestedSchemas(t *testing.T) {
 		}
 	}
 }
+
+func TestProductDPSeedDefinesFeederCommandAndMediaContract(t *testing.T) {
+	t.Parallel()
+
+	content, err := Files.ReadFile("002_product_dps.sql")
+	if err != nil {
+		t.Fatalf("read product DP seed: %v", err)
+	}
+	seed := string(content)
+	for _, code := range []string{
+		"clear_jam", "get_schedule", "get_feed_log", "device_info", "sdcard_status",
+		"sdcard", "night_mode", "speaker_vol", "audio_playback", "motion_det",
+		"ptz", "reboot", "two_way_audio", "video_res", "record_start", "record_stop",
+		"stream", "snapshot", "record_clip", "audio_update", "audio_reset", "sd_files",
+	} {
+		fragment := "(SELECT id FROM products WHERE pid = 'feeder-x1'), '" + code + "'"
+		if !strings.Contains(seed, fragment) {
+			t.Errorf("feeder DP seed missing %q", code)
+		}
+	}
+}
