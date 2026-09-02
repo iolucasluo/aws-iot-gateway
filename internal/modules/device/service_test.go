@@ -99,6 +99,33 @@ func TestSendCommandsPreservesLivPetPayloadAndResponseShape(t *testing.T) {
 	}
 }
 
+func TestGetDeviceInfoProjectionUsesProviderNeutralCommand(t *testing.T) {
+	t.Parallel()
+	publisher := &publisherStub{}
+	repository := &commandRepositoryStub{}
+	service := NewService(publisher, ackWaiterStub{ack: map[string]any{
+		"code": float64(0), "device_config": map[string]any{
+			"wifi_mac": "48:a4:fd:7d:6f:0b", "version": "dev-cn-20260902b", "firmware_build": "20260902",
+		},
+	}}, repository, "cn-staging", func() (string, error) { return "device-info-session", nil })
+
+	projection, err := service.GetDeviceInfoProjection(context.Background(), "demo-local", "device-id", "fdr-0001", "feeder-x1")
+	if err != nil {
+		t.Fatalf("GetDeviceInfoProjection() error = %v", err)
+	}
+	if projection["sn"] != "fdr-0001" || projection["pid"] != "feeder-x1" || projection["online"] != true ||
+		projection["wifi_mac"] != "48:a4:fd:7d:6f:0b" || projection["version"] != "dev-cn-20260902b" {
+		t.Fatalf("projection = %#v", projection)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(publisher.payload, &payload); err != nil {
+		t.Fatalf("decode command payload: %v", err)
+	}
+	if payload["action"] != "device_info" || publisher.topic != "cmd/cn-staging/fdr-0001/req" {
+		t.Fatalf("command = topic %q payload %#v", publisher.topic, payload)
+	}
+}
+
 func TestSendDPCommandsRejectsUnknownDPBeforePersistenceOrPublish(t *testing.T) {
 	t.Parallel()
 	publisher := &publisherStub{}

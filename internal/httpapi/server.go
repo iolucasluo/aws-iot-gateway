@@ -266,7 +266,15 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 			writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "device service is unavailable")
 			return true
 		}
-		shadow, err := s.device.GetShadow(request.Context(), ownedBinding.DeviceSN)
+		var shadow any
+		if s.deviceRuntime.ProviderMode == "domestic-dev" {
+			shadow, err = s.device.GetDeviceInfoProjection(
+				request.Context(), principal.InternalAppID, ownedBinding.DeviceID,
+				ownedBinding.DeviceSN, ownedBinding.PID,
+			)
+		} else {
+			shadow, err = s.device.GetShadow(request.Context(), ownedBinding.DeviceSN)
+		}
 		if err != nil {
 			writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "device shadow is unavailable")
 			return true

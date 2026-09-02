@@ -143,6 +143,44 @@ func (service *Service) GetShadow(ctx context.Context, deviceSN string) (any, er
 	return envelope.State.Reported, nil
 }
 
+// GetDeviceInfoProjection obtains the provider-neutral device_info response
+// and presents the same flattened projection consumed by the App shadow API.
+// Domestic providers do not need to implement an AWS Shadow read port.
+func (service *Service) GetDeviceInfoProjection(
+	ctx context.Context, internalAppID, deviceID, deviceSN, pid string,
+) (map[string]any, error) {
+	result, err := service.SendCommands(ctx, internalAppID, deviceID, deviceSN, []CommandInput{{
+		Code: "device_info", Value: json.RawMessage(`{}`),
+	}}, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(result.Results) != 1 || result.Results[0].Status != "success" {
+		return nil, ErrInvalidDeviceResponse
+	}
+	data := result.Results[0].Data
+	config, ok := data["device_config"].(map[string]any)
+	if !ok {
+		return nil, ErrInvalidDeviceResponse
+	}
+	projection := map[string]any{
+		"sn": deviceSN, "pid": pid, "online": true, "device_config": config,
+	}
+	for _, key := range []string{"wifi_mac", "version", "build", "ip", "speaker_volume",
+		"motion_detection_enabled", "night_mode", "motion_sensitivity", "motion_report_interval_sec",
+		"video_resolution"} {
+		if value, found := config[key]; found {
+			projection[key] = value
+		}
+	}
+	if _, found := projection["build"]; !found {
+		if value, found := config["firmware_build"]; found {
+			projection["build"] = value
+		}
+	}
+	return projection, nil
+}
+
 func (service *Service) GetPTZStatus(ctx context.Context, internalAppID, deviceID, deviceSN string) (PTZStatus, error) {
 	result, err := service.SendDPCommands(ctx, internalAppID, deviceID, deviceSN, []CommandInput{{
 		Code: "ptz", Value: json.RawMessage(`{"op":"get_position"}`),
