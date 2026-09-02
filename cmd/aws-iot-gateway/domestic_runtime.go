@@ -64,6 +64,24 @@ func runDomesticGateway(
 	// Recommissioning remains unavailable until a domestic device-runtime
 	// adapter is wired, but token issuance and offline cloud unbind are valid.
 	bindingService := binding.NewService(bindingRepository, nil, time.Now, nil)
+	eventRepository, err := gatewaypostgres.NewEventRepository(database)
+	if err != nil {
+		return err
+	}
+	ackStore, err := redisstore.NewACKStore(redis, config.Environment)
+	if err != nil {
+		return err
+	}
+	messaging, err := gatewayruntime.BuildMessaging(composition, domesticMessagingEnvironment(config))
+	if err != nil {
+		return err
+	}
+	defer messaging.Close()
+	deviceSubscriptions, err := gatewayruntime.StartDeviceIngest(ctx, messaging, ackStore, eventRepository)
+	if err != nil {
+		return err
+	}
+	defer deviceSubscriptions.Close()
 	timeSigner, err := localsigner.Load(config.TimeBootstrapLocalPrivateKeyPath)
 	if err != nil {
 		return err
@@ -81,7 +99,7 @@ func runDomesticGateway(
 	server := &http.Server{
 		Addr: config.ListenAddress,
 		Handler: httpapi.NewInternalAPI(activationService, verifier, httpapi.Dependencies{
-			Binding: bindingService,
+			Binding:       bindingService,
 			TimeBootstrap: timeService, TimeBootstrapLimiter: rateLimiter,
 			DeviceRuntime: httpapi.DeviceRuntimeConfig{
 				ProviderMode: "domestic-dev", Endpoint: config.DomesticMQTTEndpoint,
@@ -97,4 +115,15 @@ func runDomesticGateway(
 		return err
 	}
 	return nil
+}
+
+func domesticMessagingEnvironment(config gatewayruntime.Config) func(string) string {
+	values := map[string]string{
+		"GATEWAY_MQTT_CLIENT_ID":        config.DomesticMQTTClientID,
+		"GATEWAY_MQTT_TOPIC_PREFIX":     config.DomesticMQTTTopicPrefix,
+		"GATEWAY_MQTT_CA_FILE":          config.DomesticCACertPath,
+		"GATEWAY_MQTT_CLIENT_CERT_FILE": config.DomesticMQTTClientCertPath,
+		"GATEWAY_MQTT_CLIENT_KEY_FILE":  config.DomesticMQTTClientKeyPath,
+	}
+	return func(key string) string { return values[key] }
 }

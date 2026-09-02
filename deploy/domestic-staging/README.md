@@ -1,6 +1,6 @@
 # 国内 `cn-staging` 本地/ECS 模拟
 
-本目录是国内 `cn-staging` 的基础设施等价模拟。基础 Compose 只启动 PostgreSQL、Redis、Mosquitto、coturn（及可选 MinIO），不伪造 signaling service。Gateway 的 `domestic-dev` 窄运行时另有明确的 operator 配置，当前覆盖 activation、development CA 签发和 signed-time；设备命令/状态、媒体、WebRTC 和对象存储仍保持不可用并在 API 层显式返回 `503`。
+本目录是国内 `cn-staging` 的基础设施等价模拟。基础 Compose 只启动 PostgreSQL、Redis、Mosquitto、coturn（及可选 MinIO），不伪造 signaling service。Gateway 的 `domestic-dev` 窄运行时另有明确的 operator 配置，覆盖 activation、development CA 签发、signed-time 和 provider-neutral MQTT ingest；媒体、WebRTC 和对象存储仍保持不可用并在 API 层显式返回 `503`。
 
 ## DELL domestic-dev Gateway（V9.2）
 
@@ -10,6 +10,7 @@
 - `GATEWAY_PROVIDER_COMPOSITION_PATH` 指向 `metadata.environment=development`、`metadata.region=cn` 的 operator-owned composition；
 - CA 证书/私钥、signed-time local signer 和应用凭据位于 DELL ignored/operator-owned 路径；私钥为 `0600`；
 - `DOMESTIC_MQTT_ENDPOINT` 仅接受非 AWS 的 `mqtts://` endpoint；当前 API 只返回该 provider-neutral endpoint，不输出 AWS IoT 字段。
+- `DOMESTIC_MQTT_CLIENT_ID`、`DOMESTIC_MQTT_CLIENT_CERT_PATH` 和 `DOMESTIC_MQTT_CLIENT_KEY_PATH` 必须指向 operator-owned 的 mTLS 客户端材料；缺失或连接/订阅失败时 Gateway fail closed。
 
 可参考 [gateway-domestic-dev.env.example](./gateway-domestic-dev.env.example) 生成 operator 配置。该示例不含真实密码、证书或 token，不能直接启动。
 
@@ -75,8 +76,7 @@ runtime audit 标记为 `BLOCKED`。
 真实 provider adapter 的进入条件、secret/trust-root ownership、生命周期、超时/重试、持久化、回滚和三维安全证据，统一见
 [`docs/contracts/domestic-provider-adapter-intake-v1.md`](../../docs/contracts/domestic-provider-adapter-intake-v1.md)。没有官方协议和 sandbox 证据时，intake 保持 `INTAKE-BLOCKED`，不注册 fake provider、不启动完整国内 API。
 
-该检查必须输出 `NO-SHIP`，直到 Gateway composition runtime wiring、真实 signaling
-service 和 feeder HIL 均有当前版本证据。
+该检查必须输出 `NO-SHIP`，直到真实 signaling service 和 feeder HIL 均有当前版本证据；MQTT ingest wiring 本身由 Gateway 启动时完成健康检查和四类 canonical topic 订阅。
 
 停止只影响本 Compose project：
 

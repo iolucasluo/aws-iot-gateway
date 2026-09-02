@@ -50,6 +50,9 @@ func TestLoadConfigAcceptsDellDomesticDevWithoutAWSFields(t *testing.T) {
 		"GATEWAY_PROVIDER_COMPOSITION_PATH":     "/opt/explorex/domestic-dev/composition.yaml",
 		"DOMESTIC_MQTT_ENDPOINT":                "mqtts://127.0.0.1:51884",
 		"DOMESTIC_MQTT_TOPIC_PREFIX":            "domestic-dev",
+		"DOMESTIC_MQTT_CLIENT_ID":               "gateway-domestic-dev",
+		"DOMESTIC_MQTT_CLIENT_CERT_PATH":        "/var/lib/explorex/domestic-dev/gateway.crt",
+		"DOMESTIC_MQTT_CLIENT_KEY_PATH":         "/var/lib/explorex/domestic-dev/gateway.key",
 		"DOMESTIC_CA_CERT_PATH":                 "/var/lib/explorex/domestic-dev/ca.pem",
 		"DOMESTIC_CA_KEY_PATH":                  "/var/lib/explorex/domestic-dev/ca-key.pem",
 		"DOMESTIC_SIGNER_PRIVATE_KEY_PATH":      "/var/lib/explorex/domestic-dev/signer.pem",
@@ -67,6 +70,11 @@ func TestLoadConfigAcceptsDellDomesticDevWithoutAWSFields(t *testing.T) {
 	}
 	if config.ProviderMode != "domestic-dev" {
 		t.Fatalf("ProviderMode = %q, want domestic-dev", config.ProviderMode)
+	}
+	if config.DomesticMQTTClientID != env["DOMESTIC_MQTT_CLIENT_ID"] ||
+		config.DomesticMQTTClientCertPath != env["DOMESTIC_MQTT_CLIENT_CERT_PATH"] ||
+		config.DomesticMQTTClientKeyPath != env["DOMESTIC_MQTT_CLIENT_KEY_PATH"] {
+		t.Fatalf("domestic MQTT client config = %#v", config)
 	}
 }
 
@@ -98,6 +106,9 @@ func domesticDevEnvironmentMap() map[string]string {
 		"GATEWAY_PROVIDER_COMPOSITION_PATH":     "/opt/explorex/domestic-dev/composition.yaml",
 		"DOMESTIC_MQTT_ENDPOINT":                "mqtts://127.0.0.1:51884",
 		"DOMESTIC_MQTT_TOPIC_PREFIX":            "domestic-dev",
+		"DOMESTIC_MQTT_CLIENT_ID":               "gateway-domestic-dev",
+		"DOMESTIC_MQTT_CLIENT_CERT_PATH":        "/var/lib/explorex/domestic-dev/gateway.crt",
+		"DOMESTIC_MQTT_CLIENT_KEY_PATH":         "/var/lib/explorex/domestic-dev/gateway.key",
 		"DOMESTIC_CA_CERT_PATH":                 "/var/lib/explorex/domestic-dev/ca.pem",
 		"DOMESTIC_CA_KEY_PATH":                  "/var/lib/explorex/domestic-dev/ca-key.pem",
 		"DOMESTIC_SIGNER_PRIVATE_KEY_PATH":      "/var/lib/explorex/domestic-dev/signer.pem",

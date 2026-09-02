@@ -55,6 +55,9 @@ type Config struct {
 	TimeBootstrapLocalPrivateKeyPath string
 	DomesticMQTTEndpoint             string
 	DomesticMQTTTopicPrefix          string
+	DomesticMQTTClientID             string
+	DomesticMQTTClientCertPath       string
+	DomesticMQTTClientKeyPath        string
 	DomesticCACertPath               string
 	DomesticCAKeyPath                string
 	DomesticSignerPrivateKeyPath     string
@@ -97,6 +100,9 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		TimeBootstrapLocalPrivateKeyPath: strings.TrimSpace(getenv("TIME_BOOTSTRAP_LOCAL_PRIVATE_KEY_PATH")),
 		DomesticMQTTEndpoint:             strings.TrimSpace(getenv("DOMESTIC_MQTT_ENDPOINT")),
 		DomesticMQTTTopicPrefix:          strings.TrimSpace(getenv("DOMESTIC_MQTT_TOPIC_PREFIX")),
+		DomesticMQTTClientID:             strings.TrimSpace(getenv("DOMESTIC_MQTT_CLIENT_ID")),
+		DomesticMQTTClientCertPath:       strings.TrimSpace(getenv("DOMESTIC_MQTT_CLIENT_CERT_PATH")),
+		DomesticMQTTClientKeyPath:        strings.TrimSpace(getenv("DOMESTIC_MQTT_CLIENT_KEY_PATH")),
 		DomesticCACertPath:               strings.TrimSpace(getenv("DOMESTIC_CA_CERT_PATH")),
 		DomesticCAKeyPath:                strings.TrimSpace(getenv("DOMESTIC_CA_KEY_PATH")),
 		DomesticSignerPrivateKeyPath:     strings.TrimSpace(getenv("DOMESTIC_SIGNER_PRIVATE_KEY_PATH")),
@@ -117,9 +123,11 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("GATEWAY_PROVIDER_COMPOSITION_PATH is required for domestic-dev")
 		}
 		if config.DomesticMQTTEndpoint == "" || config.DomesticMQTTTopicPrefix == "" ||
+			config.DomesticMQTTClientID == "" || config.DomesticMQTTClientCertPath == "" ||
+			config.DomesticMQTTClientKeyPath == "" ||
 			config.DomesticCACertPath == "" || config.DomesticCAKeyPath == "" ||
 			config.DomesticSignerPrivateKeyPath == "" || config.DomesticSignerKeyID == "" {
-			return Config{}, fmt.Errorf("DOMESTIC_MQTT_ENDPOINT, DOMESTIC_MQTT_TOPIC_PREFIX, DOMESTIC_CA_CERT_PATH, DOMESTIC_CA_KEY_PATH, DOMESTIC_SIGNER_PRIVATE_KEY_PATH, and DOMESTIC_SIGNER_KEY_ID are required for domestic-dev")
+			return Config{}, fmt.Errorf("DOMESTIC_MQTT_ENDPOINT, DOMESTIC_MQTT_TOPIC_PREFIX, DOMESTIC_MQTT_CLIENT_ID, DOMESTIC_MQTT_CLIENT_CERT_PATH, DOMESTIC_MQTT_CLIENT_KEY_PATH, DOMESTIC_CA_CERT_PATH, DOMESTIC_CA_KEY_PATH, DOMESTIC_SIGNER_PRIVATE_KEY_PATH, and DOMESTIC_SIGNER_KEY_ID are required for domestic-dev")
 		}
 		if strings.Contains(config.DomesticMQTTEndpoint, "amazonaws.com") ||
 			strings.Contains(config.DomesticCACertPath, "aws") || strings.Contains(config.DomesticCAKeyPath, "aws") {
