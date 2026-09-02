@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,6 +17,7 @@ import (
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/localsigner"
 	gatewaypostgres "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/postgres"
 	redisstore "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/redis"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/provider"
 	gatewayruntime "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/runtime"
 )
 
@@ -28,6 +31,18 @@ func runDomesticGateway(
 	redis *redisclient.Client,
 	verifier *internalauth.Verifier,
 ) error {
+	compositionFile, err := os.Open(config.ProviderCompositionPath)
+	if err != nil {
+		return err
+	}
+	defer compositionFile.Close()
+	composition, err := provider.LoadComposition(compositionFile)
+	if err != nil {
+		return err
+	}
+	if composition.Metadata.Environment != config.Environment || composition.Metadata.Region != "cn" {
+		return fmt.Errorf("domestic composition metadata does not match development cn runtime")
+	}
 	provisioner, err := domesticca.New(domesticca.Config{
 		Endpoint: config.DomesticMQTTEndpoint, CACertPath: config.DomesticCACertPath,
 		CAKeyPath: config.DomesticCAKeyPath,
