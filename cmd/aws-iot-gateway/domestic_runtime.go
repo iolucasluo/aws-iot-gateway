@@ -13,6 +13,7 @@ import (
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/httpapi"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/internalauth"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/binding"
+	devicemodule "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/device"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/timebootstrap"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/domesticca"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/localsigner"
@@ -82,6 +83,17 @@ func runDomesticGateway(
 		return err
 	}
 	defer deviceSubscriptions.Close()
+	devicePublisher, err := messaging.NewDevicePublisher(time.Now)
+	if err != nil {
+		return err
+	}
+	commandRepository, err := gatewaypostgres.NewCommandRepository(database)
+	if err != nil {
+		return err
+	}
+	deviceService := devicemodule.NewService(
+		devicePublisher, ackStore, commandRepository, config.DomesticMQTTTopicPrefix, nil,
+	)
 	timeSigner, err := localsigner.Load(config.TimeBootstrapLocalPrivateKeyPath)
 	if err != nil {
 		return err
@@ -100,6 +112,7 @@ func runDomesticGateway(
 		Addr: config.ListenAddress,
 		Handler: httpapi.NewInternalAPI(activationService, verifier, httpapi.Dependencies{
 			Binding:       bindingService,
+			Device:        deviceService,
 			TimeBootstrap: timeService, TimeBootstrapLimiter: rateLimiter,
 			DeviceRuntime: httpapi.DeviceRuntimeConfig{
 				ProviderMode: "domestic-dev", Endpoint: config.DomesticMQTTEndpoint,
