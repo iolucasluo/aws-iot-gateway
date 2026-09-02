@@ -22,6 +22,8 @@
 
 可参考 [gateway-domestic-dev.env.example](./gateway-domestic-dev.env.example) 生成 operator 配置。该示例不含真实密码、证书或 token，不能直接启动。
 
+DELL 运行时 composition 可参考 [composition.dell-domestic-dev.example.yaml](./composition.dell-domestic-dev.example.yaml)。它显式绑定 `realtime.dell_signal`，endpoint 只描述 DELL LAN signaling；真实 auth token 仍只放在 ignored `gateway.env`/`signal.env`。
+
 ## 本地启动
 
 真实 `.env.cn-staging.local` 必须位于仓库根目录并被 Git 忽略：
