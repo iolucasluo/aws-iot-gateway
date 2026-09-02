@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=explorex
-Group=explorex
+User=explorex-signal
+Group=explorex-signal
 EnvironmentFile=/opt/explorex/domestic-signal/config/signal.env
 ExecStart=/opt/explorex/domestic-signal/current/explorex-signal
 Restart=on-failure
