@@ -1,6 +1,14 @@
 # 国内 `cn-staging` 本地/ECS 模拟
 
-本目录是国内 `cn-staging` 的基础设施等价模拟。基础 Compose 只启动 PostgreSQL、Redis、Mosquitto、coturn（及可选 MinIO），不伪造 signaling service。Gateway 的 `domestic-dev` 窄运行时另有明确的 operator 配置，覆盖 activation、development CA 签发、signed-time 和 provider-neutral MQTT ingest；媒体、WebRTC 和对象存储仍保持不可用并在 API 层显式返回 `503`。
+本目录是国内 `cn-staging` 的基础设施等价模拟。基础 Compose 启动 PostgreSQL、Redis、Mosquitto、coturn（及可选 MinIO）；自建 signaling 由独立 `explorex-signal` 进程承载。Gateway 的 `domestic-dev` 窄运行时另有明确的 operator 配置，覆盖 activation、development CA 签发、signed-time 和 provider-neutral MQTT ingest；在 Gateway composition wiring 与 Anyka consumer 完成前，媒体/WebRTC API 仍保持不可用并在 API 层显式返回 `503`。
+
+## ExploreX signaling（Phase 10.1）
+
+`explorex-signal` 是 DELL 上独立运行的 provider-owned control/data-plane。它提供短 TTL 内存 session、HTTP idempotency、viewer/device 单次 ticket、严格 offer/answer/ICE WebSocket relay 和 `/healthz`；服务重启会使未完成 session 失效，不写入 PostgreSQL，也不承载媒体或 TURN。
+
+开发配置示例见 [explorex-signal-dev.env.example](./explorex-signal-dev.env.example)，systemd 形状见 [explorex-signal-dev.service.example](./explorex-signal-dev.service.example)。`ws://` 仅用于隔离 LAN contract smoke；App/生产验收必须改为受信任证书的 `wss://`，不能把本示例视为生产 TLS 配置。
+
+本阶段只允许 standalone contract smoke。Gateway 尚未把 `RealtimeProvider` 接入 `/streams`，Anyka 尚未消费 `device_wss_url`，所以启动该进程不会改变现有国内 API 或设备行为。
 
 ## DELL domestic-dev Gateway（V9.2）
 
