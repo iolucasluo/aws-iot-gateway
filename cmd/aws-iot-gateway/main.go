@@ -77,6 +77,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure internal app authentication: %v", err)
 	}
+	if err := gatewayruntime.RequireAWSDataPlane(config); err != nil {
+		log.Fatalf("refusing legacy AWS startup: %v", err)
+	}
 	awsConfig, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(config.AWSRegion))
 	if err != nil {
 		log.Fatalf("load AWS configuration: %v", err)
