@@ -12,6 +12,7 @@ import (
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/activation"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/httpapi"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/internalauth"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/binding"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/timebootstrap"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/domesticca"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/localsigner"
@@ -55,6 +56,14 @@ func runDomesticGateway(
 		return err
 	}
 	activationService := activation.NewServiceWithRepository(provisioner, activationRepository)
+	bindingRepository, err := gatewaypostgres.NewBindingRepository(database)
+	if err != nil {
+		return err
+	}
+	// Domestic staging uses the same provider-neutral binding contract as AWS.
+	// Recommissioning remains unavailable until a domestic device-runtime
+	// adapter is wired, but token issuance and offline cloud unbind are valid.
+	bindingService := binding.NewService(bindingRepository, nil, time.Now, nil)
 	timeSigner, err := localsigner.Load(config.TimeBootstrapLocalPrivateKeyPath)
 	if err != nil {
 		return err
@@ -72,6 +81,7 @@ func runDomesticGateway(
 	server := &http.Server{
 		Addr: config.ListenAddress,
 		Handler: httpapi.NewInternalAPI(activationService, verifier, httpapi.Dependencies{
+			Binding: bindingService,
 			TimeBootstrap: timeService, TimeBootstrapLimiter: rateLimiter,
 			DeviceRuntime: httpapi.DeviceRuntimeConfig{
 				ProviderMode: "domestic-dev", Endpoint: config.DomesticMQTTEndpoint,
