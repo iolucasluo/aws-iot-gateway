@@ -169,7 +169,7 @@ LAN 运行与本机 loopback 的差异：公网 DNS、HTTPS CA、运营商 NAT�
 | coturn | TURN 进程/端口形状验证 | 默认 loopback；无公网 HIL 结论 |
 | MinIO | 可选 ObjectStore 接口测试 | 仅 `object` profile、默认 loopback |
 | Gateway API | `domestic-dev` 独立窄运行时：activation、local CA、signed-time；AWS 组合仍走原入口 | 设备消息/状态、媒体、WebRTC、对象存储未接入时必须显式不可用；不开放公网 |
-| RTC signaling | Phase 4 只固化 adapter/protocol | 不启动假服务；真实 signaling、Anyka HIL 和公网 TURN 另行验收 |
+| RTC signaling | Phase 10.1 DELL 独立 ExploreX signaling control/data plane | `18084` 仅 LAN staging；Gateway composition、Anyka consumer 和公网 TURN 另行验收 |
 
 ## 运行约束
 
