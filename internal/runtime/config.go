@@ -34,6 +34,8 @@ func (app InternalApp) HasPermission(permission string) bool {
 type Config struct {
 	ListenAddress                    string
 	Environment                      string
+	ProviderMode                     string
+	ProviderCompositionPath          string
 	DatabaseURL                      string
 	RedisURL                         string
 	AWSRegion                        string
@@ -51,6 +53,12 @@ type Config struct {
 	TimeBootstrapSigner              string
 	TimeBootstrapKMSKeyID            string
 	TimeBootstrapLocalPrivateKeyPath string
+	DomesticMQTTEndpoint             string
+	DomesticMQTTTopicPrefix          string
+	DomesticCACertPath               string
+	DomesticCAKeyPath                string
+	DomesticSignerPrivateKeyPath     string
+	DomesticSignerKeyID              string
 	InternalApps                     []InternalApp
 	DirectACKSubscriberEnabled       bool
 }
@@ -69,6 +77,8 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	config := Config{
 		ListenAddress:                    valueOr(getenv("GATEWAY_LISTEN_ADDRESS"), ":14080"),
 		Environment:                      valueOr(getenv("GATEWAY_ENVIRONMENT"), "development"),
+		ProviderMode:                     valueOr(getenv("GATEWAY_PROVIDER_MODE"), "aws"),
+		ProviderCompositionPath:          strings.TrimSpace(getenv("GATEWAY_PROVIDER_COMPOSITION_PATH")),
 		DatabaseURL:                      databaseURL,
 		RedisURL:                         strings.TrimSpace(getenv("REDIS_URL")),
 		AWSRegion:                        strings.TrimSpace(getenv("AWS_REGION")),
@@ -85,44 +95,75 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		TimeBootstrapSigner:              valueOr(getenv("TIME_BOOTSTRAP_SIGNER"), "aws-kms"),
 		TimeBootstrapKMSKeyID:            strings.TrimSpace(getenv("TIME_BOOTSTRAP_KMS_KEY_ID")),
 		TimeBootstrapLocalPrivateKeyPath: strings.TrimSpace(getenv("TIME_BOOTSTRAP_LOCAL_PRIVATE_KEY_PATH")),
+		DomesticMQTTEndpoint:             strings.TrimSpace(getenv("DOMESTIC_MQTT_ENDPOINT")),
+		DomesticMQTTTopicPrefix:          strings.TrimSpace(getenv("DOMESTIC_MQTT_TOPIC_PREFIX")),
+		DomesticCACertPath:               strings.TrimSpace(getenv("DOMESTIC_CA_CERT_PATH")),
+		DomesticCAKeyPath:                strings.TrimSpace(getenv("DOMESTIC_CA_KEY_PATH")),
+		DomesticSignerPrivateKeyPath:     strings.TrimSpace(getenv("DOMESTIC_SIGNER_PRIVATE_KEY_PATH")),
+		DomesticSignerKeyID:              strings.TrimSpace(getenv("DOMESTIC_SIGNER_KEY_ID")),
 		DirectACKSubscriberEnabled:       directACKSubscriberEnabled,
 	}
 	if !validEnvironment(config.Environment) {
 		return Config{}, fmt.Errorf("GATEWAY_ENVIRONMENT must be development, staging, or production")
 	}
+	if config.ProviderMode != "aws" && config.ProviderMode != "domestic-dev" {
+		return Config{}, fmt.Errorf("GATEWAY_PROVIDER_MODE must be aws or domestic-dev")
+	}
+	if config.ProviderMode == "domestic-dev" {
+		if config.Environment != "development" {
+			return Config{}, fmt.Errorf("GATEWAY_PROVIDER_MODE=domestic-dev is allowed only when GATEWAY_ENVIRONMENT=development")
+		}
+		if config.ProviderCompositionPath == "" {
+			return Config{}, fmt.Errorf("GATEWAY_PROVIDER_COMPOSITION_PATH is required for domestic-dev")
+		}
+		if config.DomesticMQTTEndpoint == "" || config.DomesticMQTTTopicPrefix == "" ||
+			config.DomesticCACertPath == "" || config.DomesticCAKeyPath == "" ||
+			config.DomesticSignerPrivateKeyPath == "" || config.DomesticSignerKeyID == "" {
+			return Config{}, fmt.Errorf("DOMESTIC_MQTT_ENDPOINT, DOMESTIC_MQTT_TOPIC_PREFIX, DOMESTIC_CA_CERT_PATH, DOMESTIC_CA_KEY_PATH, DOMESTIC_SIGNER_PRIVATE_KEY_PATH, and DOMESTIC_SIGNER_KEY_ID are required for domestic-dev")
+		}
+		if strings.Contains(config.DomesticMQTTEndpoint, "amazonaws.com") ||
+			strings.Contains(config.DomesticCACertPath, "aws") || strings.Contains(config.DomesticCAKeyPath, "aws") {
+			return Config{}, fmt.Errorf("domestic-dev configuration must not reference AWS")
+		}
+		if directACKSubscriberEnabled {
+			return Config{}, fmt.Errorf("AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED is not allowed for domestic-dev")
+		}
+	}
 	if config.DirectACKSubscriberEnabled && config.Environment != "development" {
 		return Config{}, fmt.Errorf("AWS_IOT_DIRECT_ACK_SUBSCRIBER_ENABLED is allowed only when GATEWAY_ENVIRONMENT=development")
 	}
-	if config.AWSRegion == "" || config.DevicePolicyName == "" || config.IoTTopicPrefix == "" ||
-		config.IoTCredentialEndpoint == "" || config.IoTRoleAlias == "" || config.IoTShadowName == "" {
+	if config.ProviderMode == "aws" && (config.AWSRegion == "" || config.DevicePolicyName == "" || config.IoTTopicPrefix == "" ||
+		config.IoTCredentialEndpoint == "" || config.IoTRoleAlias == "" || config.IoTShadowName == "") {
 		return Config{}, fmt.Errorf("AWS_REGION, AWS_IOT_DEVICE_POLICY_NAME, AWS_IOT_TOPIC_PREFIX, AWS_IOT_CREDENTIAL_PROVIDER_ENDPOINT, AWS_IOT_ROLE_ALIAS, and AWS_IOT_SHADOW_NAME are required")
 	}
-	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`).MatchString(config.IoTTopicPrefix) {
+	if config.ProviderMode == "aws" && !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`).MatchString(config.IoTTopicPrefix) {
 		return Config{}, fmt.Errorf("AWS_IOT_TOPIC_PREFIX is invalid")
 	}
-	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{1,253}$`).MatchString(config.IoTCredentialEndpoint) ||
+	if config.ProviderMode == "aws" && (!regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{1,253}$`).MatchString(config.IoTCredentialEndpoint) ||
 		!strings.Contains(config.IoTCredentialEndpoint, ".credentials.iot.") ||
-		!strings.HasSuffix(config.IoTCredentialEndpoint, ".amazonaws.com") {
+		!strings.HasSuffix(config.IoTCredentialEndpoint, ".amazonaws.com")) {
 		return Config{}, fmt.Errorf("AWS_IOT_CREDENTIAL_PROVIDER_ENDPOINT is invalid")
 	}
-	if !regexp.MustCompile(`^[A-Za-z0-9_+=,.@-]{1,128}$`).MatchString(config.IoTRoleAlias) {
+	if config.ProviderMode == "aws" && !regexp.MustCompile(`^[A-Za-z0-9_+=,.@-]{1,128}$`).MatchString(config.IoTRoleAlias) {
 		return Config{}, fmt.Errorf("AWS_IOT_ROLE_ALIAS is invalid")
 	}
-	if !regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`).MatchString(config.IoTShadowName) {
+	if config.ProviderMode == "aws" && !regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`).MatchString(config.IoTShadowName) {
 		return Config{}, fmt.Errorf("AWS_IOT_SHADOW_NAME is invalid")
 	}
-	if err := validateHTTPURL("AWS_IOT_INGEST_QUEUE_URL", config.IngestQueueURL); err != nil {
-		return Config{}, err
-	}
-	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`).MatchString(config.KVSChannelPrefix) {
-		return Config{}, fmt.Errorf("AWS_KVS_CHANNEL_PREFIX is invalid")
-	}
-	if !regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`).MatchString(config.S3MediaBucket) {
-		return Config{}, fmt.Errorf("AWS_S3_MEDIA_BUCKET is invalid")
-	}
-	otaBucketPattern := regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
-	if config.S3OTABucket != "" && !otaBucketPattern.MatchString(config.S3OTABucket) {
-		return Config{}, fmt.Errorf("AWS_S3_OTA_BUCKET is invalid")
+	if config.ProviderMode == "aws" {
+		if err := validateHTTPURL("AWS_IOT_INGEST_QUEUE_URL", config.IngestQueueURL); err != nil {
+			return Config{}, err
+		}
+		if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`).MatchString(config.KVSChannelPrefix) {
+			return Config{}, fmt.Errorf("AWS_KVS_CHANNEL_PREFIX is invalid")
+		}
+		if !regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`).MatchString(config.S3MediaBucket) {
+			return Config{}, fmt.Errorf("AWS_S3_MEDIA_BUCKET is invalid")
+		}
+		otaBucketPattern := regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
+		if config.S3OTABucket != "" && !otaBucketPattern.MatchString(config.S3OTABucket) {
+			return Config{}, fmt.Errorf("AWS_S3_OTA_BUCKET is invalid")
+		}
 	}
 	rawOTAOrigins := strings.TrimSpace(getenv("OTA_DEV_ARTIFACT_ALLOWED_ORIGINS"))
 	if rawOTAOrigins != "" {
@@ -145,10 +186,10 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 			config.OTADevArtifactAllowedOrigins = append(config.OTADevArtifactAllowedOrigins, origin)
 		}
 	}
-	if config.Environment != "development" && config.S3OTABucket == "" {
+	if config.ProviderMode == "aws" && config.Environment != "development" && config.S3OTABucket == "" {
 		return Config{}, fmt.Errorf("AWS_S3_OTA_BUCKET is required outside development")
 	}
-	if config.Environment == "development" && config.S3OTABucket == "" && len(config.OTADevArtifactAllowedOrigins) == 0 {
+	if config.ProviderMode == "aws" && config.Environment == "development" && config.S3OTABucket == "" && len(config.OTADevArtifactAllowedOrigins) == 0 {
 		return Config{}, fmt.Errorf("AWS_S3_OTA_BUCKET or OTA_DEV_ARTIFACT_ALLOWED_ORIGINS is required for development OTA")
 	}
 	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`).MatchString(config.TimeBootstrapKeyID) {
