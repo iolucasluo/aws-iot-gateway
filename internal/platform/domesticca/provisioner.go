@@ -51,7 +51,7 @@ func New(config Config) (*Provisioner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load domestic CA certificate: %w", err)
 	}
-	if !ca.IsCA || !ca.BasicConstraintsValid || ca.KeyUsage&x509.KeyUsageCertSign == 0 {
+	if !ca.IsCA || !ca.BasicConstraintsValid || (ca.KeyUsage != 0 && ca.KeyUsage&x509.KeyUsageCertSign == 0) {
 		return nil, errors.New("domestic CA certificate is not permitted to sign certificates")
 	}
 	key, err := loadPrivateKey(config.CAKeyPath)

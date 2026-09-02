@@ -15,12 +15,12 @@ WebRTC、对象存储、队列和生产 HA 不在本契约中自动宣称完成�
 | identity | `identity.dell_dev_ca` | Gateway provider port；使用 operator-owned CA 目录签发设备 leaf certificate | DELL ignored volume；CA private key 不进 Git/日志 |
 | signer | `signer.dell_dev_local` | Gateway provider port；development-only 签名 key，供 signed-time | DELL ignored volume；不可用于 production |
 | messaging | `messaging.dell_mqtt` | 已验证 Mosquitto mTLS profile | DELL operator-owned cert/ACL 目录 |
-| time | `time.dell_signed` | 复用 `timebootstrap.Service`，Signer 由 composition 注入 | Gateway 只持有 provider handle，不导出 private key |
+| time | `signer.dell_dev_local` | 复用 `timebootstrap.Service`，development local signer 由运行配置注入 | Gateway 只持有 provider handle，不导出 private key |
 | realtime/object/queue | 未绑定 | 启动前报告 `BLOCKED`，不初始化 AWS SDK | N/A |
 
 国内组合启动前必须满足：
 
-1. `metadata.environment=domestic-dev` 且 `metadata.region` 以 `cn` 开头；
+1. `GATEWAY_ENVIRONMENT=development`、`GATEWAY_PROVIDER_MODE=domestic-dev`，且 composition `metadata.environment=development`、`metadata.region` 以 `cn` 开头；
 2. 不存在 AWS data-plane provider、AWS endpoint、KVS/Shadow/credential ref；
 3. identity、signer、messaging、time 的 provider instance 均已注册；
 4. CA 目录为 regular directory，private key 权限为 `0600`，且不在工作区 Git 跟踪路径；
@@ -37,7 +37,7 @@ WebRTC、对象存储、队列和生产 HA 不在本契约中自动宣称完成�
 
 禁止输出或持久化 AWS IoT credential endpoint、role alias、KVS channel prefix、Shadow name。设备 private key 始终由设备生成，Gateway/CA 不接收。
 
-签发必须绑定 `activation_id`、CSR digest 和 device ID；同一 activation 重试必须幂等，CSR 改变返回稳定冲突；过期、错 owner、重复激活和已撤销身份拒绝。
+当前 development adapter 在证书中绑定 device ID 和 CSR public key；activation ID、owner、TTL、幂等和安装 proof 由 Gateway activation 状态机/数据库绑定。把 activation ID 写入证书扩展属于后续 production CA adapter 契约，当前不宣称已实现。过期、错 owner、重复激活和已撤销身份仍必须由状态机拒绝。
 
 ## Signer/time contract
 

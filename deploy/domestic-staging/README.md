@@ -1,6 +1,17 @@
 # 国内 `cn-staging` 本地/ECS 模拟
 
-本目录是国内 `cn-staging` 的基础设施等价模拟。Phase 7.8 已提供显式的 composition preflight、国内 runtime capability audit、identity/signer compatibility bridge、provider adapter intake gate、messaging factory 和 provider-neutral 设备消息桥接验证基线；但 Gateway API 的国内身份/媒体 runtime wiring 尚未完成。该目录只启动 PostgreSQL、Redis、Mosquitto、coturn（及可选 MinIO），不伪造 signaling service。
+本目录是国内 `cn-staging` 的基础设施等价模拟。基础 Compose 只启动 PostgreSQL、Redis、Mosquitto、coturn（及可选 MinIO），不伪造 signaling service。Gateway 的 `domestic-dev` 窄运行时另有明确的 operator 配置，当前覆盖 activation、development CA 签发和 signed-time；设备命令/状态、媒体、WebRTC 和对象存储仍保持不可用并在 API 层显式返回 `503`。
+
+## DELL domestic-dev Gateway（V9.2）
+
+该实例使用独立目录和端口 `192.168.11.131:14083`，不会停止或重启既有 `14081/14082` Gateway。运行配置必须同时满足：
+
+- `GATEWAY_ENVIRONMENT=development`、`GATEWAY_PROVIDER_MODE=domestic-dev`；
+- `GATEWAY_PROVIDER_COMPOSITION_PATH` 指向 `metadata.environment=development`、`metadata.region=cn` 的 operator-owned composition；
+- CA 证书/私钥、signed-time local signer 和应用凭据位于 DELL ignored/operator-owned 路径；私钥为 `0600`；
+- `DOMESTIC_MQTT_ENDPOINT` 仅接受非 AWS 的 `mqtts://` endpoint；当前 API 只返回该 provider-neutral endpoint，不输出 AWS IoT 字段。
+
+可参考 [gateway-domestic-dev.env.example](./gateway-domestic-dev.env.example) 生成 operator 配置。该示例不含真实密码、证书或 token，不能直接启动。
 
 ## 本地启动
 
@@ -149,7 +160,7 @@ LAN 运行与本机 loopback 的差异：公网 DNS、HTTPS CA、运营商 NAT�
 | Mosquitto | 国内 MQTT adapter 的本地 harness | `mqtt` 为匿名 loopback harness；`mqtt-mtls` 为证书认证/ACL profile，默认 loopback |
 | coturn | TURN 进程/端口形状验证 | 默认 loopback；无公网 HIL 结论 |
 | MinIO | 可选 ObjectStore 接口测试 | 仅 `object` profile、默认 loopback |
-| Gateway API | Phase 7.8 仍不启动完整 API；提供 composition preflight + runtime audit + identity/signer bridge + provider intake gate + messaging factory/bridge smoke | 等真实国内身份/签名/对象/实时 provider wiring 完成后再接入共享应用 builder |
+| Gateway API | `domestic-dev` 独立窄运行时：activation、local CA、signed-time；AWS 组合仍走原入口 | 设备消息/状态、媒体、WebRTC、对象存储未接入时必须显式不可用；不开放公网 |
 | RTC signaling | Phase 4 只固化 adapter/protocol | 不启动假服务；真实 signaling、Anyka HIL 和公网 TURN 另行验收 |
 
 ## 运行约束
