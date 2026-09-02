@@ -32,10 +32,15 @@ instances:
     capability: signer
     driver: domestic_kms
     key_ref: secret://private-key
+  realtime.cn_staging:
+    capability: realtime
+    driver: explorex_signal
+    endpoint: http://127.0.0.1:18080
 bindings:
   identity: identity.cn_staging
   messaging: messaging.cn_staging
   signer: signer.cn_staging
+  realtime: realtime.cn_staging
 policy:
   allow_mixed_provider: true
 `
@@ -56,6 +61,7 @@ policy:
 		"binding=identity instance=identity.cn_staging capability=identity driver=ca_mqtt_identity status=BLOCKED",
 		"binding=messaging instance=messaging.cn_staging capability=messaging driver=mqtt_broker status=SUPPORTED",
 		"binding=signer instance=signer.cn_staging capability=signer driver=domestic_kms status=BLOCKED",
+		"binding=realtime instance=realtime.cn_staging capability=realtime driver=explorex_signal status=BLOCKED reason=provider adapter exists; application runtime wiring is pending",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("stdout=%q, missing %q", output, want)

@@ -1,6 +1,17 @@
 # ExploreX signaling protocol v1
 
-状态：Phase 4 adapter/spike 契约。该文档定义 provider-neutral 的信令边界；它不代表当前 Gateway 二进制已经启动该服务，也不代表 Anyka 固件已经消费该协议。
+状态：Phase 9.7 readiness audit；仍是 adapter/spike 契约。该文档定义 provider-neutral 的信令边界；它不代表当前 Gateway 二进制已经启动该服务，也不代表 Anyka 固件已经消费该协议。
+
+## 0.1 当前实现审计（2026-09-02）
+
+当前国内运行时有意保持 fail-closed，以下事实在接入真实 provider 前不得改写成“已支持”：
+
+- `cmd/aws-iot-gateway/domestic_runtime.go` 只装配 identity、binding、device command、MQTT ingest 和 signed-time；`httpapi.Dependencies.Media` 未注册，因此国内 `POST /streams` 返回 `503 device_service_unavailable`。
+- `internal/platform/explorexsignal.Client` 只实现本契约的 HTTP `POST/DELETE /v1/sessions` 与 `GET /healthz` adapter；它不实现 WebSocket server、session authority、ticket 一次性消费或 SDP/ICE 转发。
+- `internal/modules/media.StreamService` 仍消费 `provider.PlaybackProvider`，创建 KVS-style channel/playback；它没有把 `provider.RealtimeProvider` descriptor 接入设备 stream 生命周期。
+- Anyka feeder 的 `explorex_webrtc` 仍链接 KVS SDK 并调用 `kvs_master_run`，且要求 AWS Credential Provider、Role Alias、`ap-east-1` 和 AWS Root CA。国内 profile 缺少这些字段时必须拒绝启动；不能通过伪造配置绕过。
+
+因此，真实国内 WebRTC 的最小前置不是改 endpoint，而是同时具备：一个已部署且有认证/授权/一次性 ticket/TTL 证据的 signaling service、Gateway media→realtime composition wiring，以及 Anyka provider-neutral signaling consumer。三者缺一，cn-staging 维持 `BLOCKED`。
 
 ## 1. 边界
 
