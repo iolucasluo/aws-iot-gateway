@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -38,7 +39,16 @@ func NewClient(config aws.Config, bucket string) (*Client, error) {
 		return nil, fmt.Errorf("AWS S3 bucket is required")
 	}
 	client := s3.NewFromConfig(config)
-	return &Client{client: client, presign: s3.NewPresignClient(client), bucket: bucket}, nil
+	signer := v4.NewSigner(func(options *v4.SignerOptions) {
+		// S3 must receive x-amz-checksum-sha256 as a signed header so it
+		// validates and stores the object checksum; do not hoist it into
+		// the query string.
+		options.DisableHeaderHoisting = true
+	})
+	presign := s3.NewPresignClient(client, func(options *s3.PresignOptions) {
+		options.Presigner = signer
+	})
+	return &Client{client: client, presign: presign, bucket: bucket}, nil
 }
 
 func (client *Client) PrepareUpload(ctx context.Context, key string, size int64, sha256 string, ttl time.Duration) (ota.UploadTarget, error) {
@@ -61,6 +71,7 @@ func (client *Client) PrepareUpload(ctx context.Context, key string, size int64,
 		URL: result.URL, Method: http.MethodPut,
 		Headers: map[string]string{
 			"Content-Type": "application/gzip", "Content-Length": strconv.FormatInt(size, 10),
+			"x-amz-checksum-sha256": checksum,
 		},
 		ExpiresAt: time.Now().UTC().Add(ttl),
 	}, nil

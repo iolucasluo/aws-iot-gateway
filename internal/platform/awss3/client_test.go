@@ -114,11 +114,14 @@ func TestPrepareOTAUploadBindsS3NativeChecksum(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.Query().Get("X-Amz-Checksum-Sha256") != otaSHA256Base64(t) {
-		t.Fatalf("presigned checksum query = %q", parsed.RawQuery)
+	if parsed.Query().Get("X-Amz-Checksum-Sha256") != "" {
+		t.Fatalf("checksum must remain a signed upload header, query = %q", parsed.RawQuery)
 	}
-	if _, found := target.Headers["x-amz-checksum-sha256"]; found {
-		t.Fatalf("checksum already bound in presigned URL must not be resent as an unsigned header: %#v", target.Headers)
+	if target.Headers["x-amz-checksum-sha256"] != otaSHA256Base64(t) {
+		t.Fatalf("signed upload checksum header = %#v", target.Headers)
+	}
+	if !strings.Contains(parsed.Query().Get("X-Amz-SignedHeaders"), "x-amz-checksum-sha256") {
+		t.Fatalf("signed headers omit checksum: %q", parsed.Query().Get("X-Amz-SignedHeaders"))
 	}
 	if _, found := target.Headers["x-amz-meta-sha256"]; found {
 		t.Fatalf("uploader-controlled digest metadata is not a checksum: %#v", target.Headers)
