@@ -53,6 +53,29 @@ func TestPutURLWithSizeSignsContentLengthAndType(t *testing.T) {
 	}
 }
 
+func TestGetURLDoesNotRequireCallerSuppliedHeaders(t *testing.T) {
+	t.Parallel()
+	client, err := NewClient(aws.Config{
+		Region:                     "us-east-1",
+		Credentials:                credentials.NewStaticCredentialsProvider("AKID", "SECRET", "TOKEN"),
+		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenSupported,
+	}, "media-bucket")
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	rawURL, err := client.GetURL(context.Background(), "snapshots/id.jpg", 15*time.Minute)
+	if err != nil {
+		t.Fatalf("GetURL() error = %v", err)
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse presigned URL: %v", err)
+	}
+	if signedHeaders := parsed.Query().Get("X-Amz-SignedHeaders"); signedHeaders != "host" {
+		t.Fatalf("download URL requires caller-supplied headers: %q", signedHeaders)
+	}
+}
+
 type s3APIStub struct {
 	body    string
 	headErr error
