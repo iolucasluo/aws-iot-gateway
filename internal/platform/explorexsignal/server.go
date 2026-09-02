@@ -107,7 +107,7 @@ func NewServer(config ServerConfig) (*Server, error) {
 	}
 	newID := config.NewID
 	if newID == nil {
-		newID = randomOpaque
+		newID = randomSessionID
 	}
 	newTicket := config.NewTicket
 	if newTicket == nil {
@@ -241,6 +241,7 @@ func (server *Server) createSession(writer http.ResponseWriter, request *http.Re
 		ClientConfig: map[string]any{
 			"wss_url":           viewerURL,
 			"device_wss_url":    deviceURL,
+			"device_config":     map[string]any{"wss_url": deviceURL},
 			"ice_servers":       server.iceServers,
 			"ticket_expires_at": expiresAt.Format(time.RFC3339Nano),
 		},
@@ -546,6 +547,14 @@ func randomOpaque() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(value), nil
+}
+
+func randomSessionID() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", value), nil
 }
 
 func validOpaque(value string, maxLen int) bool {

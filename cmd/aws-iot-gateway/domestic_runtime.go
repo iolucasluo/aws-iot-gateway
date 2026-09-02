@@ -14,8 +14,10 @@ import (
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/internalauth"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/binding"
 	devicemodule "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/device"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/media"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/timebootstrap"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/domesticca"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/explorexsignal"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/localsigner"
 	gatewaypostgres "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/postgres"
 	redisstore "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/redis"
@@ -23,9 +25,9 @@ import (
 	gatewayruntime "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/runtime"
 )
 
-// runDomesticGateway is intentionally narrow. It owns only the domestic
-// development activation/time surface until provider-neutral device runtime,
-// media and realtime adapters are implemented and independently verified.
+// runDomesticGateway owns the domestic development activation/device/MQTT
+// surface and provider-neutral realtime session orchestration. Media remains
+// fail-closed at the device boundary until the Anyka consumer is available.
 func runDomesticGateway(
 	ctx context.Context,
 	config gatewayruntime.Config,
@@ -44,6 +46,20 @@ func runDomesticGateway(
 	}
 	if composition.Metadata.Environment != config.Environment || composition.Metadata.Region != "cn" {
 		return fmt.Errorf("domestic composition metadata does not match development cn runtime")
+	}
+	realtimeInstance := composition.Bindings["realtime"]
+	if realtimeInstance == "" || composition.Instances[realtimeInstance].Driver != "explorex_signal" {
+		return fmt.Errorf("domestic composition realtime binding must use explorex_signal")
+	}
+	realtimeClient, err := explorexsignal.NewClient(explorexsignal.Config{
+		Endpoint: config.DomesticRealtimeEndpoint, AuthorizationToken: config.DomesticRealtimeAuthorizationToken,
+		Capabilities: provider.RealtimeCapabilities{Protocols: []string{explorexsignal.Protocol}, DataChannel: true, AudioSend: true, AudioReceive: true},
+	})
+	if err != nil {
+		return err
+	}
+	if err := realtimeClient.Health(ctx); err != nil {
+		return fmt.Errorf("check domestic realtime provider: %w", err)
 	}
 	provisioner, err := domesticca.New(domesticca.Config{
 		Endpoint: config.DomesticMQTTEndpoint, CACertPath: config.DomesticCACertPath,
@@ -94,6 +110,11 @@ func runDomesticGateway(
 	deviceService := devicemodule.NewService(
 		devicePublisher, ackStore, commandRepository, config.DomesticMQTTTopicPrefix, nil,
 	)
+	streamRepository, err := gatewaypostgres.NewStreamRepository(database)
+	if err != nil {
+		return err
+	}
+	streamService := media.NewRealtimeStreamService(realtimeClient, realtimeInstance, deviceService, streamRepository, nil)
 	timeSigner, err := localsigner.Load(config.TimeBootstrapLocalPrivateKeyPath)
 	if err != nil {
 		return err
@@ -111,7 +132,7 @@ func runDomesticGateway(
 	server := &http.Server{
 		Addr: config.ListenAddress,
 		Handler: httpapi.NewInternalAPI(activationService, verifier, httpapi.Dependencies{
-			Binding:       bindingService,
+			Binding: bindingService, Media: streamService,
 			Device:        deviceService,
 			TimeBootstrap: timeService, TimeBootstrapLimiter: rateLimiter,
 			DeviceRuntime: httpapi.DeviceRuntimeConfig{
