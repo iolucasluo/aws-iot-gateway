@@ -936,7 +936,8 @@ func TestDevicePrepareUsesProviderNeutralDomesticRuntimeFields(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &installation); err != nil {
 		t.Fatalf("decode installation: %v", err)
 	}
-	if installation["endpoint"] != "mqtts://dell.local:8883" || installation["provider_mode"] != "domestic-dev" {
+	if installation["endpoint"] != "mqtts://dell.local:8883" || installation["provider_mode"] != "domestic-dev" ||
+		installation["topic_prefix"] != "domestic-staging" {
 		t.Fatalf("domestic installation = %#v", installation)
 	}
 	for _, key := range []string{"aws_iot_endpoint", "aws_region", "aws_iot_credential_endpoint", "aws_iot_role_alias", "aws_iot_shadow_name", "aws_kvs_channel_prefix"} {

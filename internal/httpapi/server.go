@@ -1000,6 +1000,7 @@ func (s server) prepareDevice(writer http.ResponseWriter, request *http.Request,
 		"certificate_id": installation.CertificateID, "certificate_pem": installation.Certificate,
 		"endpoint": installation.Endpoint, "installation_nonce": installation.ProofNonce, "pid": installation.PID,
 		"provider_mode": s.deviceRuntime.ProviderMode,
+		"topic_prefix":  s.deviceRuntime.TopicPrefix,
 	}
 	if response["provider_mode"] == "" {
 		response["provider_mode"] = "aws"
