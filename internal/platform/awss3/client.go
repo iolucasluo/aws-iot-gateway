@@ -61,7 +61,6 @@ func (client *Client) PrepareUpload(ctx context.Context, key string, size int64,
 		URL: result.URL, Method: http.MethodPut,
 		Headers: map[string]string{
 			"Content-Type": "application/gzip", "Content-Length": strconv.FormatInt(size, 10),
-			"x-amz-checksum-sha256": checksum,
 		},
 		ExpiresAt: time.Now().UTC().Add(ttl),
 	}, nil
