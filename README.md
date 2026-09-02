@@ -204,3 +204,10 @@ go vet ./...
 ```
 
 PostgreSQL integration test 通过 `TEST_POSTGRES_URL` 显式启用。真实 AWS 资源创建与部署只针对获授权的隔离 dev/staging 环境；凭据存在不等于生产授权。
+
+OTA 发布记录可选携带成对的 `target_environment_id` 与两位 `target_environment_code`，用于 Demo App
+从当前 Gateway 的 available 版本中选择环境迁移包。两字段必须同时存在，编号范围为 `01`–`99`；普通
+同环境 OTA 保持为空。环境迁移版本允许复用任意正整数 build，不受普通软件 OTA 的 build 单调递增规则
+限制；普通软件 OTA 仍通过无目标环境的唯一 build、App 过滤和设备端校验保持严格递增。Gateway 仍只以
+签名 release/manifest、目标 version/build 和设备重启事件判定
+升级结果，不把环境标签或 MQTT ACK 当作安装成功证据。

@@ -22,38 +22,45 @@ const (
 	DeploymentStateSucceeded  = "succeeded"
 	DeploymentStateRolledBack = "rolled_back"
 
+	UpgradeTypeApp         = "app"
+	UpgradeTypeEnvironment = "environment"
+
 	maxFirmwareBytes = int64(3 * 1024 * 1024)
 )
 
 var (
-	ErrInvalidInput       = errors.New("invalid OTA input")
-	ErrSourceURLForbidden = errors.New("OTA source URL is forbidden")
-	ErrDispatchFailed     = errors.New("OTA dispatch failed")
-	ErrNotFound           = errors.New("OTA record not found")
-	ErrConflict           = errors.New("OTA state conflict")
-	ErrDeviceOffline      = errors.New("OTA device is offline")
-	sha256Pattern         = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	tokenPattern          = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
-	uuidPattern           = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	ErrInvalidInput        = errors.New("invalid OTA input")
+	ErrSourceURLForbidden  = errors.New("OTA source URL is forbidden")
+	ErrDispatchFailed      = errors.New("OTA dispatch failed")
+	ErrNotFound            = errors.New("OTA record not found")
+	ErrConflict            = errors.New("OTA state conflict")
+	ErrDeviceOffline       = errors.New("OTA device is offline")
+	sha256Pattern          = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	environmentCodePattern = regexp.MustCompile(`^(0[1-9]|[1-9][0-9])$`)
+	tokenPattern           = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
+	uuidPattern            = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 )
 
 type FirmwareVersion struct {
-	ID               string     `json:"id"`
-	CreatedByAppID   string     `json:"-"`
-	IdempotencyKey   string     `json:"-"`
-	PID              string     `json:"pid"`
-	Version          string     `json:"version"`
-	FirmwareBuild    int64      `json:"firmware_build"`
-	SHA256           string     `json:"sha256"`
-	ManifestSHA256   string     `json:"manifest_sha256"`
-	FileSize         int64      `json:"file_size"`
-	ReleaseStatement string     `json:"-"`
-	Signature        string     `json:"-"`
-	ArtifactKey      string     `json:"-"`
-	SourceURL        string     `json:"-"`
-	Status           string     `json:"status"`
-	CreatedAt        time.Time  `json:"created_at"`
-	AvailableAt      *time.Time `json:"available_at,omitempty"`
+	ID                    string     `json:"id"`
+	CreatedByAppID        string     `json:"-"`
+	IdempotencyKey        string     `json:"-"`
+	PID                   string     `json:"pid"`
+	UpgradeType           string     `json:"upgrade_type,omitempty"`
+	TargetEnvironmentID   string     `json:"target_environment_id,omitempty"`
+	TargetEnvironmentCode string     `json:"target_environment_code,omitempty"`
+	Version               string     `json:"version"`
+	FirmwareBuild         int64      `json:"firmware_build"`
+	SHA256                string     `json:"sha256"`
+	ManifestSHA256        string     `json:"manifest_sha256"`
+	FileSize              int64      `json:"file_size"`
+	ReleaseStatement      string     `json:"-"`
+	Signature             string     `json:"-"`
+	ArtifactKey           string     `json:"-"`
+	SourceURL             string     `json:"-"`
+	Status                string     `json:"status"`
+	CreatedAt             time.Time  `json:"created_at"`
+	AvailableAt           *time.Time `json:"available_at,omitempty"`
 }
 
 type Deployment struct {
@@ -73,16 +80,19 @@ type Deployment struct {
 }
 
 type CreateFirmwareVersionInput struct {
-	IdempotencyKey   string `json:"idempotency_key"`
-	PID              string `json:"pid"`
-	Version          string `json:"version"`
-	FirmwareBuild    int64  `json:"firmware_build"`
-	SHA256           string `json:"sha256"`
-	ManifestSHA256   string `json:"manifest_sha256"`
-	FileSize         int64  `json:"file_size"`
-	ReleaseStatement string `json:"release_statement"`
-	Signature        string `json:"signature"`
-	SourceURL        string `json:"source_url,omitempty"`
+	IdempotencyKey        string `json:"idempotency_key"`
+	PID                   string `json:"pid"`
+	UpgradeType           string `json:"upgrade_type,omitempty"`
+	TargetEnvironmentID   string `json:"target_environment_id,omitempty"`
+	TargetEnvironmentCode string `json:"target_environment_code,omitempty"`
+	Version               string `json:"version"`
+	FirmwareBuild         int64  `json:"firmware_build"`
+	SHA256                string `json:"sha256"`
+	ManifestSHA256        string `json:"manifest_sha256"`
+	FileSize              int64  `json:"file_size"`
+	ReleaseStatement      string `json:"release_statement"`
+	Signature             string `json:"signature"`
+	SourceURL             string `json:"source_url,omitempty"`
 }
 
 type CreateDeploymentInput struct {
@@ -107,6 +117,7 @@ type Command struct {
 	DeviceID         string
 	DeviceSN         string
 	PID              string
+	UpgradeType      string
 	Version          string
 	FirmwareBuild    int64
 	DownloadURL      string
@@ -187,7 +198,8 @@ func (service *Service) CreateFirmwareVersion(ctx context.Context, internalAppID
 	now := service.now().UTC()
 	version := FirmwareVersion{
 		ID: id, CreatedByAppID: internalAppID, IdempotencyKey: input.IdempotencyKey,
-		PID: input.PID, Version: input.Version, FirmwareBuild: input.FirmwareBuild,
+		PID: input.PID, UpgradeType: normalizedUpgradeType(input), TargetEnvironmentID: input.TargetEnvironmentID, TargetEnvironmentCode: input.TargetEnvironmentCode,
+		Version: input.Version, FirmwareBuild: input.FirmwareBuild,
 		SHA256: input.SHA256, ManifestSHA256: input.ManifestSHA256, FileSize: input.FileSize,
 		ReleaseStatement: input.ReleaseStatement, Signature: input.Signature, CreatedAt: now,
 	}
@@ -209,6 +221,7 @@ func (service *Service) CreateFirmwareVersion(ctx context.Context, internalAppID
 	if err != nil {
 		return CreateFirmwareVersionResult{}, err
 	}
+	created.UpgradeType = version.UpgradeType
 	var upload *UploadTarget
 	if created.Status == FirmwareStatusUploading {
 		target, err := service.artifacts.PrepareUpload(ctx, created.ArtifactKey, created.FileSize, created.SHA256, 15*time.Minute)
@@ -244,7 +257,14 @@ func (service *Service) ListAvailableFirmwareVersions(ctx context.Context, pid s
 	if service == nil || service.repository == nil || !tokenPattern.MatchString(pid) {
 		return nil, ErrInvalidInput
 	}
-	return service.repository.ListAvailableFirmwareVersions(ctx, pid)
+	versions, err := service.repository.ListAvailableFirmwareVersions(ctx, pid)
+	if err != nil {
+		return nil, err
+	}
+	for index := range versions {
+		versions[index].UpgradeType = firmwareUpgradeType(versions[index])
+	}
+	return versions, nil
 }
 
 func (service *Service) CreateDeployment(ctx context.Context, internalAppID, deviceID, deviceSN string, input CreateDeploymentInput) (Deployment, error) {
@@ -284,7 +304,8 @@ func (service *Service) CreateDeployment(ctx context.Context, internalAppID, dev
 	}
 	err = service.commands.SendOTACommand(ctx, Command{
 		DeploymentID: deployment.ID, DeviceID: deviceID, DeviceSN: deviceSN, PID: version.PID,
-		Version: version.Version, FirmwareBuild: version.FirmwareBuild, DownloadURL: downloadURL,
+		UpgradeType: firmwareUpgradeType(version),
+		Version:     version.Version, FirmwareBuild: version.FirmwareBuild, DownloadURL: downloadURL,
 		SHA256: version.SHA256, FileSize: version.FileSize,
 		ReleaseStatement: version.ReleaseStatement, Signature: version.Signature,
 	})
@@ -309,14 +330,44 @@ func (service *Service) GetDeployment(ctx context.Context, internalAppID, device
 	return service.repository.GetDeployment(ctx, internalAppID, deviceID, deploymentID)
 }
 
+func normalizedUpgradeType(input CreateFirmwareVersionInput) string {
+	if input.UpgradeType != "" {
+		return input.UpgradeType
+	}
+	if input.TargetEnvironmentID != "" {
+		return UpgradeTypeEnvironment
+	}
+	return UpgradeTypeApp
+}
+
+func firmwareUpgradeType(version FirmwareVersion) string {
+	if version.UpgradeType != "" {
+		return version.UpgradeType
+	}
+	if version.TargetEnvironmentID != "" {
+		return UpgradeTypeEnvironment
+	}
+	return UpgradeTypeApp
+}
+
 func validateFirmwareInput(input CreateFirmwareVersionInput) error {
+	upgradeType := normalizedUpgradeType(input)
 	if !tokenPattern.MatchString(input.IdempotencyKey) || !tokenPattern.MatchString(input.PID) ||
 		!tokenPattern.MatchString(input.Version) || input.FirmwareBuild <= 0 || input.FirmwareBuild > 2147483647 || input.FileSize <= 0 ||
+		(upgradeType != UpgradeTypeApp && upgradeType != UpgradeTypeEnvironment) ||
+		(input.TargetEnvironmentID != "" && !tokenPattern.MatchString(input.TargetEnvironmentID)) ||
+		(input.TargetEnvironmentCode != "" && !environmentCodePattern.MatchString(input.TargetEnvironmentCode)) ||
+		((input.TargetEnvironmentID == "") != (input.TargetEnvironmentCode == "")) ||
+		(upgradeType == UpgradeTypeEnvironment && input.TargetEnvironmentID == "") ||
+		(upgradeType == UpgradeTypeApp && input.TargetEnvironmentID != "") ||
 		input.FileSize > maxFirmwareBytes || !sha256Pattern.MatchString(input.SHA256) ||
 		!sha256Pattern.MatchString(input.ManifestSHA256) {
 		return ErrInvalidInput
 	}
 	expected := fmt.Sprintf("schema=explorex-ota-v2|pid=%s|version=%s|firmware_build=%d|upgrade_type=app|manifest_sha256=%s|sha256=%s|file_size=%d", input.PID, input.Version, input.FirmwareBuild, input.ManifestSHA256, input.SHA256, input.FileSize)
+	if upgradeType == UpgradeTypeEnvironment {
+		expected = fmt.Sprintf("schema=explorex-ota-v3|pid=%s|version=%s|firmware_build=%d|upgrade_type=environment|target_environment_id=%s|target_environment_code=%s|manifest_sha256=%s|sha256=%s|file_size=%d", input.PID, input.Version, input.FirmwareBuild, input.TargetEnvironmentID, input.TargetEnvironmentCode, input.ManifestSHA256, input.SHA256, input.FileSize)
+	}
 	if input.ReleaseStatement != expected {
 		return ErrInvalidInput
 	}

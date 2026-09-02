@@ -118,6 +118,31 @@ func TestCreateFirmwareVersionReturnsChecksumBoundUploadAndKeepsSigningKeyOutOfG
 	}
 }
 
+func TestFirmwareEnvironmentMetadataIsValidatedAndReturned(t *testing.T) {
+	t.Parallel()
+	input := validFirmwareInput()
+	input.TargetEnvironmentID = "local-131"
+	input.TargetEnvironmentCode = "02"
+	input.ReleaseStatement = "schema=explorex-ota-v3|pid=feeder-x1|version=v1.2.3|firmware_build=42|upgrade_type=environment|target_environment_id=local-131|target_environment_code=02|manifest_sha256=" + input.ManifestSHA256 + "|sha256=" + input.SHA256 + "|file_size=1234"
+	service := NewService(&repositoryStub{}, artifactStoreStub{upload: UploadTarget{URL: "https://upload.example/firmware"}}, nil, "staging", nil, func() (string, error) { return testVersionID, nil }, time.Now)
+	created, err := service.CreateFirmwareVersion(context.Background(), "publisher", input)
+	if err != nil {
+		t.Fatalf("CreateFirmwareVersion() error = %v", err)
+	}
+	if created.FirmwareVersion.TargetEnvironmentID != "local-131" || created.FirmwareVersion.TargetEnvironmentCode != "02" {
+		t.Fatalf("environment metadata = %+v", created.FirmwareVersion)
+	}
+	for _, invalid := range []struct{ id, code string }{
+		{"", "02"}, {"local-131", "2"}, {"local/131", "02"},
+	} {
+		bad := validFirmwareInput()
+		bad.TargetEnvironmentID, bad.TargetEnvironmentCode = invalid.id, invalid.code
+		if _, err := service.CreateFirmwareVersion(context.Background(), "publisher", bad); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("invalid metadata %+v error = %v, want ErrInvalidInput", invalid, err)
+		}
+	}
+}
+
 func TestDevelopmentDirectURLMustMatchGatewayAllowlist(t *testing.T) {
 	t.Parallel()
 	input := validFirmwareInput()
@@ -212,5 +237,23 @@ func TestPublishedMetadataFitsTheDeviceCommandEnvelope(t *testing.T) {
 		[]string{"http://192.168.1.10:18080"}, func() (string, error) { return testVersionID, nil }, time.Now)
 	if _, err := service.CreateFirmwareVersion(context.Background(), "publisher", input); !errors.Is(err, ErrSourceURLForbidden) {
 		t.Fatalf("CreateFirmwareVersion() error = %v, want ErrSourceURLForbidden", err)
+	}
+}
+
+func TestEnvironmentMigrationDoesNotRequireMonotonicBuild(t *testing.T) {
+	t.Parallel()
+	input := validFirmwareInput()
+	input.UpgradeType = UpgradeTypeEnvironment
+	input.TargetEnvironmentID = "demo-local"
+	input.TargetEnvironmentCode = "02"
+	input.FirmwareBuild = 1
+	input.ReleaseStatement = "schema=explorex-ota-v3|pid=feeder-x1|version=v1.2.3|firmware_build=1|upgrade_type=environment|target_environment_id=demo-local|target_environment_code=02|manifest_sha256=" + input.ManifestSHA256 + "|sha256=" + input.SHA256 + "|file_size=1234"
+	service := NewService(&repositoryStub{}, artifactStoreStub{upload: UploadTarget{URL: "https://upload.example/firmware"}}, nil, "staging", nil, func() (string, error) { return testVersionID, nil }, time.Now)
+	created, err := service.CreateFirmwareVersion(context.Background(), "publisher", input)
+	if err != nil {
+		t.Fatalf("CreateFirmwareVersion() error = %v", err)
+	}
+	if created.FirmwareVersion.UpgradeType != UpgradeTypeEnvironment {
+		t.Fatalf("upgrade type = %q", created.FirmwareVersion.UpgradeType)
 	}
 }
