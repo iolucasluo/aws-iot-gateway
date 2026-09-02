@@ -105,8 +105,10 @@ func TestGetDeviceInfoProjectionUsesProviderNeutralCommand(t *testing.T) {
 	repository := &commandRepositoryStub{}
 	service := NewService(publisher, ackWaiterStub{ack: map[string]any{
 		"code": float64(0), "device_config": map[string]any{
-			"wifi_mac": "48:a4:fd:7d:6f:0b", "version": "dev-cn-20260902b", "firmware_build": "20260902",
+			"pid": "feeder-x1", "device_sn": "fdr-0001",
 		},
+		"wifi_mac": "48:a4:fd:7d:6f:0b", "version": "dev-cn-20260902d",
+		"build": float64(790), "ip": "192.168.11.228",
 	}}, repository, "cn-staging", func() (string, error) { return "device-info-session", nil })
 
 	projection, err := service.GetDeviceInfoProjection(context.Background(), "demo-local", "device-id", "fdr-0001", "feeder-x1")
@@ -114,7 +116,8 @@ func TestGetDeviceInfoProjectionUsesProviderNeutralCommand(t *testing.T) {
 		t.Fatalf("GetDeviceInfoProjection() error = %v", err)
 	}
 	if projection["sn"] != "fdr-0001" || projection["pid"] != "feeder-x1" || projection["online"] != true ||
-		projection["wifi_mac"] != "48:a4:fd:7d:6f:0b" || projection["version"] != "dev-cn-20260902b" {
+		projection["wifi_mac"] != "48:a4:fd:7d:6f:0b" || projection["version"] != "dev-cn-20260902d" ||
+		projection["build"] != float64(790) || projection["ip"] != "192.168.11.228" {
 		t.Fatalf("projection = %#v", projection)
 	}
 	var payload map[string]any

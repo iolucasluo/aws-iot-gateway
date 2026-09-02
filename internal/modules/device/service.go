@@ -169,12 +169,16 @@ func (service *Service) GetDeviceInfoProjection(
 	for _, key := range []string{"wifi_mac", "version", "build", "ip", "speaker_volume",
 		"motion_detection_enabled", "night_mode", "motion_sensitivity", "motion_report_interval_sec",
 		"video_resolution"} {
-		if value, found := config[key]; found {
+		if value, found := data[key]; found {
+			projection[key] = value
+		} else if value, found := config[key]; found {
 			projection[key] = value
 		}
 	}
 	if _, found := projection["build"]; !found {
-		if value, found := config["firmware_build"]; found {
+		if value, found := data["firmware_build"]; found {
+			projection["build"] = value
+		} else if value, found := config["firmware_build"]; found {
 			projection["build"] = value
 		}
 	}
