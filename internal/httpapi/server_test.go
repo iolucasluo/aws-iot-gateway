@@ -912,6 +912,40 @@ func TestDevicePrepareUsesCompatibilityDeviceActivationPath(t *testing.T) {
 	}
 }
 
+func TestDevicePrepareUsesProviderNeutralDomesticRuntimeFields(t *testing.T) {
+	t.Parallel()
+	service := activation.NewServiceWith(domesticTestProvisioner{})
+	created, err := service.Create(context.Background(), activation.CreateInput{
+		InternalAppID: "livpet-staging", BindingExternalUserID: "user-cn",
+		IdempotencyKey: "operation-domestic", Method: activation.MethodQR, PID: "lamp-x1",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	handler := newSignedTestHandler(t, service, time.UnixMilli(1_718_000_000_000), Dependencies{DeviceRuntime: DeviceRuntimeConfig{
+		ProviderMode: "domestic-dev", Endpoint: "mqtts://dell.local:8883", TopicPrefix: "domestic-staging",
+	}})
+	body := []byte(fmt.Sprintf(`{"activation_id":%q,"activation_code":%q,"csr_pem":"csr-pem"}`, created.ID, created.Code))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/device-activations/qr/prepare-installation", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("device prepare status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	var installation map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &installation); err != nil {
+		t.Fatalf("decode installation: %v", err)
+	}
+	if installation["endpoint"] != "mqtts://dell.local:8883" || installation["provider_mode"] != "domestic-dev" {
+		t.Fatalf("domestic installation = %#v", installation)
+	}
+	for _, key := range []string{"aws_iot_endpoint", "aws_region", "aws_iot_credential_endpoint", "aws_iot_role_alias", "aws_iot_shadow_name", "aws_kvs_channel_prefix"} {
+		if _, ok := installation[key]; ok {
+			t.Fatalf("domestic response leaked legacy AWS field %q: %#v", key, installation)
+		}
+	}
+}
+
 func TestLivPetActivationCreateAcceptsLegacyCommissioningEnvelope(t *testing.T) {
 	t.Parallel()
 	now := time.UnixMilli(1_718_000_000_000)
@@ -1125,6 +1159,17 @@ func (testProvisioner) Provision(_ context.Context, deviceSN, _ string) (activat
 		CertificateID:  "certificate-1",
 		CertificatePEM: "certificate-pem",
 		AWSIoTEndpoint: "example-ats.iot.ap-east-1.amazonaws.com",
+	}, nil
+}
+
+type domesticTestProvisioner struct{}
+
+func (domesticTestProvisioner) Provision(_ context.Context, deviceSN, _ string) (activation.PreparedIdentity, error) {
+	return activation.PreparedIdentity{
+		DeviceID:       deviceSN,
+		CertificateID:  "certificate-domestic-1",
+		CertificatePEM: "certificate-pem",
+		Endpoint:       "mqtts://dell.local:8883",
 	}, nil
 }
 

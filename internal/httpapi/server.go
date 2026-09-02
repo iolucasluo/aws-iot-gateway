@@ -35,6 +35,8 @@ type server struct {
 }
 
 type DeviceRuntimeConfig struct {
+	ProviderMode       string
+	Endpoint           string
 	AWSRegion          string
 	CredentialEndpoint string
 	RoleAlias          string
@@ -874,13 +876,17 @@ func (s server) listDevices(writer http.ResponseWriter, request *http.Request) {
 		if device.LastSeenAt != nil {
 			lastSeenAt = device.LastSeenAt.UTC().Format(time.RFC3339)
 		}
-		response = append(response, map[string]any{
+		item := map[string]any{
 			"device_sn": device.ID, "pid": device.PID, "status": device.Status,
 			"nickname": "", "is_subscription": false,
-			"activation_id": device.ActivationID, "aws_iot_endpoint": device.Endpoint,
+			"activation_id": device.ActivationID, "endpoint": device.Endpoint,
 			"binding_external_user_id": device.BindingExternalUserID,
 			"online":                   device.Online, "last_seen_at": lastSeenAt,
-		})
+		}
+		if s.deviceRuntime.ProviderMode == "" || s.deviceRuntime.ProviderMode == "aws" {
+			item["aws_iot_endpoint"] = device.Endpoint
+		}
+		response = append(response, item)
 	}
 	if body.Offset >= len(response) {
 		response = response[:0]
@@ -988,19 +994,26 @@ func (s server) prepareDevice(writer http.ResponseWriter, request *http.Request,
 		writeActivationError(writer, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]string{
+	response := map[string]string{
 		"activation_id": installation.ActivationID, "device_sn": installation.DeviceID,
 		"device_id": installation.DeviceID, "thing_name": installation.DeviceID,
-		"certificate_id":  installation.CertificateID,
-		"certificate_pem": installation.Certificate, "aws_iot_endpoint": installation.Endpoint,
-		"installation_nonce": installation.ProofNonce, "pid": installation.PID,
-		"aws_region":                  s.deviceRuntime.AWSRegion,
-		"aws_iot_credential_endpoint": s.deviceRuntime.CredentialEndpoint,
-		"aws_iot_role_alias":          s.deviceRuntime.RoleAlias,
-		"topic_prefix":                s.deviceRuntime.TopicPrefix,
-		"aws_iot_shadow_name":         s.deviceRuntime.ShadowName,
-		"aws_kvs_channel_prefix":      s.deviceRuntime.KVSChannelPrefix,
-	})
+		"certificate_id": installation.CertificateID, "certificate_pem": installation.Certificate,
+		"endpoint": installation.Endpoint, "installation_nonce": installation.ProofNonce, "pid": installation.PID,
+		"provider_mode": s.deviceRuntime.ProviderMode,
+	}
+	if response["provider_mode"] == "" {
+		response["provider_mode"] = "aws"
+	}
+	if response["provider_mode"] == "aws" {
+		response["aws_iot_endpoint"] = installation.Endpoint
+		response["aws_region"] = s.deviceRuntime.AWSRegion
+		response["aws_iot_credential_endpoint"] = s.deviceRuntime.CredentialEndpoint
+		response["aws_iot_role_alias"] = s.deviceRuntime.RoleAlias
+		response["topic_prefix"] = s.deviceRuntime.TopicPrefix
+		response["aws_iot_shadow_name"] = s.deviceRuntime.ShadowName
+		response["aws_kvs_channel_prefix"] = s.deviceRuntime.KVSChannelPrefix
+	}
+	writeJSON(writer, http.StatusOK, response)
 }
 
 func (s server) confirmDevice(writer http.ResponseWriter, request *http.Request) {

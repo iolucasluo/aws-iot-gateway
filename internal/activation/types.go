@@ -81,6 +81,9 @@ type PreparedIdentity struct {
 	DeviceID       string
 	CertificateID  string
 	CertificatePEM string
+	Endpoint       string
+	// AWSIoTEndpoint is retained for legacy AWS callers. New providers must
+	// populate Endpoint instead.
 	AWSIoTEndpoint string
 }
 

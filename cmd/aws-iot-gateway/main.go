@@ -78,6 +78,12 @@ func main() {
 		log.Fatalf("configure internal app authentication: %v", err)
 	}
 	if err := gatewayruntime.RequireAWSDataPlane(config); err != nil {
+		if config.ProviderMode == "domestic-dev" {
+			if err := runDomesticGateway(ctx, config, database, redis, verifier); err != nil {
+				log.Fatalf("start domestic development gateway: %v", err)
+			}
+			return
+		}
 		log.Fatalf("refusing legacy AWS startup: %v", err)
 	}
 	awsConfig, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(config.AWSRegion))
