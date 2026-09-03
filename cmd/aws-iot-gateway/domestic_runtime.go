@@ -77,10 +77,6 @@ func runDomesticGateway(
 	if err != nil {
 		return err
 	}
-	// Domestic staging uses the same provider-neutral binding contract as AWS.
-	// Recommissioning remains unavailable until a domestic device-runtime
-	// adapter is wired, but token issuance and offline cloud unbind are valid.
-	bindingService := binding.NewService(bindingRepository, nil, time.Now, nil)
 	eventRepository, err := gatewaypostgres.NewEventRepository(database)
 	if err != nil {
 		return err
@@ -110,6 +106,10 @@ func runDomesticGateway(
 	deviceService := devicemodule.NewService(
 		devicePublisher, ackStore, commandRepository, config.DomesticMQTTTopicPrefix, nil,
 	)
+	bindingService, err := newDomesticBindingService(bindingRepository, deviceService)
+	if err != nil {
+		return err
+	}
 	streamRepository, err := gatewaypostgres.NewStreamRepository(database)
 	if err != nil {
 		return err
@@ -149,6 +149,14 @@ func runDomesticGateway(
 		return err
 	}
 	return nil
+}
+
+func newDomesticBindingService(repository binding.Repository, commander binding.DeviceCommander) (*binding.Service, error) {
+	recommissioner, err := binding.NewDeviceRecommissioner(commander)
+	if err != nil {
+		return nil, err
+	}
+	return binding.NewService(repository, nil, time.Now, recommissioner), nil
 }
 
 func domesticMessagingEnvironment(config gatewayruntime.Config) func(string) string {
