@@ -1,10 +1,10 @@
 # ExploreX signaling protocol v1
 
-状态：Phase 9.7 readiness audit；仍是 adapter/spike 契约。该文档定义 provider-neutral 的信令边界；它不代表当前 Gateway 二进制已经启动该服务，也不代表 Anyka 固件已经消费该协议。
+状态：Phase 11.3 DELL LAN HIL 已验证；production 仍为 `NO-SHIP`。该文档定义 provider-neutral 的信令边界；协议可以由自建服务实现，也不改变 AWS KVS signaling 的独立兼容路径。
 
-## 0.1 当前实现审计（2026-09-02）
+## 0.1 历史 readiness 审计（2026-09-02）
 
-当前国内运行时有意保持 fail-closed，以下事实在接入真实 provider 前不得改写成“已支持”：
+下列事实记录接入前的 fail-closed 基线，已由后续实现和 2026-09-03 HIL 取代，不能再作为当前阻塞状态：
 
 - `cmd/aws-iot-gateway/domestic_runtime.go` 只装配 identity、binding、device command、MQTT ingest 和 signed-time；`httpapi.Dependencies.Media` 未注册，因此国内 `POST /streams` 返回 `503 device_service_unavailable`。
 - `internal/platform/explorexsignal.Client` 只实现本契约的 HTTP `POST/DELETE /v1/sessions` 与 `GET /healthz` adapter；它不实现 WebSocket server、session authority、ticket 一次性消费或 SDP/ICE 转发。
@@ -12,6 +12,14 @@
 - Anyka feeder 的 `explorex_webrtc` 仍链接 KVS SDK 并调用 `kvs_master_run`，且要求 AWS Credential Provider、Role Alias、`ap-east-1` 和 AWS Root CA。国内 profile 缺少这些字段时必须拒绝启动；不能通过伪造配置绕过。
 
 因此，真实国内 WebRTC 的最小前置不是改 endpoint，而是同时具备：一个已部署且有认证/授权/一次性 ticket/TTL 证据的 signaling service、Gateway media→realtime composition wiring，以及 Anyka provider-neutral signaling consumer。三者缺一，cn-staging 维持 `BLOCKED`。
+
+## 0.2 当前实现与 HIL（2026-09-03）
+
+- DELL 独立 single-node Compose 已运行真实 `explorex-signal-v1` HTTP/WebSocket 服务，Gateway 通过 provider-neutral realtime adapter 创建和关闭 session；ticket、TTL、幂等和设备/Viewer 角色均由 signaling 服务校验。
+- Anyka `composition-cn-staging` 消费 device config，通过 provider-neutral WebSocket/runtime 组合直接创建 PeerConnection；复用 KVS WebRTC core library 只作为 PeerConnection 实现，不访问 KVS signaling、AWS credential 或 AWS data plane。
+- Demo App 依据响应中的显式 `protocol` 分流，真实播放 feeder 视频；1920×1080、640×360、会话关闭后立即重连和设备断电重连均通过。
+- 任一 peer 断开会关闭整个 session 和对端连接，避免残留到 TTL 后才释放所导致的 `device_busy`。
+- 该 HIL 只覆盖 LAN HTTP/WS 和 direct ICE。公网 HTTPS/WSS、TURN relay、双向音频、DataChannel、长稳与容量仍未验证，production 继续 `NO-SHIP`。
 
 ## 1. 边界
 
@@ -99,4 +107,5 @@ Signaling → viewer：
 - API authentication、session authorization、device/binding ownership 和 ticket 一次性消费必须由 signaling service 实现；adapter 只做 transport/shape 校验。
 - 每次创建/关闭都必须带 request/session identity 和 TTL；重试只能复用同一 idempotency key。
 - 日志只允许记录 provider instance、request id、session 状态和错误类别，不记录 SDP、完整 URL、token 或 TURN credential。
-- 本阶段只验收 adapter 的 strict HTTP contract、App 的协议分流和 coturn 进程形状；真实 signaling service、真实 TURN 公网可达性、Anyka HIL 和生产性能留到后续验收。
+- DELL LAN 已验收 strict HTTP/WebSocket contract、App 协议分流、真实 signaling service、Anyka 视频 HIL 和 peer 断开清理。
+- coturn 仅完成进程/端口形状；真实 TURN 公网可达性、生产 TLS、性能与长稳留到国内云验收。

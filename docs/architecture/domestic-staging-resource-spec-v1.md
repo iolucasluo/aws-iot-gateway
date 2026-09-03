@@ -1,6 +1,6 @@
 # 国内 cn-staging 资源与 DELL/ECS 等价模拟清单 v1
 
-状态：LAN staging 已验证；单 ECS application packaging 进入 Phase 11.1（仍为 production NO-SHIP）
+状态：DELL 单节点 LAN HIL 已闭环（Phase 11.3）；真实国内云与 production 仍为 `NO-SHIP`
 
 ## 1. 决策边界
 
@@ -96,7 +96,7 @@ DELL 可模拟单 ECS 的条件：
 1. Ubuntu 能运行 Docker Engine 和 Compose v2。
 2. `nproc`、可用内存、可用磁盘达到本清单起步规格，或明确降低并发目标。
 3. 局域网设备能访问 DELL 上的 Gateway HTTPS、MQTT TLS、signaling 和 TURN 端口。
-4. DELL 的本地 CA/测试域名能被 App 与 feeder trust store 验证；不能把 LAN HTTP 当成 staging HTTPS。
+4. DELL 可在显式 Debug profile 下使用 LAN HTTP/WS 验证功能闭环；该结果必须标记为安全降级，不能等同于公网 HTTPS/WSS。MQTT 仍使用受控测试 CA 和 mTLS。
 5. 所有本地 secrets 放在 ignored、`0600` 文件或环境注入；不复制真实云凭据。
 
 ### 建议本地检查（只读）
@@ -123,7 +123,15 @@ ss -lntup
 | 供应商签名 | 本地 fake signer 或测试 KMS adapter | 国内 KMS/HSM 真实权限和轮换 |
 | OSS/COS | fake/minio 只能做接口测试 | 必须用真实 presign/checksum contract test |
 
-本地 Compose 通过不等于阿里云网络、域名、备案、云盘、运营商链路或真实 WebRTC 已通过。
+本地 Compose 和 LAN 真机视频通过，不等于阿里云网络、域名、备案、云盘、运营商 NAT 或公网 TURN/WebRTC 已通过。
+
+### 2026-09-03 DELL single-node HIL 结果
+
+- `PASS`：独立 Compose project 同机运行 PostgreSQL、Redis、MQTT mTLS、Gateway API、ExploreX signaling 和 coturn；seed、健康检查、状态卷重启恢复均通过。
+- `PASS`：`feeder-x1` 经 BLE 激活后在线，App 读取设备系统信息，并通过自建 signaling 播放真实 1920×1080/640×360 视频。
+- `PASS`：App 播放中断开后 signaling 会释放 session，立即重连不再返回 `device_busy`；设备正常断电重启后重新在线并恢复播放。
+- `ISOLATED`：既有 DELL Gateway/Compose project、端口和状态未修改；UFW 保持 inactive，Docker daemon 持久化代理未改。
+- `NOT VERIFIED`：公网 HTTPS/WSS、运营商 NAT、TURN relay、对象存储、OTA、生产 signer/信任根、备份恢复、容量和长稳。
 
 ## 6. 网络与安全组基线
 
@@ -153,14 +161,14 @@ ss -lntup
 Phase 0 只验收“清单完整、owner 明确、无秘密”；Phase 1 只验证本地/Docker 等价
 基础设施形状，不把它误报为真实国内云或 feeder HIL 已通过。不得以清单替代资源创建。
 
-进入 Phase 5 的真实国内 staging/HIL 前必须有：
+进入 Phase 5 的真实国内云 staging/HIL 前必须有：
 
-- [ ] DELL 只读硬件/软件检查输出。
-- [ ] Compose 服务图、端口、卷、备份和 secret 目录。
-- [ ] 国内域名/HTTPS/备案 owner 决策（可暂用本地受控 hostname，但要标记差异）。
-- [ ] MQTT 身份方案（自有 CA 或托管产品）和 ACL 样例。
-- [ ] WebRTC signaling/TURN 实施 owner 与板端 spike 入口。
-- [ ] 国内 signer 方案；禁止沿用 AWS KMS 隐性依赖。
+- [x] DELL 只读硬件/软件检查输出。
+- [x] Compose 服务图、端口、卷和 secret 目录；本地状态卷重启恢复已验证，正式备份恢复仍待云环境验收。
+- [x] 本地 LAN 明文降级边界已明确；国内域名、HTTPS 和备案 owner 仍待真实云环境决定。
+- [x] DELL 自有测试 CA、MQTT mTLS/ACL 与 feeder HIL；量产 CA 托管和轮换仍待实现。
+- [x] 自建 ExploreX signaling 已完成板端/App HIL；公网 TURN 仍待验证。
+- [x] staging operator-owned software signer 边界已明确；量产前仍必须接国内 KMS/HSM 或等价受控 signer。
 - [ ] OSS/COS bucket、生命周期、checksum 和最小权限方案。
 
 Phase 1 本地验收只要求：Compose `config`、四个必需服务 health、可选 MinIO

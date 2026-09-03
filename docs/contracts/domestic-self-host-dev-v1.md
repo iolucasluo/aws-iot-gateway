@@ -4,9 +4,9 @@
 
 在 DELL Ubuntu 上提供一套不访问 AWS 数据面的 `domestic-dev` 组合，用于 feeder staging/HIL。该组合只覆盖当前可验证的最小设备闭环：
 
-`App → Gateway activation API → 自建 Identity/CA → 设备运行证书 → 自建 MQTT/时间服务`
+`App → Gateway activation API → 自建 Identity/CA → 设备运行证书 → 自建 MQTT/时间服务 → 自建 signaling → WebRTC 视频`
 
-WebRTC、对象存储、队列和生产 HA 不在本契约中自动宣称完成。
+DELL LAN WebRTC 视频已经以独立 HIL 证据完成；对象存储、队列、公网 TURN 和生产 HA 不在本契约中自动宣称完成。
 
 ## 组合与隔离
 
@@ -16,7 +16,8 @@ WebRTC、对象存储、队列和生产 HA 不在本契约中自动宣称完成�
 | signer | `signer.dell_dev_local` | Gateway provider port；development-only 签名 key，供 signed-time | DELL ignored volume；不可用于 production |
 | messaging | `messaging.dell_mqtt` | 已验证 Mosquitto mTLS profile | DELL operator-owned cert/ACL 目录 |
 | time | `signer.dell_dev_local` | 复用 `timebootstrap.Service`，development local signer 由运行配置注入 | Gateway 只持有 provider handle，不导出 private key |
-| realtime/object/queue | 未绑定 | 启动前报告 `BLOCKED`，不初始化 AWS SDK | N/A |
+| realtime | `realtime.dell_signal` | ExploreX signaling + provider-neutral session adapter；LAN HIL 不依赖 AWS signaling/data plane | DELL signaling process；短期 session/ticket 只驻留内存 |
+| object/queue | 未绑定 | 启动前报告 `BLOCKED`，不初始化 AWS SDK | N/A |
 
 国内组合启动前必须满足：
 
@@ -58,4 +59,5 @@ App 继续使用 provider-neutral activation API；设备 runtime manifest 明�
 - host contract：composition 无 AWS data-plane、provider registry 完整、配置权限/路径 fail-closed；
 - Gateway integration：本地 CA 签发 CSR、重复/过期/错 owner 负向用例、signed-time 公钥验证；
 - DELL HIL：无 AWS 网络依赖下 App→Gateway→设备 activation、MQTT mTLS、设备状态；
-- 不在本阶段宣称 production CA/HSM、公网 TLS、国内 WebRTC 或阿里云托管服务可用。
+- DELL realtime HIL：自建 signaling、Anyka direct PeerConnection、App 真机视频、清晰度切换、断开清理与重连；
+- 不在本阶段宣称 production CA/HSM、公网 TLS/TURN、双向音频、DataChannel、对象存储、OTA 或阿里云托管服务可用。
