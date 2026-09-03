@@ -98,6 +98,82 @@ func TestServerCreatesIdempotentSessionAndRelaysSingleUseTickets(t *testing.T) {
 	}
 }
 
+func TestServerClosesSessionWhenEitherPeerDisconnects(t *testing.T) {
+	for _, disconnectedRole := range []role{viewerRole, deviceRole} {
+		t.Run(string(disconnectedRole), func(t *testing.T) {
+			server, err := NewServer(ServerConfig{
+				AuthorizationToken: "gateway-secret",
+				PublicBaseURL:      "http://signal.test",
+				Now:                func() time.Time { return time.Unix(1_800_000_000, 0).UTC() },
+				NewID:              func() (string, error) { return "session-1", nil },
+				NewTicket:          func() (string, error) { return "ticket-1", nil },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ts := httptest.NewServer(server.Handler())
+			defer ts.Close()
+
+			expiresAt := time.Unix(1_800_000_300, 0).UTC().Format(time.RFC3339)
+			body := `{"device_id":"device-1","binding_id":"binding-1","request_id":"request-1","requested_protocol":"explorex-signal-v1","capabilities":{"video_receive":true},"expires_at":"` + expiresAt + `"}`
+			request, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/sessions", strings.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("Authorization", "Bearer gateway-secret")
+			request.Header.Set("Idempotency-Key", "request-1")
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			var session sessionResponse
+			if response.StatusCode != http.StatusCreated || json.NewDecoder(response.Body).Decode(&session) != nil {
+				t.Fatalf("create status = %d", response.StatusCode)
+			}
+
+			viewerURL := strings.Replace(session.ClientConfig["wss_url"].(string), "ws://signal.test", "ws"+strings.TrimPrefix(ts.URL, "http"), 1)
+			deviceURL := strings.Replace(session.ClientConfig["device_wss_url"].(string), "ws://signal.test", "ws"+strings.TrimPrefix(ts.URL, "http"), 1)
+			viewer, _, err := websocket.DefaultDialer.Dial(viewerURL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer viewer.Close()
+			device, _, err := websocket.DefaultDialer.Dial(deviceURL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer device.Close()
+
+			disconnected, counterpart := viewer, device
+			if disconnectedRole == deviceRole {
+				disconnected, counterpart = device, viewer
+			}
+			if err := disconnected.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			deadline := time.Now().Add(time.Second)
+			for {
+				server.mu.Lock()
+				_, exists := server.sessions[session.SessionID]
+				server.mu.Unlock()
+				if !exists {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("session remained active after %s disconnected", disconnectedRole)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			_ = counterpart.SetReadDeadline(time.Now().Add(time.Second))
+			if _, _, err := counterpart.ReadMessage(); err == nil {
+				t.Fatal("counterpart remained connected after session closed")
+			}
+		})
+	}
+}
+
 func TestServerRejectsInvalidAuthAndIdempotency(t *testing.T) {
 	server, err := NewServer(ServerConfig{AuthorizationToken: "gateway-secret", PublicBaseURL: "http://signal.test"})
 	if err != nil {

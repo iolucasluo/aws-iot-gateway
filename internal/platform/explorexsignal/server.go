@@ -349,16 +349,24 @@ func (server *Server) serveWebSocket(writer http.ResponseWriter, request *http.R
 func (server *Server) readPeer(sessionID string, session *signalSession, peer *signalPeer) {
 	defer func() {
 		_ = peer.conn.Close()
+		var counterpart *signalPeer
 		server.mu.Lock()
 		if current := server.sessions[sessionID]; current == session {
+			session.closed = true
 			if peer.role == viewerRole && session.viewerConn == peer {
 				session.viewerConn = nil
+				counterpart = session.deviceConn
+				session.deviceConn = nil
 			}
 			if peer.role == deviceRole && session.deviceConn == peer {
 				session.deviceConn = nil
+				counterpart = session.viewerConn
+				session.viewerConn = nil
 			}
+			delete(server.sessions, sessionID)
 		}
 		server.mu.Unlock()
+		closePeer(counterpart)
 	}()
 	peer.conn.SetReadLimit(maxWebSocketBytes)
 	for {
