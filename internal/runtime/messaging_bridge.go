@@ -2,8 +2,11 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -54,10 +57,26 @@ func (publisher *DevicePublisher) Publish(ctx context.Context, topic string, pay
 		Payload:   append([]byte(nil), payload...),
 		ExpiresAt: publisher.now().UTC().Add(defaultDeviceMessageTTL),
 	}
+	tracePublish(message.Topic, message.Payload)
 	if err := publisher.client.Publish(ctx, message); err != nil {
 		return fmt.Errorf("publish device message: %w", err)
 	}
 	return nil
+}
+
+func tracePublish(topic string, payload []byte) {
+	if os.Getenv("EXPLOREX_MQTT_TRACE") != "1" {
+		return
+	}
+	var envelope struct {
+		Action    string `json:"action"`
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		log.Printf("mqttbridge: publish topic=%s bytes=%d decode_error=%v", topic, len(payload), err)
+		return
+	}
+	log.Printf("mqttbridge: publish topic=%s action=%s session=%s bytes=%d", topic, envelope.Action, envelope.SessionID, len(payload))
 }
 
 // SubscriptionSet owns all device message subscriptions created by the

@@ -306,7 +306,11 @@ func capabilitiesMap(requested StreamCapabilities) (map[string]any, error) {
 
 func parseICEServers(value any) ([]ICEServer, error) {
 	if value == nil {
-		return nil, nil
+		// A provider may legitimately have no relay/STUN entries on an
+		// isolated LAN. Keep the wire shape JSON [] (rather than null) so
+		// consumers can distinguish an empty candidate list from a malformed
+		// response and choose their own provider-neutral fallback policy.
+		return []ICEServer{}, nil
 	}
 	encoded, err := json.Marshal(value)
 	if err != nil {

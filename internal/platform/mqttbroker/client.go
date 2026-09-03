@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"regexp"
@@ -158,6 +159,7 @@ func (client *Client) Connect(ctx context.Context) error {
 		client.broker.Disconnect(0)
 		return fmt.Errorf("connect MQTT broker: %w", err)
 	}
+	tracef("connected client topic_prefix=%s", client.topicPrefix)
 	return nil
 }
 
@@ -195,12 +197,19 @@ func (client *Client) Subscribe(ctx context.Context, subscription provider.Devic
 	}
 	token := client.broker.Subscribe(subscription.TopicFilter, 1, func(_ mqtt.Client, message mqtt.Message) {
 		payload := append([]byte(nil), message.Payload()...)
-		_ = subscription.Handler(ctx, provider.DeviceMessage{Topic: message.Topic(), Payload: payload})
+		err := subscription.Handler(ctx, provider.DeviceMessage{Topic: message.Topic(), Payload: payload})
+		tracef("message topic=%s bytes=%d handler_error=%v", message.Topic(), len(payload), err)
 	})
 	if err := waitToken(ctx, token, client.connectTimeout); err != nil {
 		return nil, fmt.Errorf("subscribe MQTT topic: %w", err)
 	}
 	return &subscriptionHandle{client: client.broker, filter: subscription.TopicFilter}, nil
+}
+
+func tracef(format string, args ...any) {
+	if os.Getenv("EXPLOREX_MQTT_TRACE") == "1" {
+		log.Printf("mqttbroker: "+format, args...)
+	}
 }
 
 func (client *Client) Health(ctx context.Context) error {
