@@ -49,6 +49,8 @@ services:
 
   mqtt:
     image: eclipse-mosquitto:2.0.20
+    profiles:
+      - harness
     ports:
       - "${CN_STAGING_EDGE_BIND_ADDRESS:-127.0.0.1}:${CN_STAGING_MQTT_PORT:-51883}:1883"
     volumes:
@@ -71,6 +73,7 @@ services:
     image: eclipse-mosquitto:2.0.20
     profiles:
       - mtls
+      - single-node
     entrypoint:
       - /usr/sbin/mosquitto
     command:
@@ -106,13 +109,13 @@ services:
       - --lt-cred-mech
       - --realm=${CN_STAGING_TURN_REALM:?CN_STAGING_TURN_REALM is required}
       - --user=${CN_STAGING_TURN_USER:?CN_STAGING_TURN_USER is required}:${CN_STAGING_TURN_PASSWORD:?CN_STAGING_TURN_PASSWORD is required}
-      - --min-port=49160
-      - --max-port=49200
+      - --min-port=${CN_STAGING_TURN_RELAY_MIN_PORT:-49160}
+      - --max-port=${CN_STAGING_TURN_RELAY_MAX_PORT:-49200}
     ports:
       - "${CN_STAGING_EDGE_BIND_ADDRESS:-127.0.0.1}:${CN_STAGING_TURN_UDP_PORT:-53478}:3478/udp"
       - "${CN_STAGING_EDGE_BIND_ADDRESS:-127.0.0.1}:${CN_STAGING_TURN_TCP_PORT:-53478}:3478/tcp"
-      - "${CN_STAGING_EDGE_BIND_ADDRESS:-127.0.0.1}:49160-49200:49160-49200/udp"
-      - "${CN_STAGING_EDGE_BIND_ADDRESS:-127.0.0.1}:49160-49200:49160-49200/tcp"
+      - "${CN_STAGING_EDGE_BIND_ADDRESS:-127.0.0.1}:${CN_STAGING_TURN_RELAY_MIN_PORT:-49160}-${CN_STAGING_TURN_RELAY_MAX_PORT:-49200}:${CN_STAGING_TURN_RELAY_MIN_PORT:-49160}-${CN_STAGING_TURN_RELAY_MAX_PORT:-49200}/udp"
+      - "${CN_STAGING_EDGE_BIND_ADDRESS:-127.0.0.1}:${CN_STAGING_TURN_RELAY_MIN_PORT:-49160}-${CN_STAGING_TURN_RELAY_MAX_PORT:-49200}:${CN_STAGING_TURN_RELAY_MIN_PORT:-49160}-${CN_STAGING_TURN_RELAY_MAX_PORT:-49200}/tcp"
     healthcheck:
       test:
         - CMD

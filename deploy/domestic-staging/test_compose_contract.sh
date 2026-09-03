@@ -35,7 +35,7 @@ test -f "$COMPOSE_FILE" || {
   exit 1
 }
 
-rendered=$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config --format json)
+rendered=$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" --profile harness config --format json)
 rendered_with_object=$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" --profile object config --format json)
 rendered_with_mtls=$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" --profile mtls config --format json)
 python3 - "$rendered" "$rendered_with_object" "$rendered_with_mtls" <<'PY'

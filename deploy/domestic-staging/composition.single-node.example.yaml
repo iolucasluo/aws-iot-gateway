@@ -1,0 +1,38 @@
+api_version: explorex.io/v1
+kind: ProviderComposition
+metadata:
+  id: domestic-single-node-dev
+  environment: development
+  region: cn
+
+# Container-internal provider endpoints. Device/App endpoints remain in the
+# operator-owned Gateway/signaling env files because those clients run outside
+# the Docker networks.
+instances:
+  identity.local_ca:
+    capability: identity
+    driver: ca_mqtt_identity
+    credential_ref: config://domestic-single-node/identity-ca
+  messaging.local_mqtt:
+    capability: messaging
+    driver: mqtt_broker
+    endpoint: mqtts://mqtt-mtls:8883
+    trust_anchor_ref: config://domestic-single-node/mqtt-ca
+  realtime.local_signal:
+    capability: realtime
+    driver: explorex_signal
+    endpoint: http://rtc-signaling:18084
+  signer.local_file:
+    capability: signer
+    driver: local
+    key_ref: config://domestic-single-node/time-signer
+
+bindings:
+  identity: identity.local_ca
+  messaging: messaging.local_mqtt
+  realtime: realtime.local_signal
+  signer: signer.local_file
+
+policy:
+  forbid_regions: [aws]
+  allow_mixed_provider: true

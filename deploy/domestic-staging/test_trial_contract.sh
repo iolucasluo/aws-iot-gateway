@@ -59,8 +59,8 @@ for marker in (
     require(marker in composition_text, f"composition is missing {marker}")
 
 for marker in (
-    "不伪造 signaling service",
-    "真实 signaling",
+    "真实自建 signaling",
+    "single-node",
     "coturn",
 ):
     require(marker in readme_text, f"staging README is missing boundary marker {marker}")
@@ -74,5 +74,5 @@ for marker in (
 ):
     require(marker in signaling_text, f"signaling contract is missing {marker}")
 
-print("domestic trial preflight contract: NO-SHIP (runtime wiring and feeder HIL pending)")
+print("domestic trial preflight contract: NO-SHIP (public-network and production gates pending)")
 PY

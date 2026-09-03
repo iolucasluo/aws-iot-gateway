@@ -1,6 +1,6 @@
 # 国内 `cn-staging` 本地/ECS 模拟
 
-本目录是国内 `cn-staging` 的基础设施等价模拟。基础 Compose 启动 PostgreSQL、Redis、Mosquitto、coturn（及可选 MinIO）；自建 signaling 由独立 `explorex-signal` 进程承载。Gateway 的 `domestic-dev` 窄运行时另有明确的 operator 配置，覆盖 activation、development CA 签发、signed-time 和 provider-neutral MQTT ingest；在 Gateway composition wiring 与 Anyka consumer 完成前，媒体/WebRTC API 仍保持不可用并在 API 层显式返回 `503`。
+本目录是国内 `cn-staging` 的基础设施等价模拟。`compose.yaml` 提供 PostgreSQL、Redis、Mosquitto、coturn（及可选 MinIO）基础设施；`compose.single-node.yaml` 在同一 Docker host 上增加数据库 seed、Gateway API 和真实自建 signaling。当前 `domestic-dev` 窄运行时已覆盖 activation、development CA、signed-time、provider-neutral MQTT ingest 与 realtime session；它只用于 DELL/LAN staging，不等同于公网或量产配置。
 
 ## ExploreX signaling（Phase 10.1）
 
@@ -8,7 +8,7 @@
 
 开发配置示例见 [explorex-signal-dev.env.example](./explorex-signal-dev.env.example)，systemd 形状见 [explorex-signal-dev.service.example](./explorex-signal-dev.service.example)。`ws://` 仅用于隔离 LAN contract smoke；App/生产验收必须改为受信任证书的 `wss://`，不能把本示例视为生产 TLS 配置。
 
-本阶段只允许 standalone contract smoke。Gateway 尚未把 `RealtimeProvider` 接入 `/streams`，Anyka 尚未消费 `device_wss_url`，所以启动该进程不会改变现有国内 API 或设备行为。
+Gateway 已通过 `RealtimeProvider` 接入 `/streams`，Anyka 国内 consumer 和 Demo App 已在 DELL LAN 完成真实媒体闭环。`explorex-signal` 仍保持独立进程/容器边界，不并入 Gateway 进程；它只转发 SDP/ICE，不承载媒体。
 
 ## DELL domestic-dev Gateway（V9.2）
 
@@ -33,9 +33,9 @@ cp deploy/domestic-staging/.env.example .env.cn-staging.local
 # 只在本机 ignored 文件中替换 replace-with-local-secret
 # state bind 保持 127.0.0.1；仅受控协议 harness 才设置 edge bind
 docker compose --env-file .env.cn-staging.local \
-  -f deploy/domestic-staging/compose.yaml config --quiet
+  -f deploy/domestic-staging/compose.yaml --profile harness config --quiet
 docker compose --env-file .env.cn-staging.local \
-  -f deploy/domestic-staging/compose.yaml up -d --wait postgres redis mqtt turn
+  -f deploy/domestic-staging/compose.yaml --profile harness up -d --wait postgres redis mqtt turn
 ```
 
 可选启动 MinIO 只用于 ObjectStore adapter 的本地接口测试：
@@ -44,6 +44,42 @@ docker compose --env-file .env.cn-staging.local \
 docker compose --env-file .env.cn-staging.local \
   -f deploy/domestic-staging/compose.yaml --profile object up -d --wait
 ```
+
+## 单 ECS / DELL 单机 application profile（Phase 11.1）
+
+`single-node` profile 是从现有 systemd + Compose 联调形态迁移到“一台 ECS、一个 Compose project”的最小部署边界。它复用同一份 Gateway image 运行三个职责明确的容器：一次性 `gateway-seed`、长期 `gateway-api`、长期 `rtc-signaling`。PostgreSQL、Redis、MQTT mTLS 和 coturn 继续来自基础 Compose；匿名 `mqtt` harness 不会随该 profile 启动。
+
+先在 operator-owned 目录准备配置，真实值不得提交：
+
+```sh
+cp deploy/domestic-staging/single-node.stack.env.example .env.cn-single-node.local
+install -d -m 0700 /opt/explorex-cn-single-node/config
+install -d -o 10001 -g 10001 -m 0700 /opt/explorex-cn-single-node/runtime
+cp deploy/domestic-staging/gateway-single-node.env.example /opt/explorex-cn-single-node/config/gateway.env
+cp deploy/domestic-staging/signal-single-node.env.example /opt/explorex-cn-single-node/config/signal.env
+cp deploy/domestic-staging/composition.single-node.example.yaml /opt/explorex-cn-single-node/runtime/composition.yaml
+chmod 0600 /opt/explorex-cn-single-node/config/*.env
+# 再填入应用凭据、数据库/Redis URL、LAN/public endpoints、CA/signer 和 MQTT mTLS 文件。
+```
+
+`runtime` 内 Gateway 要读取的 composition、证书和私钥必须归 UID/GID `10001` 所有；私钥使用 `0400`，普通材料使用 `0444`。MQTT server certificate 的 SAN 必须同时覆盖容器内名称 `mqtt-mtls` 与 feeder 使用的 LAN/public hostname，否则 Gateway 内部连接或设备外部连接必有一侧证书校验失败。
+
+渲染与启动必须同时加载 base 和 overlay；overlay 固定使用独立 Compose project `explorex-cn-single-node`。示例把数据库、Redis、MQTT、TURN/relay、Gateway 与 signaling 全部放在独立端口，不会占用 DELL 现有 project、volumes、`14081/14082/14083/18084` 或现有 TURN range：
+
+```sh
+docker compose --env-file .env.cn-single-node.local \
+  -f deploy/domestic-staging/compose.yaml \
+  -f deploy/domestic-staging/compose.single-node.yaml \
+  --profile single-node config --quiet
+docker compose --env-file .env.cn-single-node.local \
+  -f deploy/domestic-staging/compose.yaml \
+  -f deploy/domestic-staging/compose.single-node.yaml \
+  --profile single-node up -d --build --wait
+```
+
+这个 profile 有意不启动 `iot-gateway-event-worker`：现有 worker 是 AWS SQS/IoT lifecycle consumer，国内 MQTT ingest 已由 provider-neutral runtime 承载；在有国内 outbox/queue contract 前启动它会重新引入 AWS，而不是“补齐服务”。MinIO 仍只在 `--profile object` 下提供接口验证，当前 Gateway 尚未把国内 ObjectStore 接入产品链路。
+
+LAN 允许按用户要求继续使用 HTTP/WS；真实 ECS 对公网发布前必须增加 reverse proxy、HTTPS/WSS、域名/备案与安全组验收。反向代理不是 DELL 功能闭环的依赖，因此不在本 profile 里伪造证书或域名。实际 ECS 镜像必须把 `CN_STAGING_GATEWAY_IMAGE` 固定到 registry digest 并用 `--no-build` 启动；本地 `:local + --build` 只用于 DELL 源码验收。
 
 试产前置 contract（只验证边界，不把 NO-SHIP 变成可部署）：
 
@@ -86,7 +122,7 @@ runtime audit 标记为 `BLOCKED`。
 真实 provider adapter 的进入条件、secret/trust-root ownership、生命周期、超时/重试、持久化、回滚和三维安全证据，统一见
 [`docs/contracts/domestic-provider-adapter-intake-v1.md`](../../docs/contracts/domestic-provider-adapter-intake-v1.md)。没有官方协议和 sandbox 证据时，intake 保持 `INTAKE-BLOCKED`，不注册 fake provider、不启动完整国内 API。
 
-该检查必须输出 `NO-SHIP`，直到真实 signaling service 和 feeder HIL 均有当前版本证据；MQTT ingest wiring 本身由 Gateway 启动时完成健康检查和四类 canonical topic 订阅。
+该检查仍必须输出 `NO-SHIP`。真实自建 signaling 和 feeder LAN HIL 已有当前版本证据，但公网 HTTPS/WSS/TURN、持久固件/信任根、对象存储、备份恢复和量产 signer 尚未完成，不能用 LAN 结果替代生产门禁。
 
 停止只影响本 Compose project：
 
@@ -170,13 +206,13 @@ LAN 运行与本机 loopback 的差异：公网 DNS、HTTPS CA、运营商 NAT�
 | Mosquitto | 国内 MQTT adapter 的本地 harness | `mqtt` 为匿名 loopback harness；`mqtt-mtls` 为证书认证/ACL profile，默认 loopback |
 | coturn | TURN 进程/端口形状验证 | 默认 loopback；无公网 HIL 结论 |
 | MinIO | 可选 ObjectStore 接口测试 | 仅 `object` profile、默认 loopback |
-| Gateway API | `domestic-dev` 独立窄运行时：activation、local CA、signed-time；AWS 组合仍走原入口 | 设备消息/状态、媒体、WebRTC、对象存储未接入时必须显式不可用；不开放公网 |
-| RTC signaling | Phase 10.1 DELL 独立 ExploreX signaling control/data plane | `18084` 仅 LAN staging；Gateway composition、Anyka consumer 和公网 TURN 另行验收 |
+| Gateway API | `domestic-dev`：activation、local CA、signed-time、设备消息/状态与 realtime orchestration；AWS 组合仍走原入口 | 单机 profile 默认 `24083` loopback；LAN override 仅限受控联调 |
+| RTC signaling | 真实 ExploreX signaling control/data plane，不承载媒体 | 单机 profile 默认 `28084` loopback；公网 WSS/TURN 另行验收 |
 
 ## 运行约束
 
 - Compose 文件不得出现 AWS/SQS/KVS、长期 key、token、证书私钥或生产 endpoint。
-- `private` 是容器内部网络；`edge` 仅承载需要发布的 MQTT/TURN 端口；`host-access` 只挂 PostgreSQL/Redis 以提供 loopback 诊断。
+- `private` 是 state 网络，`application` 是 Gateway/signaling 内部网络；二者均为 internal。`edge` 只承载显式发布端口；`host-access` 只挂 PostgreSQL/Redis 以提供 loopback 诊断。
 - stateful volume 需要备份/恢复演练；单 ECS 仅承诺可恢复，不承诺 HA。
 - `composition.cn-staging.example.yaml` 只描述 provider instance 形状，不是可部署 secrets 文件。
 - 该目录的 contract test 只验证 Compose 形状和 fail-closed 边界，不替代真实云、真机或性能验收。

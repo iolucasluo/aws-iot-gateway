@@ -1,6 +1,6 @@
 # 国内 cn-staging 资源与 DELL/ECS 等价模拟清单 v1
 
-状态：Draft（Phase 0；资源创建前必须验收）
+状态：LAN staging 已验证；单 ECS application packaging 进入 Phase 11.1（仍为 production NO-SHIP）
 
 ## 1. 决策边界
 
@@ -22,12 +22,11 @@
 
 ## 3. Docker Compose 服务边界
 
-### 必需
+### 当前单机 staging 必需
 
 ```text
-reverse-proxy       443/TCP，唯一公网 HTTP 入口
 gateway-api         activation、binding、device API
-gateway-worker      event/outbox/异步 lifecycle
+gateway-seed        一次性 migration/seed，不作为长期服务
 postgres            权威业务数据，只绑定 localhost/内部网络
 redis               nonce、限流、短期协调状态
 mqtt-broker         国内 MQTT adapter 的本地等价实现
@@ -35,12 +34,23 @@ rtc-signaling       ExploreX signaling adapter
 coturn              3478 UDP/TCP、5349 TLS（按需要开放）
 ```
 
+现有 `iot-gateway-event-worker` 依赖 AWS SQS/IoT lifecycle，国内单机不得启动。国内 MQTT ingest 已在 `gateway-api` 的 provider-neutral runtime 中运行；只有出现真实 outbox/queue 契约后才新增国内 worker，不能用 AWS worker 冒充。
+
+### 真实公网 ECS 增量必需
+
+```text
+reverse-proxy       443/TCP，唯一公网 HTTP/WSS 入口
+domain/certificate  公网域名、备案、HTTPS/WSS 证书与轮换
+security-group      仅开放 443、8883、3478/5349 和受控 TURN relay range
+backup/monitoring   PostgreSQL 恢复演练、磁盘/CPU/RAM/连接数告警
+```
+
 ### 可选
 
 ```text
 minio               仅用于本地对象存储 adapter 测试；不能证明 OSS/COS 签名完全等价
 otel/metrics        本地观测验证
-pgbackrest           PostgreSQL 备份工具
+pgbackrest          PostgreSQL 备份工具
 ```
 
 PostgreSQL `5432`、Redis `6379`、broker 管理端口和内部 metrics 不得暴露公网。公网只允许 443、MQTTS `8883`（若设备直连）、TURN 所需端口。
@@ -53,12 +63,12 @@ PostgreSQL `5432`、Redis `6379`、broker 管理端口和内部 metrics 不得�
 - [ ] 云盘：系统盘 + 独立数据盘；开启磁盘监控和快照策略。
 - [ ] 域名/DNS：Gateway API origin、MQTT broker hostname、RTC/TURN hostname；域名归属和证书 owner 明确。
 - [ ] HTTPS 证书：Gateway API、RTC signaling、TURN TLS（如启用）；证书轮换负责人明确。
-- [ ] PostgreSQL：如果暂时与 ECS 同机，必须配置每日备份和恢复演练；迁移托管 RDS 时只替换 DSN，不改领域代码。
-- [ ] Redis：同机仅用于 staging；nonce/限流数据不作为业务权威，重启恢复策略写入 runbook。
+- [ ] PostgreSQL：第一版与 ECS 同机，必须配置每日备份和恢复演练；未来迁移托管 RDS 时只替换 DSN，不改领域代码。
+- [ ] Redis：第一版与 ECS 同机；nonce/限流数据不作为业务权威，重启恢复策略写入 runbook。
 - [ ] MQTT broker：自管 EMQX/标准 broker 或已验证的国内托管 MQTT；必须确定 mTLS/ACL/设备身份方案。
 - [ ] WebRTC：信令服务、STUN/TURN 公网地址和 UDP 可达性；必须完成板端协议 spike。
 - [ ] 对象存储：OSS bucket（媒体、OTA 可分桶或不同 instance）；开启最小权限、生命周期、服务端加密和审计。
-- [ ] 签名服务：国内 KMS/HSM 或等价受控 signer；不能把 Gateway staging 的非 development signer 继续指向 AWS KMS。
+- [ ] 签名服务：当前 staging 使用 ECS operator-owned software key，仅限 `development`。量产前必须接国内 KMS/HSM 或等价受控 signer，不能沿用 software key 或 AWS KMS 隐性依赖。
 - [ ] 日志/监控：ECS、Docker、PostgreSQL、broker、signaling、TURN 的 CPU/RAM/磁盘/连接数/错误率告警。
 
 ### 候选/后置
