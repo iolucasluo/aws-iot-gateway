@@ -64,7 +64,7 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 
 设备子路由覆盖 detail、shadow、commands、schedules、events、streams、local-media-sessions、snapshots、recordings、feed-audio 和 ota-deployments。Bearer `/v1/activations`、`/v1/devices` 和旧 `/v1/device-activations/{id}/*` 已从 router 删除。完整目标路由和阶段验收快照见根仓 `docs/branches/.archived/wicgeechan/2026-08-17/2026-08-13-internal-aws-api-implementation-plan.md`；当前未完成项见 `docs/branches/iot-flash-develop-internal-aws-follow-ups.md`。
 
-OTA 不使用 AWS IoT Jobs。发布方先创建版本：staging/production 得到 15 分钟 presigned PUT，上传时必须携带响应中的 Content-Type、Content-Length 和 `x-amz-checksum-sha256`，S3 校验对象字节后再调用 `complete`；development 还可提交 origin 已列入 `OTA_DEV_ARTIFACT_ALLOWED_ORIGINS` 的局域网 `source_url`。Gateway 永不接收签名私钥。Demo App 只对声明 `ota.app.v1` 的设备展示升级入口，创建单设备 deployment 后轮询。HTTP 202 和设备 ACK 仅表示 `accepted`；只有重启 `boot` 事件的 version/build 与目标精确一致才转为 `succeeded`，安装后回到其他版本则记为 `rolled_back`。
+OTA 不使用 AWS IoT Jobs。发布方先创建版本：staging/production 得到 15 分钟 presigned PUT，SHA-256 checksum 作为已签名的 `x-amz-checksum-sha256` header 绑定，上传方必须原样携带响应 `upload.headers`，S3 校验对象字节后再调用 `complete`；development 还可提交 origin 已列入 `OTA_DEV_ARTIFACT_ALLOWED_ORIGINS` 的局域网 `source_url`。Gateway 永不接收签名私钥。Demo App 只对声明 `ota.app.v1` 的设备展示升级入口，创建单设备 deployment 后轮询。HTTP 202 和设备 ACK 仅表示 `accepted`；只有重启 `boot` 事件的 version/build 与目标精确一致才转为 `succeeded`，安装后回到其他版本则记为 `rolled_back`。
 
 同一设备最多一条 active deployment；设备必须有三分钟内的在线 presence，且通用 `commands` 不能冒充 `ota_install`。当前不提供 campaign、定时调度、批量发布、离线队列或自动重试。
 
@@ -204,3 +204,10 @@ go vet ./...
 ```
 
 PostgreSQL integration test 通过 `TEST_POSTGRES_URL` 显式启用。真实 AWS 资源创建与部署只针对获授权的隔离 dev/staging 环境；凭据存在不等于生产授权。
+
+OTA 发布记录可选携带成对的 `target_environment_id` 与两位 `target_environment_code`，用于 Demo App
+从当前 Gateway 的 available 版本中选择环境迁移包。两字段必须同时存在，编号范围为 `01`–`99`；普通
+同环境 OTA 保持为空。环境迁移版本允许复用任意正整数 build，不受普通软件 OTA 的 build 单调递增规则
+限制；普通软件 OTA 仍通过无目标环境的唯一 build、App 过滤和设备端校验保持严格递增。Gateway 仍只以
+签名 release/manifest、目标 version/build 和设备重启事件判定
+升级结果，不把环境标签或 MQTT ACK 当作安装成功证据。

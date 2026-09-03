@@ -54,6 +54,21 @@ class ChangeSetGuardTests(unittest.TestCase):
 
         self.assertEqual(GUARD.validate_changes(changes), [])
 
+    def test_accepts_new_resource_without_replacement(self) -> None:
+        changes = {
+            "Changes": [
+                {
+                    "ResourceChange": {
+                        "Action": "Add",
+                        "LogicalResourceId": "OTABucket",
+                        "ResourceType": "AWS::S3::Bucket",
+                    }
+                }
+            ]
+        }
+
+        self.assertEqual(GUARD.validate_changes(changes), [])
+
     def test_accepts_api_task_role_reference_propagation_without_role_replacement(self) -> None:
         api_task = replacement("APITaskDefinition")
         api_task["ResourceChange"]["Details"].append(

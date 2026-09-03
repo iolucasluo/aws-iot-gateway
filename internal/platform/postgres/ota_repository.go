@@ -31,12 +31,12 @@ func (repository *OTARepository) CreateFirmwareVersion(ctx context.Context, vers
 	}
 	commandTag, err := repository.pool.Exec(ctx, `
 		INSERT INTO ota_firmware_versions (
-			id, created_by_internal_app_id, idempotency_key, pid, version, firmware_build,
+			id, created_by_internal_app_id, idempotency_key, pid, target_environment_id, target_environment_code, version, firmware_build,
 			sha256, manifest_sha256, file_size, release_statement, signature,
 			artifact_key, source_url, status, available_at, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16)
+		) VALUES ($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,''),$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18)
 		ON CONFLICT (created_by_internal_app_id, idempotency_key) DO NOTHING
-	`, version.ID, version.CreatedByAppID, version.IdempotencyKey, version.PID, version.Version,
+	`, version.ID, version.CreatedByAppID, version.IdempotencyKey, version.PID, version.TargetEnvironmentID, version.TargetEnvironmentCode, version.Version,
 		version.FirmwareBuild, version.SHA256, version.ManifestSHA256, version.FileSize,
 		version.ReleaseStatement, version.Signature, artifactKey, sourceURL, version.Status,
 		version.AvailableAt, version.CreatedAt)
@@ -53,7 +53,8 @@ func (repository *OTARepository) CreateFirmwareVersion(ctx context.Context, vers
 	if err != nil {
 		return ota.FirmwareVersion{}, err
 	}
-	if created.PID != version.PID || created.Version != version.Version ||
+	if created.PID != version.PID || created.TargetEnvironmentID != version.TargetEnvironmentID ||
+		created.TargetEnvironmentCode != version.TargetEnvironmentCode || created.Version != version.Version ||
 		created.FirmwareBuild != version.FirmwareBuild || created.SHA256 != version.SHA256 ||
 		created.ManifestSHA256 != version.ManifestSHA256 || created.FileSize != version.FileSize ||
 		created.ReleaseStatement != version.ReleaseStatement || created.Signature != version.Signature ||
@@ -65,7 +66,8 @@ func (repository *OTARepository) CreateFirmwareVersion(ctx context.Context, vers
 
 func (repository *OTARepository) GetFirmwareVersionForPublisher(ctx context.Context, internalAppID, versionID string) (ota.FirmwareVersion, error) {
 	return scanOTAFirmwareVersion(repository.pool.QueryRow(ctx, `
-		SELECT id::text, created_by_internal_app_id, idempotency_key, pid, version,
+		SELECT id::text, created_by_internal_app_id, idempotency_key, pid,
+		       COALESCE(target_environment_id,''), COALESCE(target_environment_code,''), version,
 		       firmware_build, sha256, manifest_sha256, file_size, release_statement,
 		       signature, COALESCE(artifact_key,''), COALESCE(source_url,''), status,
 		       created_at, available_at
@@ -76,7 +78,8 @@ func (repository *OTARepository) GetFirmwareVersionForPublisher(ctx context.Cont
 
 func (repository *OTARepository) getFirmwareVersionByIdempotency(ctx context.Context, internalAppID, idempotencyKey string) (ota.FirmwareVersion, error) {
 	return scanOTAFirmwareVersion(repository.pool.QueryRow(ctx, `
-		SELECT id::text, created_by_internal_app_id, idempotency_key, pid, version,
+		SELECT id::text, created_by_internal_app_id, idempotency_key, pid,
+		       COALESCE(target_environment_id,''), COALESCE(target_environment_code,''), version,
 		       firmware_build, sha256, manifest_sha256, file_size, release_statement,
 		       signature, COALESCE(artifact_key,''), COALESCE(source_url,''), status,
 		       created_at, available_at
@@ -102,7 +105,8 @@ func (repository *OTARepository) CompleteFirmwareVersion(ctx context.Context, in
 
 func (repository *OTARepository) ListAvailableFirmwareVersions(ctx context.Context, pid string) ([]ota.FirmwareVersion, error) {
 	rows, err := repository.pool.Query(ctx, `
-		SELECT id::text, created_by_internal_app_id, idempotency_key, pid, version,
+		SELECT id::text, created_by_internal_app_id, idempotency_key, pid,
+		       COALESCE(target_environment_id,''), COALESCE(target_environment_code,''), version,
 		       firmware_build, sha256, manifest_sha256, file_size, release_statement,
 		       signature, COALESCE(artifact_key,''), COALESCE(source_url,''), status,
 		       created_at, available_at
@@ -154,7 +158,8 @@ func (repository *OTARepository) CreateDeployment(ctx context.Context, deploymen
 		return ota.Deployment{}, ota.FirmwareVersion{}, ota.ErrDeviceOffline
 	}
 	version, err := scanOTAFirmwareVersion(transaction.QueryRow(ctx, `
-		SELECT id::text, created_by_internal_app_id, idempotency_key, pid, version,
+		SELECT id::text, created_by_internal_app_id, idempotency_key, pid,
+		       COALESCE(target_environment_id,''), COALESCE(target_environment_code,''), version,
 		       firmware_build, sha256, manifest_sha256, file_size, release_statement,
 		       signature, COALESCE(artifact_key,''), COALESCE(source_url,''), status,
 		       created_at, available_at
@@ -250,7 +255,7 @@ func scanOTAFirmwareVersion(row rowScanner) (ota.FirmwareVersion, error) {
 	var version ota.FirmwareVersion
 	if err := row.Scan(
 		&version.ID, &version.CreatedByAppID, &version.IdempotencyKey, &version.PID,
-		&version.Version, &version.FirmwareBuild, &version.SHA256, &version.ManifestSHA256,
+		&version.TargetEnvironmentID, &version.TargetEnvironmentCode, &version.Version, &version.FirmwareBuild, &version.SHA256, &version.ManifestSHA256,
 		&version.FileSize, &version.ReleaseStatement, &version.Signature, &version.ArtifactKey,
 		&version.SourceURL, &version.Status, &version.CreatedAt, &version.AvailableAt,
 	); err != nil {

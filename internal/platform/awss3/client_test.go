@@ -53,6 +53,29 @@ func TestPutURLWithSizeSignsContentLengthAndType(t *testing.T) {
 	}
 }
 
+func TestGetURLDoesNotRequireCallerSuppliedHeaders(t *testing.T) {
+	t.Parallel()
+	client, err := NewClient(aws.Config{
+		Region:                     "us-east-1",
+		Credentials:                credentials.NewStaticCredentialsProvider("AKID", "SECRET", "TOKEN"),
+		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenSupported,
+	}, "media-bucket")
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	rawURL, err := client.GetURL(context.Background(), "snapshots/id.jpg", 15*time.Minute)
+	if err != nil {
+		t.Fatalf("GetURL() error = %v", err)
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse presigned URL: %v", err)
+	}
+	if signedHeaders := parsed.Query().Get("X-Amz-SignedHeaders"); signedHeaders != "host" {
+		t.Fatalf("download URL requires caller-supplied headers: %q", signedHeaders)
+	}
+}
+
 type s3APIStub struct {
 	body    string
 	headErr error
@@ -110,8 +133,18 @@ func TestPrepareOTAUploadBindsS3NativeChecksum(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	parsed, err := url.Parse(target.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Query().Get("X-Amz-Checksum-Sha256") != "" {
+		t.Fatalf("checksum must remain a signed upload header, query = %q", parsed.RawQuery)
+	}
 	if target.Headers["x-amz-checksum-sha256"] != otaSHA256Base64(t) {
-		t.Fatalf("upload checksum headers = %#v", target.Headers)
+		t.Fatalf("signed upload checksum header = %#v", target.Headers)
+	}
+	if !strings.Contains(parsed.Query().Get("X-Amz-SignedHeaders"), "x-amz-checksum-sha256") {
+		t.Fatalf("signed headers omit checksum: %q", parsed.Query().Get("X-Amz-SignedHeaders"))
 	}
 	if _, found := target.Headers["x-amz-meta-sha256"]; found {
 		t.Fatalf("uploader-controlled digest metadata is not a checksum: %#v", target.Headers)

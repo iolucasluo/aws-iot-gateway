@@ -53,6 +53,9 @@ def validate_changes(document: dict[str, Any]) -> list[str]:
         if not isinstance(resource_type, str) or not resource_type:
             errors.append(f"change {index} has invalid ResourceType")
             continue
+        if action == "Add" and replacement is None:
+            # CloudFormation omits Replacement for a newly-created resource.
+            continue
         if not isinstance(replacement, str) or replacement not in REPLACEMENT_VALUES:
             errors.append(f"change {index} has unsupported Replacement: {replacement!r}")
             continue
