@@ -74,6 +74,56 @@ func TestRunLocalCanPublishCurrentAndNextTimeBootstrapKeys(t *testing.T) {
 	}
 }
 
+func TestRunLocalWritesDevelopmentContractFromPublicKey(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	publicKeyPath := filepath.Join(directory, "time-bootstrap-current.der")
+	writeP256PublicKey(t, publicKeyPath)
+	output := filepath.Join(directory, "contract")
+	err := run(context.Background(), []string{
+		"local",
+		"--out", output,
+		"--service-url", "http://api-staging.example.test",
+		"--time-bootstrap-url", "http://api-staging.example.test/api/v1/device-time/bootstrap",
+		"--key-id", "time-cn-cloud-staging-g1",
+		"--public-key", publicKeyPath,
+	})
+	if err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+	contract, err := devicebootstrap.Load(output)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if contract.Environment != "development" ||
+		contract.TimeBootstrap.Keys[0].Kid != "time-cn-cloud-staging-g1" {
+		t.Fatalf("contract = %#v", contract)
+	}
+}
+
+func TestRunLocalRejectsAmbiguousCurrentKeySource(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	privateKeyPath := filepath.Join(directory, "time-bootstrap-private.pem")
+	publicKeyPath := filepath.Join(directory, "time-bootstrap-current.der")
+	writePrivateKey(t, privateKeyPath)
+	writeP256PublicKey(t, publicKeyPath)
+	err := run(context.Background(), []string{
+		"local",
+		"--out", filepath.Join(directory, "contract"),
+		"--service-url", "http://api-staging.example.test",
+		"--time-bootstrap-url", "http://api-staging.example.test/api/v1/device-time/bootstrap",
+		"--key-id", "time-cn-cloud-staging-g1",
+		"--private-key", privateKeyPath,
+		"--public-key", publicKeyPath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "exactly one of --private-key or --public-key") {
+		t.Fatalf("run() error = %v, want ambiguous key source rejection", err)
+	}
+}
+
 func TestRunAWSReleaseRequiresACompleteRotationKeyPairBeforeAWSAccess(t *testing.T) {
 	t.Parallel()
 

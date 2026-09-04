@@ -46,9 +46,12 @@ AWS 运行时继续使用既有 `awss3` adapter；国内运行时只根据当前
 
 1. ECS Compose 中 PostgreSQL、Redis、MQTT、TURN、Gateway、signaling、edge proxy 全部健康；seed 退出码为 0。
 2. `api-staging.livpet.top/healthz` 和 `rtc-staging.livpet.top/healthz` 返回 200；Gateway 容器没有 AWS data-plane 配置。
-3. MQTT 匿名连接失败，Gateway mTLS smoke 成功；feeder 首激活后在线并可完成至少一个有 ACK 的控制命令。
-4. App 的环境 ID 为 `cn-cloud-staging`，PID 为 `feeder-x1`；设备列表、详情和系统信息均来自 ECS。
-5. WebRTC 至少一次进入 connected 并持续渲染视频；ICE 证据能区分 direct 与 relay，TURN 分配日志或 candidate pair 证明 relay 路径可用时记为 PASS。
+3. feeder 使用 Gateway owner 发布的 device-bootstrap Contract；当前无 KMS/HSM 且允许 HTTP，故该 ECS
+   环境明确保持 `development` Contract。operator 只导出 signer 的 P-256 DER SPKI，私钥不离开 ECS；
+   App 的环境切换不负责、也不能隐式覆盖设备 bootstrap endpoint。
+4. MQTT 匿名连接失败，Gateway mTLS smoke 成功；feeder 首激活后在线并可完成至少一个有 ACK 的控制命令。
+5. App 的环境 ID 为 `cn-cloud-staging`，PID 为 `feeder-x1`；设备列表、详情和系统信息均来自 ECS。
+6. WebRTC 至少一次进入 connected 并持续渲染视频；ICE 证据能区分 direct 与 relay，TURN 分配日志或 candidate pair 证明 relay 路径可用时记为 PASS。
 6. App 发起快照后，OSS 出现限定前缀对象；Gateway 能读回、生成 JPEG，并向 App 返回可访问 URL。测试对象只位于 `development/snapshots/` 或专用 smoke 前缀。
 7. DELL 既有健康端点仍返回 200；AWS provider 回归测试保持通过。
 

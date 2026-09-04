@@ -19,7 +19,7 @@ CN_CLOUD_GATEWAY_IMAGE=explorex-cn-gateway:contract-amd64 \
   bash "$PREPARE" "$OUTPUT_DIR"
 
 for path in config/stack.env config/gateway.env config/signal.env config/mosquitto.acl \
-  runtime/composition.yaml runtime/time-signer.pem runtime/mqtt-tls/ca.crt \
+  runtime/composition.yaml runtime/time-signer.pem runtime/time-signer-public.der runtime/mqtt-tls/ca.crt \
   runtime/mqtt-tls/ca.key runtime/mqtt-tls/server.crt runtime/mqtt-tls/server.key \
   runtime/mqtt-tls/gateway-cn-staging.crt runtime/mqtt-tls/gateway-cn-staging.key; do
   test -f "$OUTPUT_DIR/$path" || {
@@ -40,6 +40,9 @@ import stat
 import sys
 
 root = pathlib.Path(sys.argv[1])
+public_key = root / "runtime/time-signer-public.der"
+if stat.S_IMODE(public_key.stat().st_mode) != 0o444:
+    raise SystemExit("time signer public key mode must be 444")
 stack = (root / "config/stack.env").read_text()
 gateway = (root / "config/gateway.env").read_text()
 signal = (root / "config/signal.env").read_text()

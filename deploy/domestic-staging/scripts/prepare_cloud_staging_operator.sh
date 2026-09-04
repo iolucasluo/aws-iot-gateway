@@ -48,7 +48,8 @@ CONFIG_DIR="$OPERATOR_ROOT/config"
 RUNTIME_DIR="$OPERATOR_ROOT/runtime"
 MQTT_TLS_DIR="$RUNTIME_DIR/mqtt-tls"
 for path in "$CONFIG_DIR/stack.env" "$CONFIG_DIR/gateway.env" "$CONFIG_DIR/signal.env" \
-  "$CONFIG_DIR/mosquitto.acl" "$RUNTIME_DIR/composition.yaml" "$RUNTIME_DIR/time-signer.pem"; do
+  "$CONFIG_DIR/mosquitto.acl" "$RUNTIME_DIR/composition.yaml" "$RUNTIME_DIR/time-signer.pem" \
+  "$RUNTIME_DIR/time-signer-public.der"; do
   if [[ -e "$path" ]]; then
     echo "refusing to overwrite existing operator artifact: $path" >&2
     exit 1
@@ -74,6 +75,8 @@ MQTT_TLS_INCLUDE_TEST_CLIENTS=0 \
   "$SCRIPT_DIR/generate_mtls_test_certs.sh" "$MQTT_TLS_DIR" >/dev/null
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
   -out "$RUNTIME_DIR/time-signer.pem" >/dev/null 2>&1
+openssl pkey -in "$RUNTIME_DIR/time-signer.pem" -pubout -outform DER \
+  -out "$RUNTIME_DIR/time-signer-public.der" >/dev/null 2>&1
 
 cp "$DEPLOY_DIR/composition.cloud-staging.example.yaml" "$RUNTIME_DIR/composition.yaml"
 cp "$DEPLOY_DIR/mosquitto.mtls.acl.example" "$CONFIG_DIR/mosquitto.acl"
@@ -139,7 +142,7 @@ printf '%s\n' \
 
 chmod 600 "$CONFIG_DIR/stack.env" "$CONFIG_DIR/gateway.env" "$CONFIG_DIR/signal.env"
 chmod 640 "$CONFIG_DIR/mosquitto.acl"
-chmod 444 "$RUNTIME_DIR/composition.yaml" "$MQTT_TLS_DIR"/*.crt
+chmod 444 "$RUNTIME_DIR/composition.yaml" "$RUNTIME_DIR/time-signer-public.der" "$MQTT_TLS_DIR"/*.crt
 chmod 400 "$RUNTIME_DIR/time-signer.pem" "$MQTT_TLS_DIR/ca.key"
 chmod 640 "$MQTT_TLS_DIR/server.key"
 chmod 440 "$MQTT_TLS_DIR/gateway-cn-staging.key"
