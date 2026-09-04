@@ -91,6 +91,8 @@ if not {("80", "tcp"), ("443", "tcp")}.issubset(proxy_ports):
     raise SystemExit("edge proxy must publish TCP 80 and 443")
 if not {"application", "edge"}.issubset(services["edge-proxy"].get("networks", {})):
     raise SystemExit("edge proxy must join only the application edge boundary")
+if services["edge-proxy"].get("cap_drop") != ["ALL"] or services["edge-proxy"].get("cap_add") != ["NET_BIND_SERVICE"]:
+    raise SystemExit("edge proxy must keep only the Caddy binary file capability required for exec")
 if "api-staging.livpet.top" not in edge_config or "rtc-staging.livpet.top" not in edge_config:
     raise SystemExit("edge config must route both public staging hosts")
 if "gateway-api:14080" not in edge_config or "rtc-signaling:18084" not in edge_config:

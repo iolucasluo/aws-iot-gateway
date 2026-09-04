@@ -42,6 +42,8 @@ services:
       - /config:size=8m,mode=0700
     cap_drop:
       - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     security_opt:
       - no-new-privileges:true
     ports:
