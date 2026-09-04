@@ -52,8 +52,8 @@ AWS 运行时继续使用既有 `awss3` adapter；国内运行时只根据当前
 4. MQTT 匿名连接失败，Gateway mTLS smoke 成功；feeder 首激活后在线并可完成至少一个有 ACK 的控制命令。
 5. App 的环境 ID 为 `cn-cloud-staging`，PID 为 `feeder-x1`；设备列表、详情和系统信息均来自 ECS。
 6. WebRTC 至少一次进入 connected 并持续渲染视频；ICE 证据能区分 direct 与 relay，TURN 分配日志或 candidate pair 证明 relay 路径可用时记为 PASS。
-6. App 发起快照后，OSS 出现限定前缀对象；Gateway 能读回、生成 JPEG，并向 App 返回可访问 URL。测试对象只位于 `development/snapshots/` 或专用 smoke 前缀。
-7. DELL 既有健康端点仍返回 200；AWS provider 回归测试保持通过。
+7. App 发起快照后，OSS 出现限定前缀对象；Gateway 能读回、生成 JPEG，并向 App 返回可访问 URL。测试对象只位于 `development/snapshots/` 或专用 smoke 前缀。
+8. DELL 既有健康端点仍返回 200；AWS provider 回归测试保持通过。
 
 ## 失败与回滚
 
@@ -70,3 +70,17 @@ AWS 运行时继续使用既有 `awss3` adapter；国内运行时只根据当前
 3. `12.3` App/feeder：云 profile、BLE 激活、MQTT/控制/系统信息。
 4. `12.4` WebRTC/OSS：真实视频、ICE/TURN、快照对象与 App 展示。
 5. `12.5` 回归/审计：AWS 与 DELL 不回归、提交和证据固化。
+
+## 2026-09-04 实机验收结果
+
+| 验收面 | 结果 | 证据与边界 |
+|---|---|---|
+| 单 ECS 服务 | PASS | PostgreSQL、Redis、MQTT、TURN、Gateway、signaling、edge proxy 共 7 个长期容器为 healthy；API 与 signaling health 均返回 200；Gateway 容器 `AWS_*` 环境变量计数为 0。 |
+| BLE 激活与绑定 | PASS | Demo App 使用 `cn-cloud-staging` 环境和 `feeder-x1`；新数据库中只有 1 个 active binding，设备 `fdr-f7596b96768ee17a7836966eec492695` 为 active/online。 |
+| MQTT 与设备能力 | PASS | feeder 经 8883 mTLS 上线；数据库存在 18 条 acked command，App 已验证控制与系统信息读取。历史失败/超时命令来自调试及会话重试，不作为成功证据。 |
+| WebRTC | PASS（当前拓扑） | signaling 经 `rtc-staging.livpet.top`；App 的 PeerConnection 进入 connected，H.264 1920×1080 持续渲染且无丢帧样本；选中候选对为 `direct local=host remote=host protocol=udp`，视频未经过 ECS 转发。当前 HTTP staging 明确在 App 的 `cn-cloud-staging` profile 内允许 `ws://`。 |
+| WAN/TURN 真机 | NOT VERIFIED | 手机关闭 Wi-Fi 后没有可用蜂窝默认路由，无法构造跨运营商网络。TURN 容器、3478 TCP/UDP、5349 TCP 与 49360–49400 UDP relay 的服务器 smoke 不替代真机 relay candidate 证据；后续用有蜂窝数据的手机或异地网络补测。 |
+| OSS 快照 | PASS | App 发起真实拍照后，快照 `9d0b0b02-b942-46d3-9b7a-095ae70b54de` 对应设备命令 acked，数据库状态为 ready 且 object key 存在，App 展示 JPEG。按实现契约，ready 只会在 OSS HEAD 原始对象、下载 H.264、转码上传 JPEG并成功预签名后产生。App 日志只记录 `snapshot: ready`，不记录预签名 URL。 |
+| 隔离 | PASS | 本阶段只操作独立 ECS project、目标 feeder 与 Demo App；未修改或重启 DELL 既有 Gateway/Compose project，也未接入 AWS data plane。 |
+
+本表只关闭 `cn-cloud-staging` 的最小云端验证，不改变 production `NO-SHIP`：HTTPS/WSS、真实 WAN/TURN、KMS/HSM、量产 CA/证书生命周期、备份恢复、容量与长稳仍需独立放行。
