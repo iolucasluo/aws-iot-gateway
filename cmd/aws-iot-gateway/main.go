@@ -143,15 +143,30 @@ func main() {
 		log.Fatalf("configure OTA repository: %v", err)
 	}
 	var otaArtifacts ota.ArtifactStore
+	var otaOptions []ota.ServiceOption
 	if config.S3OTABucket != "" {
-		otaArtifacts, err = awss3.NewClient(awsConfig, config.S3OTABucket)
+		otaArtifactClient, err := awss3.NewClient(awsConfig, config.S3OTABucket)
 		if err != nil {
 			log.Fatalf("configure OTA artifact store: %v", err)
+		}
+		otaArtifacts = otaArtifactClient
+		if config.OTADeviceDownloadBaseURL != "" {
+			downloadGrants, err := redisstore.NewOTADownloadGrantStore(redis, config.Environment)
+			if err != nil {
+				log.Fatalf("configure OTA download grants: %v", err)
+			}
+			downloadProxy, err := ota.NewDownloadProxy(
+				config.OTADeviceDownloadBaseURL, downloadGrants, otaArtifactClient, nil,
+			)
+			if err != nil {
+				log.Fatalf("configure OTA download proxy: %v", err)
+			}
+			otaOptions = append(otaOptions, ota.WithDownloadProxy(downloadProxy))
 		}
 	}
 	otaService := ota.NewService(
 		otaRepository, otaArtifacts, deviceService, config.Environment,
-		config.OTADevArtifactAllowedOrigins, nil, time.Now,
+		config.OTADevArtifactAllowedOrigins, nil, time.Now, otaOptions...,
 	)
 	localMediaRevisions, err := redisstore.NewLocalMediaRevisionStore(redis, config.Environment)
 	if err != nil {

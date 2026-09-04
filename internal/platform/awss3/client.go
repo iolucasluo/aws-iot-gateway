@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -225,4 +226,21 @@ func isNotFound(err error) bool {
 	}
 	var responseError *smithyhttp.ResponseError
 	return errors.As(err, &responseError) && responseError.HTTPStatusCode() == http.StatusNotFound
+}
+
+func (client *Client) Open(ctx context.Context, key string) (io.ReadCloser, int64, error) {
+	if client == nil || client.client == nil || strings.TrimSpace(key) == "" {
+		return nil, 0, fmt.Errorf("open S3 object: invalid input")
+	}
+	result, err := client.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(client.bucket), Key: aws.String(key)})
+	if err != nil {
+		return nil, 0, fmt.Errorf("open S3 object: %w", err)
+	}
+	if result.Body == nil || result.ContentLength == nil || *result.ContentLength <= 0 {
+		if result.Body != nil {
+			_ = result.Body.Close()
+		}
+		return nil, 0, fmt.Errorf("open S3 object: invalid content length")
+	}
+	return result.Body, *result.ContentLength, nil
 }

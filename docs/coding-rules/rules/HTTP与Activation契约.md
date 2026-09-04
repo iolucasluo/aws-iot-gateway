@@ -61,6 +61,14 @@ pending -> activating -> installing -> finalizing -> activated
 - `lm_` session 前缀只属于 typed `local_media` 路径；通用 DP command 必须在落库和 MQTT
   publish 前拒绝该前缀，避免 ACK 路由冲突和副作用重试。
 
+## 设备 OTA 下载 capability
+
+- staging/production 的私有 S3 OTA 不得把 ECS 临时凭据生成的长 presigned URL 直接放入 MQTT；Gateway 只发送本服务 HTTPS origin 下的短期 capability URL。
+- capability 使用不可预测随机值，Redis 只保存 SHA-256 派生 key；grant 必须绑定 `device_sn`、deployment、artifact key、SHA-256 和大小。
+- 下载窗口固定 15 分钟，允许初始 GET 加设备现有的 3 次重试；错误设备路径、伪造、过期和超次数统一返回 404，不回显 capability。
+- 下载响应必须 `Cache-Control: no-store`，S3 保持私有；Gateway 流式返回对象且在写响应前核对 Content-Length。capability 不进入 PostgreSQL、Gateway 应用日志或错误响应。
+- capability URL 是受限 bearer 能力，不等于设备 mTLS 身份认证；最终授权边界仍由不可预测 capability、短 TTL、设备路径绑定及设备端签名/摘要验证共同构成。
+
 ## 产品 DP 合同
 
 - `products` 与 `product_dps` 是 Gateway-owned 的只读运行合同目录；产品/DP 变更必须通过 reviewed

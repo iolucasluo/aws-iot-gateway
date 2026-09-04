@@ -82,6 +82,10 @@ func (s server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.serveTimeBootstrap(writer, request)
 		return
 	}
+	if request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/api/v1/device-ota/download/") {
+		s.serveDeviceOTADownload(writer, request)
+		return
+	}
 	if strings.HasPrefix(request.URL.Path, "/api/v1/openapi/") {
 		HMACMiddleware(s.verifier, http.HandlerFunc(s.serveInternalApp)).ServeHTTP(writer, request)
 		return
@@ -96,6 +100,33 @@ func (s server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	default:
 		writeError(writer, http.StatusNotFound, "not_found", "endpoint not found")
 	}
+}
+
+func (s server) serveDeviceOTADownload(writer http.ResponseWriter, request *http.Request) {
+	const prefix = "/api/v1/device-ota/download/"
+	parts := strings.Split(strings.TrimPrefix(request.URL.Path, prefix), "/")
+	if s.ota == nil || len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		writeError(writer, http.StatusNotFound, "not_found", "endpoint not found")
+		return
+	}
+	artifact, err := s.ota.OpenDownload(request.Context(), parts[0], parts[1])
+	if err != nil {
+		if errors.Is(err, ota.ErrDownloadNotFound) {
+			writeError(writer, http.StatusNotFound, "not_found", "endpoint not found")
+			return
+		}
+		writeError(writer, http.StatusServiceUnavailable, "ota_download_unavailable", "OTA download is unavailable")
+		return
+	}
+	defer artifact.Body.Close()
+	writer.Header().Set("Content-Type", "application/gzip")
+	writer.Header().Set("Content-Length", strconv.FormatInt(artifact.FileSize, 10))
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.Header().Set("Pragma", "no-cache")
+	writer.Header().Set("X-Content-Type-Options", "nosniff")
+	writer.Header().Set("X-Explorex-OTA-SHA256", artifact.SHA256)
+	writer.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(writer, artifact.Body)
 }
 
 func (s server) serveInternalApp(writer http.ResponseWriter, request *http.Request) {

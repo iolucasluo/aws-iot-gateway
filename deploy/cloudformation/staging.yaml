@@ -518,6 +518,7 @@ Resources:
             - {Name: AWS_KVS_CHANNEL_PREFIX, Value: !Sub 'aws-iot-gateway-${EnvironmentName}-'}
             - {Name: AWS_S3_MEDIA_BUCKET, Value: !Ref MediaBucket}
             - {Name: AWS_S3_OTA_BUCKET, Value: !Ref OTABucket}
+            - {Name: OTA_DEVICE_DOWNLOAD_BASE_URL, Value: !Sub 'https://${HTTPAPI}.execute-api.${AWS::Region}.${AWS::URLSuffix}'}
             - {Name: TIME_BOOTSTRAP_KEY_ID, Value: !Sub 'time-${EnvironmentName}-g1'}
             - {Name: TIME_BOOTSTRAP_SIGNER, Value: aws-kms}
             - {Name: TIME_BOOTSTRAP_KMS_KEY_ID, Value: !GetAtt TimeBootstrapKey.Arn}

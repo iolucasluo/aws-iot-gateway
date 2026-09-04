@@ -47,6 +47,7 @@ type Config struct {
 	S3MediaBucket                    string
 	S3OTABucket                      string
 	OTADevArtifactAllowedOrigins     []string
+	OTADeviceDownloadBaseURL         string
 	TimeBootstrapKeyID               string
 	TimeBootstrapSigner              string
 	TimeBootstrapKMSKeyID            string
@@ -81,6 +82,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		KVSChannelPrefix:                 strings.TrimSpace(getenv("AWS_KVS_CHANNEL_PREFIX")),
 		S3MediaBucket:                    strings.TrimSpace(getenv("AWS_S3_MEDIA_BUCKET")),
 		S3OTABucket:                      strings.TrimSpace(getenv("AWS_S3_OTA_BUCKET")),
+		OTADeviceDownloadBaseURL:         strings.TrimSpace(getenv("OTA_DEVICE_DOWNLOAD_BASE_URL")),
 		TimeBootstrapKeyID:               strings.TrimSpace(getenv("TIME_BOOTSTRAP_KEY_ID")),
 		TimeBootstrapSigner:              valueOr(getenv("TIME_BOOTSTRAP_SIGNER"), "aws-kms"),
 		TimeBootstrapKMSKeyID:            strings.TrimSpace(getenv("TIME_BOOTSTRAP_KMS_KEY_ID")),
@@ -147,6 +149,13 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	}
 	if config.Environment != "development" && config.S3OTABucket == "" {
 		return Config{}, fmt.Errorf("AWS_S3_OTA_BUCKET is required outside development")
+	}
+	if config.Environment != "development" {
+		parsed, err := url.Parse(config.OTADeviceDownloadBaseURL)
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+			(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return Config{}, fmt.Errorf("OTA_DEVICE_DOWNLOAD_BASE_URL must be an HTTPS origin outside development")
+		}
 	}
 	if config.Environment == "development" && config.S3OTABucket == "" && len(config.OTADevArtifactAllowedOrigins) == 0 {
 		return Config{}, fmt.Errorf("AWS_S3_OTA_BUCKET or OTA_DEV_ARTIFACT_ALLOWED_ORIGINS is required for development OTA")

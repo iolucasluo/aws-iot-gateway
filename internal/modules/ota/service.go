@@ -155,11 +155,12 @@ type Service struct {
 	commands       CommandSender
 	environment    string
 	allowedOrigins map[string]struct{}
+	downloadProxy  *DownloadProxy
 	newID          IDGenerator
 	now            func() time.Time
 }
 
-func NewService(repository Repository, artifacts ArtifactStore, commands CommandSender, environment string, allowedOrigins []string, newID IDGenerator, now func() time.Time) *Service {
+func NewService(repository Repository, artifacts ArtifactStore, commands CommandSender, environment string, allowedOrigins []string, newID IDGenerator, now func() time.Time, options ...ServiceOption) *Service {
 	origins := make(map[string]struct{}, len(allowedOrigins))
 	for _, value := range allowedOrigins {
 		origins[strings.TrimSpace(value)] = struct{}{}
@@ -170,7 +171,13 @@ func NewService(repository Repository, artifacts ArtifactStore, commands Command
 	if newID == nil {
 		newID = randomUUID
 	}
-	return &Service{repository: repository, artifacts: artifacts, commands: commands, environment: environment, allowedOrigins: origins, newID: newID, now: now}
+	service := &Service{repository: repository, artifacts: artifacts, commands: commands, environment: environment, allowedOrigins: origins, newID: newID, now: now}
+	for _, option := range options {
+		if option != nil {
+			option(service)
+		}
+	}
+	return service
 }
 
 func randomUUID() (string, error) {
@@ -291,6 +298,16 @@ func (service *Service) CreateDeployment(ctx context.Context, internalAppID, dev
 		return deployment, nil
 	}
 	downloadURL := version.SourceURL
+	if downloadURL == "" && service.downloadProxy != nil {
+		downloadURL, err = service.downloadProxy.Issue(ctx, DownloadGrant{
+			DeviceSN: deviceSN, DeploymentID: deployment.ID,
+			ArtifactKey: version.ArtifactKey, SHA256: version.SHA256, FileSize: version.FileSize,
+		})
+		if err != nil {
+			_ = service.repository.UpdateDeployment(ctx, deployment.ID, DeploymentStateFailed, "artifact_unavailable")
+			return Deployment{}, fmt.Errorf("%w: %v", ErrDispatchFailed, err)
+		}
+	}
 	if downloadURL == "" {
 		if service.artifacts == nil {
 			_ = service.repository.UpdateDeployment(ctx, deployment.ID, DeploymentStateFailed, "artifact_unavailable")
