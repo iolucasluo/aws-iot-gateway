@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -28,9 +29,10 @@ type API interface {
 }
 
 type Client struct {
-	client  API
-	presign *s3.PresignClient
-	bucket  string
+	client          API
+	presign         *s3.PresignClient
+	checksumPresign *s3.PresignClient
+	bucket          string
 }
 
 func NewClient(config aws.Config, bucket string) (*Client, error) {
@@ -38,18 +40,30 @@ func NewClient(config aws.Config, bucket string) (*Client, error) {
 		return nil, fmt.Errorf("AWS S3 bucket is required")
 	}
 	client := s3.NewFromConfig(config)
-	return &Client{client: client, presign: s3.NewPresignClient(client), bucket: bucket}, nil
+	presign := s3.NewPresignClient(client)
+	checksumSigner := v4.NewSigner(func(options *v4.SignerOptions) {
+		// OTA uploads must send x-amz-checksum-sha256 as a signed header so S3
+		// validates and stores it. Keep this signer isolated from ordinary media
+		// URLs, whose callers receive only a URL and cannot supply signed headers.
+		options.DisableHeaderHoisting = true
+	})
+	checksumPresign := s3.NewPresignClient(client, func(options *s3.PresignOptions) {
+		options.Presigner = checksumSigner
+	})
+	return &Client{
+		client: client, presign: presign, checksumPresign: checksumPresign, bucket: bucket,
+	}, nil
 }
 
 func (client *Client) PrepareUpload(ctx context.Context, key string, size int64, sha256 string, ttl time.Duration) (ota.UploadTarget, error) {
-	if client == nil || client.presign == nil || key == "" || size <= 0 || sha256 == "" || ttl <= 0 {
+	if client == nil || client.checksumPresign == nil || key == "" || size <= 0 || sha256 == "" || ttl <= 0 {
 		return ota.UploadTarget{}, fmt.Errorf("presign OTA upload: invalid input")
 	}
 	checksum, err := sha256Base64(sha256)
 	if err != nil {
 		return ota.UploadTarget{}, fmt.Errorf("presign OTA upload: %w", err)
 	}
-	result, err := client.presign.PresignPutObject(ctx, &s3.PutObjectInput{
+	result, err := client.checksumPresign.PresignPutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(client.bucket), Key: aws.String(key),
 		ContentType: aws.String("application/gzip"), ContentLength: aws.Int64(size),
 		ChecksumSHA256: aws.String(checksum),

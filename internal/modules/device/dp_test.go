@@ -183,6 +183,35 @@ func TestValidateCommandsEnforcesNestedAndCrossFieldConstraints(t *testing.T) {
 	}
 }
 
+func TestValidateCommandsEnforcesContinuousRecordingPresets(t *testing.T) {
+	t.Parallel()
+	definitions := []ProductDPDefinition{{
+		Code: "record_mode", Type: "object", Direction: "downlink_request_ack", Status: "active",
+		Spec: json.RawMessage(`{
+			"properties":{
+				"mode":{"type":"integer","enum":[0,1,2]},
+				"segment_s":{"type":"integer","enum":[60,180,300]}
+			},"allow_extra":false
+		}`),
+	}}
+	for _, testCase := range []struct {
+		value string
+		valid bool
+	}{
+		{value: `{"mode":1}`, valid: true},
+		{value: `{"mode":1,"segment_s":60}`, valid: true},
+		{value: `{"mode":1,"segment_s":180}`, valid: true},
+		{value: `{"mode":1,"segment_s":300}`, valid: true},
+		{value: `{"mode":1,"segment_s":120}`, valid: false},
+		{value: `{"mode":1,"segment_s":60,"unexpected":true}`, valid: false},
+	} {
+		err := ValidateCommands(definitions, []CommandInput{{Code: "record_mode", Value: json.RawMessage(testCase.value)}})
+		if (err == nil) != testCase.valid {
+			t.Fatalf("ValidateCommands(%s) error = %v, valid=%t", testCase.value, err, testCase.valid)
+		}
+	}
+}
+
 func TestValidateCommandsEnforcesRecordStartVariant(t *testing.T) {
 	t.Parallel()
 	definitions := []ProductDPDefinition{{

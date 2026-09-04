@@ -311,17 +311,22 @@ func TestProductSeedIsExplicitAndIdempotent(t *testing.T) {
 			t.Fatalf("%s capabilities = %v, want %v", pid, products[pid], capabilities)
 		}
 	}
-	var dpCount, minionDPCount int
+	var dpCount, feederDPCount, minionDPCount int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM product_dps`).Scan(&dpCount); err != nil {
 		t.Fatalf("count seeded product DPs: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM product_dps dp JOIN products p ON p.id=dp.product_id WHERE p.pid='feeder-x1'
+	`).Scan(&feederDPCount); err != nil {
+		t.Fatalf("count feeder product DPs: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
 		SELECT count(*) FROM product_dps dp JOIN products p ON p.id=dp.product_id WHERE p.pid='minion-cam-x1'
 	`).Scan(&minionDPCount); err != nil {
 		t.Fatalf("count minion product DPs: %v", err)
 	}
-	if dpCount != 30 || minionDPCount != 28 {
-		t.Fatalf("seeded product DP counts = total %d/minion %d, want 30/28", dpCount, minionDPCount)
+	if dpCount != 31 || feederDPCount != 3 || minionDPCount != 28 {
+		t.Fatalf("seeded product DP counts = total %d/feeder %d/minion %d, want 31/3/28", dpCount, feederDPCount, minionDPCount)
 	}
 	var minionDetailedCount int
 	if err := pool.QueryRow(ctx, `

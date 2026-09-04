@@ -307,11 +307,16 @@ func (service *Service) SendCommands(
 // SendOTACommand is the only path that may publish ota_install. The deployment table is the
 // execution authority, so presigned URLs and signed release metadata never enter device_commands.
 func (service *Service) SendOTACommand(ctx context.Context, command ota.Command) error {
+	upgradeType := command.UpgradeType
+	if upgradeType == "" {
+		upgradeType = ota.UpgradeTypeApp
+	}
 	if service == nil || service.publisher == nil || service.ackWaiter == nil ||
 		!topicPrefixRegexp.MatchString(service.topicPrefix) ||
 		strings.TrimSpace(command.DeploymentID) == "" || len(command.DeploymentID) > 63 ||
 		strings.TrimSpace(command.DeviceID) == "" || strings.TrimSpace(command.DeviceSN) == "" ||
 		strings.TrimSpace(command.PID) == "" || strings.TrimSpace(command.Version) == "" ||
+		(upgradeType != ota.UpgradeTypeApp && upgradeType != ota.UpgradeTypeEnvironment) ||
 		command.FirmwareBuild <= 0 || command.FileSize <= 0 || command.FileSize > 3*1024*1024 ||
 		len(command.DownloadURL) < 8 || len(command.DownloadURL) > 1023 ||
 		len(command.SHA256) != 64 || len(command.ReleaseStatement) == 0 ||
@@ -321,7 +326,7 @@ func (service *Service) SendOTACommand(ctx context.Context, command ota.Command)
 	payload := map[string]any{
 		"action": "ota_install", "session_id": command.DeploymentID,
 		"schema": "explorex-device-ota-v1", "deployment_id": command.DeploymentID,
-		"pid": command.PID, "version": command.Version, "firmware_build": command.FirmwareBuild,
+		"pid": command.PID, "upgrade_type": upgradeType, "version": command.Version, "firmware_build": command.FirmwareBuild,
 		"download_url": command.DownloadURL, "sha256": command.SHA256,
 		"file_size": command.FileSize, "release_statement": command.ReleaseStatement,
 		"signature": command.Signature,

@@ -1479,3 +1479,15 @@ func TestWriteLocalMediaErrorDoesNotMislabelProductOrInfrastructureFailuresAsKVS
 		})
 	}
 }
+
+func TestWriteMediaErrorMapsProductDPValidationToBadRequest(t *testing.T) {
+	t.Parallel()
+	response := httptest.NewRecorder()
+
+	writeMediaError(response, fmt.Errorf("%w: %w (stream)", devicemodule.ErrInvalidInput, devicemodule.ErrDPUnknown))
+
+	if response.Code != http.StatusBadRequest ||
+		!bytes.Contains(response.Body.Bytes(), []byte(`"error_code":"invalid_request"`)) {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+}

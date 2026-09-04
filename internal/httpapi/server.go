@@ -1230,7 +1230,7 @@ func writeOTAError(writer http.ResponseWriter, err error) {
 
 func writeMediaError(writer http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, media.ErrInvalidInput):
+	case errors.Is(err, media.ErrInvalidInput), errors.Is(err, devicemodule.ErrInvalidInput):
 		writeError(writer, http.StatusBadRequest, "invalid_request", "media request is invalid")
 	case errors.Is(err, media.ErrInvalidCapabilities):
 		writeError(writer, http.StatusBadRequest, "invalid_stream_capabilities", "invalid requested stream capabilities")
