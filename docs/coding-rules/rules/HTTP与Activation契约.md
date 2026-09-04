@@ -33,10 +33,13 @@ pending -> activating -> installing -> finalizing -> activated
 
 - 拒绝未知 JSON 字段、畸形 percent escape、超限 body、过期/重放 nonce 和错误 method。
 - `reset_wifi`、`factory_reset(scope=wifi)` 和缺失显式 scope 的 `factory_reset` 必须在 MQTT publish
-  前以 `400 invalid_request` 拒绝；设备移交走 ACK-based `recommission(runtime)`。物理恢复出厂后
-  仍由原绑定用户换网时必须走下一条预签名授权路径，防止设备运行身份与 Gateway binding/token 分裂。
-- 物理按键恢复出厂不等于解绑：设备保留运行身份与 binding，但清除 Wi-Fi 和用户数据。重新写入 Wi-Fi
-  必须转发原绑定 App 预签名的 `network-reconfiguration-authorizations` 请求，并同时通过 HMAC v1、
+  前以 `400 invalid_request` 拒绝；需要同步释放云端 binding 的设备移交走 ACK-based
+  `recommission(runtime|all)`。
+- MCU 物理长按 `#RST` 是纯设备内部的所有权清理：不发布 MQTT、不调用 Gateway API；设备清除 Wi-Fi、
+  用户数据和本地运行身份，保留有效 OTA release，重启后进入普通 activation。Gateway 不释放旧 binding，
+  旧记录可能离线保留；新 activation 生成新的 `device_sn` 和 binding。
+- 显式的 identity-preserving 网络恢复与物理 `#RST` 不同。它必须转发原绑定 App 预签名的
+  `network-reconfiguration-authorizations` 请求，并同时通过 HMAC v1、
   nonce/时效、`binding_external_user_id` 精确比较和该 binding 的 `X-Device-Token`；body 只能携带
   Wi-Fi 凭据摘要，不能上传明文。摘要字段依次为 domain、device_sn、wifi_ssid、wifi_password；每个
   UTF-8 字段前置 4 字节无符号大端长度，最后取 SHA-256 小写 hex。`device_sn` 使用受限可打印 ASCII；
