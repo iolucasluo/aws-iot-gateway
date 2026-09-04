@@ -108,6 +108,23 @@ func TestNewClientEnablesSubscriptionResumeForBrokerReconnects(t *testing.T) {
 	}
 }
 
+func TestActiveSubscriptionFiltersAreRestoredAfterReconnect(t *testing.T) {
+	t.Parallel()
+
+	client := &Client{subscriptions: map[string]struct{}{
+		"cmd/cn-staging/+/res":  {},
+		"dt/cn-staging/+/event": {},
+	}}
+	var restored []string
+	client.restoreSubscriptions(func(filter string) error {
+		restored = append(restored, filter)
+		return nil
+	})
+	if strings.Join(restored, ",") != "cmd/cn-staging/+/res,dt/cn-staging/+/event" {
+		t.Fatalf("restored filters = %v", restored)
+	}
+}
+
 func writeTestTLSMaterial(t *testing.T, directory string) (string, string, string) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

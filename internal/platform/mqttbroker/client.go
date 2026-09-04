@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +52,8 @@ type Client struct {
 	broker         mqtt.Client
 	topicPrefix    string
 	connectTimeout time.Duration
+	subscriptions  map[string]struct{}
+	connectedOnce  bool
 	mutex          sync.Mutex
 }
 
@@ -99,6 +102,10 @@ func NewClient(config Config) (*Client, error) {
 	if pingTimeout <= 0 {
 		pingTimeout = defaultPingTimeout
 	}
+	client := &Client{
+		topicPrefix: topicPrefix, connectTimeout: connectTimeout,
+		subscriptions: make(map[string]struct{}),
+	}
 	options := mqtt.NewClientOptions().
 		AddBroker(endpoint).
 		SetClientID(clientID).
@@ -114,7 +121,9 @@ func NewClient(config Config) (*Client, error) {
 		SetKeepAlive(keepAlive).
 		SetPingTimeout(pingTimeout).
 		SetOrderMatters(false)
-	return &Client{broker: mqtt.NewClient(options), topicPrefix: topicPrefix, connectTimeout: connectTimeout}, nil
+	options.SetOnConnectHandler(client.onConnect)
+	client.broker = mqtt.NewClient(options)
+	return client, nil
 }
 
 func loadTLSConfig(config Config, defaultServerName string) (*tls.Config, error) {
@@ -168,6 +177,9 @@ func (client *Client) Close() {
 	if client == nil || client.broker == nil {
 		return
 	}
+	client.mutex.Lock()
+	clear(client.subscriptions)
+	client.mutex.Unlock()
 	client.broker.Disconnect(250)
 }
 
@@ -204,7 +216,49 @@ func (client *Client) Subscribe(ctx context.Context, subscription provider.Devic
 	if err := waitToken(ctx, token, client.connectTimeout); err != nil {
 		return nil, fmt.Errorf("subscribe MQTT topic: %w", err)
 	}
-	return &subscriptionHandle{client: client.broker, filter: subscription.TopicFilter}, nil
+	client.mutex.Lock()
+	client.subscriptions[subscription.TopicFilter] = struct{}{}
+	client.mutex.Unlock()
+	return &subscriptionHandle{client: client.broker, owner: client, filter: subscription.TopicFilter}, nil
+}
+
+func (client *Client) onConnect(broker mqtt.Client) {
+	client.mutex.Lock()
+	if !client.connectedOnce {
+		client.connectedOnce = true
+		client.mutex.Unlock()
+		return
+	}
+	client.mutex.Unlock()
+	if err := client.restoreSubscriptions(func(filter string) error {
+		token := broker.Subscribe(filter, 1, nil)
+		if !token.WaitTimeout(client.connectTimeout) {
+			return errors.New("timeout")
+		}
+		return token.Error()
+	}); err != nil {
+		log.Printf("mqttbroker: restore subscriptions after reconnect: %v", err)
+	}
+}
+
+func (client *Client) restoreSubscriptions(subscribe func(string) error) error {
+	if client == nil || subscribe == nil {
+		return errors.New("MQTT subscription restore is not configured")
+	}
+	client.mutex.Lock()
+	filters := make([]string, 0, len(client.subscriptions))
+	for filter := range client.subscriptions {
+		filters = append(filters, filter)
+	}
+	client.mutex.Unlock()
+	sort.Strings(filters)
+	var firstErr error
+	for _, filter := range filters {
+		if err := subscribe(filter); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("subscribe %q: %w", filter, err)
+		}
+	}
+	return firstErr
 }
 
 func tracef(format string, args ...any) {
@@ -219,6 +273,7 @@ func (client *Client) Health(ctx context.Context) error {
 
 type subscriptionHandle struct {
 	client mqtt.Client
+	owner  *Client
 	filter string
 	once   sync.Once
 	err    error
@@ -229,6 +284,11 @@ func (handle *subscriptionHandle) Close() error {
 		return nil
 	}
 	handle.once.Do(func() {
+		if handle.owner != nil {
+			handle.owner.mutex.Lock()
+			delete(handle.owner.subscriptions, handle.filter)
+			handle.owner.mutex.Unlock()
+		}
 		token := handle.client.Unsubscribe(handle.filter)
 		if !token.WaitTimeout(defaultConnectTimeout) {
 			handle.err = errors.New("unsubscribe MQTT topic: timeout")
