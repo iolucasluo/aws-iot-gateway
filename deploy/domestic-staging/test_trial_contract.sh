@@ -47,7 +47,7 @@ require("aws" not in compose_text.lower() and "kvs" not in compose_text.lower() 
 require("mqtt-mtls:" in compose_text, "domestic compose lacks mqtt-mtls profile")
 for marker in ("listener 8883", "require_certificate true", "use_identity_as_username true", "acl_file"):
     require(marker in mqtt_tls_text, f"MQTT TLS config is missing {marker}")
-for marker in ("user gateway-cn-staging", "user feeder-cn-staging", "topic write cmd/cn-staging/+/req"):
+for marker in ("user gateway-cn-staging", "pattern read cmd/cn-staging/%u/req", "topic write cmd/cn-staging/+/req"):
     require(marker in mqtt_acl_text, f"MQTT ACL example is missing {marker}")
 
 for marker in (

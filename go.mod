@@ -4,6 +4,7 @@ go 1.24
 
 require (
 	github.com/alicebob/miniredis/v2 v2.37.0
+	github.com/aliyun/alibabacloud-oss-go-sdk-v2 v1.6.0
 	github.com/aws/aws-sdk-go-v2 v1.43.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.36
 	github.com/aws/aws-sdk-go-v2/service/iot v1.77.5
@@ -50,4 +51,5 @@ require (
 	golang.org/x/net v0.39.0 // indirect
 	golang.org/x/sync v0.13.0 // indirect
 	golang.org/x/text v0.24.0 // indirect
+	golang.org/x/time v0.4.0 // indirect
 )

@@ -7,12 +7,11 @@ topic read dt/cn-staging/+/status
 topic read dt/cn-staging/+/lwt
 topic read dt/cn-staging/+/event
 
-# Feeder certificates can only consume commands for this environment and
-# publish their own replies/telemetry. The broker does not grant cross-env
-# wildcard access.
-user feeder-cn-staging
-topic read cmd/cn-staging/+/req
-topic write cmd/cn-staging/+/res
-topic write dt/cn-staging/+/status
-topic write dt/cn-staging/+/lwt
-topic write dt/cn-staging/+/event
+# Activated feeder certificate CN equals its device SN. Mosquitto exposes that
+# identity as %u, so each device can only access its own command and telemetry
+# topics without requiring an ACL rewrite after every activation.
+pattern read cmd/cn-staging/%u/req
+pattern write cmd/cn-staging/%u/res
+pattern write dt/cn-staging/%u/status
+pattern write dt/cn-staging/%u/lwt
+pattern write dt/cn-staging/%u/event

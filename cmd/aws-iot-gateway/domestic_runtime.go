@@ -18,6 +18,7 @@ import (
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/timebootstrap"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/domesticca"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/explorexsignal"
+	gatewayffmpeg "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/ffmpeg"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/localsigner"
 	gatewaypostgres "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/postgres"
 	redisstore "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/redis"
@@ -26,8 +27,7 @@ import (
 )
 
 // runDomesticGateway owns the domestic development activation/device/MQTT
-// surface and provider-neutral realtime session orchestration. Media remains
-// fail-closed at the device boundary until the Anyka consumer is available.
+// surface plus provider-neutral realtime and media-object orchestration.
 func runDomesticGateway(
 	ctx context.Context,
 	config gatewayruntime.Config,
@@ -46,6 +46,13 @@ func runDomesticGateway(
 	}
 	if composition.Metadata.Environment != config.Environment || composition.Metadata.Region != "cn" {
 		return fmt.Errorf("domestic composition metadata does not match development cn runtime")
+	}
+	var objectStore provider.ObjectStore
+	if composition.Bindings["media_object"] != "" {
+		objectStore, err = gatewayruntime.BuildObjectStore(composition, os.Getenv)
+		if err != nil {
+			return err
+		}
 	}
 	realtimeInstance := composition.Bindings["realtime"]
 	if realtimeInstance == "" || composition.Instances[realtimeInstance].Driver != "explorex_signal" {
@@ -106,6 +113,20 @@ func runDomesticGateway(
 	deviceService := devicemodule.NewService(
 		devicePublisher, ackStore, commandRepository, config.DomesticMQTTTopicPrefix, nil,
 	)
+	var assetService *media.AssetService
+	if objectStore != nil {
+		mediaRepository, err := gatewaypostgres.NewMediaRepository(database)
+		if err != nil {
+			return err
+		}
+		snapshotConverter, err := gatewayffmpeg.NewConverter("ffmpeg")
+		if err != nil {
+			return err
+		}
+		assetService = media.NewAssetService(
+			objectStore, deviceService, mediaRepository, config.Environment, snapshotConverter, nil,
+		)
+	}
 	bindingService, err := newDomesticBindingService(bindingRepository, deviceService)
 	if err != nil {
 		return err
@@ -132,7 +153,7 @@ func runDomesticGateway(
 	server := &http.Server{
 		Addr: config.ListenAddress,
 		Handler: httpapi.NewInternalAPI(activationService, verifier, httpapi.Dependencies{
-			Binding: bindingService, Media: streamService,
+			Binding: bindingService, Media: streamService, Assets: assetService,
 			Device:        deviceService,
 			TimeBootstrap: timeService, TimeBootstrapLimiter: rateLimiter,
 			DeviceRuntime: httpapi.DeviceRuntimeConfig{

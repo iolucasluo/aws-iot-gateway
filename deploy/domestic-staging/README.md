@@ -79,7 +79,50 @@ docker compose --env-file .env.cn-single-node.local \
 
 这个 profile 有意不启动 `iot-gateway-event-worker`：现有 worker 是 AWS SQS/IoT lifecycle consumer，国内 MQTT ingest 已由 provider-neutral runtime 承载；在有国内 outbox/queue contract 前启动它会重新引入 AWS，而不是“补齐服务”。MinIO 仍只在 `--profile object` 下提供接口验证，当前 Gateway 尚未把国内 ObjectStore 接入产品链路。
 
-LAN 允许按用户要求继续使用 HTTP/WS；真实 ECS 对公网发布前必须增加 reverse proxy、HTTPS/WSS、域名/备案与安全组验收。反向代理不是 DELL 功能闭环的依赖，因此不在本 profile 里伪造证书或域名。实际 ECS 镜像必须把 `CN_STAGING_GATEWAY_IMAGE` 固定到 registry digest 并用 `--no-build` 启动；本地 `:local + --build` 只用于 DELL 源码验收。
+## 中国大陆 ECS cloud staging（Phase 12）
+
+`compose.cloud-staging.yaml` 是 single-node profile 的公网 overlay。它不复制应用服务，只做四件事：
+
+1. 用一个 Caddy edge proxy 按 `api-staging.livpet.top` / `rtc-staging.livpet.top` 转发 Gateway 和 signaling；
+2. 对外发布 MQTT mTLS `8883`、TURN `3478` 与 UDP relay `49360-49400`；
+3. 为 coturn 注入明确的 ECS 公网 IP，避免向 PeerConnection 发布 Docker 私网 relay candidate；
+4. 把 `media_object` 显式绑定到 `aliyun_oss`，不启动 MinIO、不回退 AWS S3。
+
+当前 Anyka ExploreX signaling transport 只支持 `ws://`，且本轮 ECS 验证已明确允许 HTTP/WS。因此 edge proxy 同时保留 HTTP/WS，并为 App 提供可选 HTTPS/WSS；这仍是 nonproduction staging，不是 production TLS 放行。
+
+operator 目录使用 `/opt/explorex-cn-cloud-staging`。首次部署由准备脚本生成随机运行 secret、365 天 staging CA/证书、P-256 time signer、逐设备 MQTT ACL 和三个 `0600` 环境文件。脚本拒绝覆盖已有 operator 文件；OSS 凭据只从当前进程环境读入，不出现在命令行或 Git：
+
+```sh
+export CN_CLOUD_PUBLIC_IP=203.0.113.10
+export CN_CLOUD_OSS_BUCKET=replace-with-media-bucket
+export CN_CLOUD_OSS_ACCESS_KEY_ID=replace-with-access-key-id
+export CN_CLOUD_OSS_ACCESS_KEY_SECRET=replace-with-access-key-secret
+export CN_CLOUD_GATEWAY_IMAGE=explorex-cn-gateway:replace-with-immutable-revision
+deploy/domestic-staging/scripts/prepare_cloud_staging_operator.sh \
+  /opt/explorex-cn-cloud-staging
+```
+
+`composition.yaml` 的 OSS endpoint 供 ECS 同地域访问；`GATEWAY_OBJECT_PUBLIC_ENDPOINT` 专用于生成 feeder/App 可访问的短期预签名 URL。AccessKey 只进入 `gateway.env`，不得进入 composition、App、固件或镜像。
+
+渲染和启动必须同时加载三个 Compose 文件：
+
+```sh
+docker compose --env-file /opt/explorex-cn-cloud-staging/config/stack.env \
+  -f compose.yaml -f compose.single-node.yaml -f compose.cloud-staging.yaml \
+  --profile single-node config --quiet
+docker compose --env-file /opt/explorex-cn-cloud-staging/config/stack.env \
+  -f compose.yaml -f compose.single-node.yaml -f compose.cloud-staging.yaml \
+  --profile single-node up -d --no-build --wait
+```
+
+发布前本地 contract：
+
+```sh
+bash deploy/domestic-staging/test_cloud_staging_compose_contract.sh
+bash deploy/domestic-staging/test_prepare_cloud_staging_operator.sh
+```
+
+LAN 允许按用户要求继续使用 HTTP/WS；ECS overlay 已提供 Host reverse proxy，并可在 DNS 和 80/443 可达后自动签发 HTTPS/WSS 证书。Anyka 当前仍使用 WS，Demo App/API 可优先使用 HTTPS；这不改变本环境的 nonproduction 定位。实际 ECS 镜像必须把 `CN_STAGING_GATEWAY_IMAGE` 固定到不可变 revision 并用 `--no-build` 启动；本地 `:local + --build` 只用于 DELL 源码验收。
 
 试产前置 contract（只验证边界，不把 NO-SHIP 变成可部署）：
 

@@ -119,6 +119,17 @@ type RealtimeProvider interface {
 	Health(context.Context) error
 }
 
+// ObjectStore is the provider-neutral media object boundary. Credentials,
+// bucket addressing and presigned URL formats remain owned by the selected
+// adapter; media services only use opaque object keys and short-lived URLs.
+type ObjectStore interface {
+	PutURL(context.Context, string, string, time.Duration) (string, error)
+	GetURL(context.Context, string, time.Duration) (string, error)
+	Upload(context.Context, string, string, []byte) error
+	Download(context.Context, string, int64) ([]byte, error)
+	Exists(context.Context, string) (bool, error)
+}
+
 type QueueMessage struct {
 	ID         string
 	Body       []byte

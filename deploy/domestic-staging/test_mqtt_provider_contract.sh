@@ -29,6 +29,11 @@ if MQTT_TLS_SERVER_IP=not-an-ip bash "$CERT_SCRIPT" "$CERT_DIR/invalid-ip" >/dev
 fi
 MQTT_TLS_SERVER_IP=10.0.0.7 bash "$CERT_SCRIPT" "$CERT_DIR/lan-ip" >/dev/null
 openssl x509 -in "$CERT_DIR/lan-ip/server.crt" -noout -text | grep -Fq "IP Address:10.0.0.7"
+MQTT_TLS_SERVER_IP=203.0.113.10 MQTT_TLS_SERVER_DNS=mqtt-staging.example.invalid \
+  MQTT_TLS_VALIDITY_DAYS=30 bash "$CERT_SCRIPT" "$CERT_DIR/cloud" >/dev/null
+cloud_cert=$(openssl x509 -in "$CERT_DIR/cloud/server.crt" -noout -text)
+grep -Fq "DNS:mqtt-staging.example.invalid" <<<"$cloud_cert"
+grep -Fq "DNS:mqtt-mtls" <<<"$cloud_cert"
 
 (cd "$ROOT" && go test -race -count=1 ./internal/runtime ./internal/platform/mqttbroker ./cmd/mqtt-provider-smoke)
 
@@ -54,13 +59,15 @@ for marker in (
     "user gateway-cn-staging",
     "topic write cmd/cn-staging/+/req",
     "topic read cmd/cn-staging/+/res",
-    "user feeder-cn-staging",
-    "topic read cmd/cn-staging/+/req",
-    "topic write cmd/cn-staging/+/res",
+    "pattern read cmd/cn-staging/%u/req",
+    "pattern write cmd/cn-staging/%u/res",
+    "pattern write dt/cn-staging/%u/status",
+    "pattern write dt/cn-staging/%u/lwt",
+    "pattern write dt/cn-staging/%u/event",
 ):
     if marker not in acl:
         raise SystemExit(f"MQTT ACL example missing {marker}")
-if "topic read #" in acl or "topic write #" in acl:
+if "topic read #" in acl or "topic write #" in acl or "pattern read #" in acl or "pattern write #" in acl:
     raise SystemExit("MQTT ACL example grants a global wildcard")
 print("MQTT mTLS/ACL contract: ok")
 PY
