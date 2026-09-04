@@ -102,7 +102,7 @@ deploy/domestic-staging/scripts/prepare_cloud_staging_operator.sh \
   /opt/explorex-cn-cloud-staging
 ```
 
-`composition.yaml` 的 OSS endpoint 供 ECS 同地域访问；`GATEWAY_OBJECT_PUBLIC_ENDPOINT` 专用于生成 feeder/App 可访问的短期预签名 URL。AccessKey 只进入 `gateway.env`，不得进入 composition、App、固件或镜像。
+`composition.yaml` 的 OSS endpoint 供 ECS 同地域访问；`GATEWAY_OBJECT_PUBLIC_ENDPOINT` 专用于生成 feeder/App 可访问的短期预签名 URL。AccessKey 只进入 `gateway.env`，不得进入 composition、App、固件或镜像。`stack.env` 中 `CN_STAGING_MINIO_ROOT_*` 仅满足 Compose 对未启用 profile 的预插值；cloud 命令既不启用 `object` profile，也不启动或回退到 MinIO。
 
 渲染和启动必须同时加载三个 Compose 文件：
 

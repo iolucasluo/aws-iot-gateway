@@ -49,6 +49,7 @@ acl = (root / "config/mosquitto.acl").read_text()
 for marker in (
     "CN_CLOUD_PUBLIC_IP=203.0.113.10",
     "CN_STAGING_GATEWAY_IMAGE=explorex-cn-gateway:contract-amd64",
+    "CN_STAGING_MINIO_ROOT_USER=disabled",
     f"CN_STAGING_RUNTIME_DIR={root}/runtime",
 ):
     if marker not in stack:
