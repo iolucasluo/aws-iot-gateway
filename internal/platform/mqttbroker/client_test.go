@@ -1,10 +1,18 @@
 package mqttbroker
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewClientRequiresMQTTSAndMutualTLSMaterial(t *testing.T) {
@@ -76,4 +84,70 @@ func TestTopicNamespaceIsFailClosed(t *testing.T) {
 			t.Fatalf("topicInNamespace(%q) = true", topic)
 		}
 	}
+}
+
+func TestNewClientEnablesSubscriptionResumeForBrokerReconnects(t *testing.T) {
+	t.Parallel()
+
+	directory := t.TempDir()
+	caPath, certPath, keyPath := writeTestTLSMaterial(t, directory)
+	client, err := NewClient(Config{
+		Endpoint:       "mqtts://127.0.0.1:8883",
+		ClientID:       "gateway-cn-staging",
+		TopicPrefix:    "cn-staging",
+		CAFile:         caPath,
+		ClientCertFile: certPath,
+		ClientKeyFile:  keyPath,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	options := client.broker.OptionsReader()
+	if !options.ResumeSubs() {
+		t.Fatal("NewClient() disabled subscription resume; broker reconnect would drop device ingest subscriptions")
+	}
+}
+
+func writeTestTLSMaterial(t *testing.T, directory string) (string, string, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "mqtt-client-test"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	certificateDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKeyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificatePEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificateDER})
+	privateKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: privateKeyDER})
+	caPath := filepath.Join(directory, "ca.pem")
+	certPath := filepath.Join(directory, "client.pem")
+	keyPath := filepath.Join(directory, "client.key")
+	for _, file := range []struct {
+		path string
+		data []byte
+	}{
+		{path: caPath, data: certificatePEM},
+		{path: certPath, data: certificatePEM},
+		{path: keyPath, data: privateKeyPEM},
+	} {
+		if err := os.WriteFile(file.path, file.data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return caPath, certPath, keyPath
 }

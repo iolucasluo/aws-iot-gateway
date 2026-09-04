@@ -106,6 +106,7 @@ func NewClient(config Config) (*Client, error) {
 		SetProtocolVersion(4).
 		SetCleanSession(true).
 		SetAutoReconnect(true).
+		SetResumeSubs(true).
 		SetConnectRetry(true).
 		SetConnectRetryInterval(time.Second).
 		SetConnectTimeout(connectTimeout).
