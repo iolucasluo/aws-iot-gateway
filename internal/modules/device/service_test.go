@@ -403,7 +403,7 @@ func TestGetPTZStatusPublishesFixedQueryAndReturnsValidatedDeviceState(t *testin
 	service := NewService(publisher, ackWaiterStub{ack: map[string]any{
 		"action": "ptz", "session_id": "session-ptz", "code": float64(0), "op": "get_position",
 		"pan": float64(1800), "tilt": float64(-500), "limit_h": float64(4000), "limit_v": float64(2000),
-		"pan_normalized": 0.45, "tilt_normalized": -0.25, "moving": true,
+		"pan_normalized": 0.45, "tilt_normalized": -0.25, "moving": true, "calibrated": true,
 	}}, repository, "aws-iot-gateway-staging", func() (string, error) { return "session-ptz", nil })
 
 	status, err := service.GetPTZStatus(context.Background(), "livpet-staging", "device-id", "fdr-0001")
@@ -411,7 +411,7 @@ func TestGetPTZStatusPublishesFixedQueryAndReturnsValidatedDeviceState(t *testin
 		t.Fatalf("GetPTZStatus() error = %v", err)
 	}
 	if status.Pan != 1800 || status.Tilt != -500 || status.LimitH != 4000 || status.LimitV != 2000 ||
-		status.PanNormalized != 0.45 || status.TiltNormalized != -0.25 || !status.Moving {
+		status.PanNormalized != 0.45 || status.TiltNormalized != -0.25 || !status.Moving || !status.Calibrated {
 		t.Fatalf("status = %#v", status)
 	}
 	var payload map[string]any

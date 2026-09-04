@@ -69,6 +69,7 @@ type PTZStatus struct {
 	PanNormalized  float64 `json:"pan_normalized"`
 	TiltNormalized float64 `json:"tilt_normalized"`
 	Moving         bool    `json:"moving"`
+	Calibrated     bool    `json:"calibrated"`
 }
 
 type Publisher interface {
@@ -434,14 +435,18 @@ func parsePTZStatus(data map[string]any, expectedSessionID string) (PTZStatus, e
 	panNormalized, panNormalizedOK := numericFloat(data["pan_normalized"])
 	tiltNormalized, tiltNormalizedOK := numericFloat(data["tilt_normalized"])
 	moving, movingOK := data["moving"].(bool)
+	calibrated, calibratedOK := data["calibrated"].(bool)
+	if _, present := data["calibrated"]; !present {
+		calibratedOK = true
+	}
 	if !panOK || !tiltOK || !limitHOK || !limitVOK || limitH <= 0 || limitV <= 0 ||
 		!panNormalizedOK || !tiltNormalizedOK || panNormalized < -1 || panNormalized > 1 ||
-		tiltNormalized < -1 || tiltNormalized > 1 || !movingOK {
+		tiltNormalized < -1 || tiltNormalized > 1 || !movingOK || !calibratedOK {
 		return PTZStatus{}, ErrInvalidDeviceResponse
 	}
 	return PTZStatus{
 		Pan: pan, Tilt: tilt, LimitH: limitH, LimitV: limitV,
-		PanNormalized: panNormalized, TiltNormalized: tiltNormalized, Moving: moving,
+		PanNormalized: panNormalized, TiltNormalized: tiltNormalized, Moving: moving, Calibrated: calibrated,
 	}, nil
 }
 
