@@ -71,8 +71,13 @@ func TestMigrateCreatesRequiredTablesAndGlobalBindingConstraint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load feeder product DPs: %v", err)
 	}
-	if len(definitions) != 2 || definitions[0].Code != "feed" || definitions[1].Code != "set_schedule" {
-		t.Fatalf("feeder product DPs = %#v, want feed/set_schedule", definitions)
+	codes := make([]string, len(definitions))
+	for index, definition := range definitions {
+		codes[index] = definition.Code
+	}
+	wantCodes := []string{"audio_playback", "audio_reset", "audio_update", "clear_jam", "device_info", "feed", "get_feed_log", "get_schedule", "motion_det", "night_mode", "ptz", "reboot", "record_clip", "record_mode", "record_start", "record_stop", "sd_files", "sdcard", "sdcard_status", "set_schedule", "snapshot", "speaker_vol", "stream", "two_way_audio", "video_res"}
+	if !slices.Equal(codes, wantCodes) {
+		t.Fatalf("feeder product DP codes = %v, want %v", codes, wantCodes)
 	}
 	_, err = pool.Exec(ctx, `
 		INSERT INTO device_bindings (id, device_registry_id, internal_app_id, binding_external_user_id, status)
@@ -325,8 +330,8 @@ func TestProductSeedIsExplicitAndIdempotent(t *testing.T) {
 	`).Scan(&minionDPCount); err != nil {
 		t.Fatalf("count minion product DPs: %v", err)
 	}
-	if dpCount != 31 || feederDPCount != 3 || minionDPCount != 28 {
-		t.Fatalf("seeded product DP counts = total %d/feeder %d/minion %d, want 31/3/28", dpCount, feederDPCount, minionDPCount)
+	if dpCount != 53 || feederDPCount != 25 || minionDPCount != 28 {
+		t.Fatalf("seeded product DP counts = total %d/feeder %d/minion %d, want 53/25/28", dpCount, feederDPCount, minionDPCount)
 	}
 	var minionDetailedCount int
 	if err := pool.QueryRow(ctx, `

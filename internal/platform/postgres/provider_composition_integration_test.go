@@ -20,7 +20,11 @@ func TestProviderCompositionBindingEnforcesOneActiveInstancePerCapability(t *tes
 	bindingID := "018f0000-0000-7000-8000-000000000062"
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO device_registry (id, device_sn, thing_name, pid, status)
-		VALUES ($1, 'fdr-00000000000000000000000000000061', 'fdr-00000000000000000000000000000061', 'feeder-x1', 'active');
+		VALUES ($1, 'fdr-00000000000000000000000000000061', 'fdr-00000000000000000000000000000061', 'feeder-x1', 'active')
+	`, deviceID); err != nil {
+		t.Fatalf("insert provider device fixture: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
 		INSERT INTO device_bindings (id, device_registry_id, internal_app_id, binding_external_user_id, status)
 		VALUES ($2, $1, 'livpet-staging', 'provider-user', 'active')
 	`, deviceID, bindingID); err != nil {
@@ -32,7 +36,7 @@ func TestProviderCompositionBindingEnforcesOneActiveInstancePerCapability(t *tes
 			INSERT INTO device_component_bindings (
 				id, device_registry_id, device_binding_id, capability, provider_instance,
 				external_ref, contract_version, status, revoked_reason
-			) VALUES ($1, $2, $3, $4, $5, $6, 'installation.v2', $7, $8)
+			) VALUES ($1, $2, $3, $4, $5, $6, 'installation.v2', $7, NULLIF($8, ''))
 		`, id, deviceID, bindingID, capability, instance, "opaque-ref", status, reason)
 		return err
 	}
