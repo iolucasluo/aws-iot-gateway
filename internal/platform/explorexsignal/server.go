@@ -158,6 +158,10 @@ func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	}
 	if strings.HasPrefix(request.URL.Path, "/v1/sessions/") {
 		parts := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
+		if len(parts) == 4 && parts[3] == "renew" && safeIdentifier(parts[2]) && request.Method == http.MethodPost {
+			server.renewSession(writer, request, parts[2])
+			return
+		}
 		if len(parts) == 3 && parts[0] == "v1" && parts[1] == "sessions" && parts[2] != "" && request.Method == http.MethodDelete {
 			server.closeSession(writer, parts[2])
 			return
@@ -291,7 +295,7 @@ func (server *Server) serveWebSocket(writer http.ResponseWriter, request *http.R
 	server.mu.Lock()
 	now := server.now().UTC()
 	session := server.sessions[sessionID]
-	if session == nil || session.closed || !session.expiresAt.After(now) {
+	if session == nil || session.closed || !session.expiresAt.After(now) || !session.descriptor.ExpiresAt.After(now) {
 		server.mu.Unlock()
 		writeJSONResponse(writer, http.StatusUnauthorized, map[string]string{"error": "session_expired"})
 		return
@@ -324,7 +328,7 @@ func (server *Server) serveWebSocket(writer http.ResponseWriter, request *http.R
 	}
 	peer := &signalPeer{role: requestedRole, conn: conn}
 	server.mu.Lock()
-	if session.closed || !session.expiresAt.After(server.now().UTC()) {
+	if session.closed || !session.expiresAt.After(server.now().UTC()) || !session.descriptor.ExpiresAt.After(server.now().UTC()) {
 		server.mu.Unlock()
 		closePeer(peer)
 		return

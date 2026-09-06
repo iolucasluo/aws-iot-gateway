@@ -21,6 +21,7 @@ var (
 	ErrStreamRejected              = errors.New("stream start rejected")
 	ErrStreamCapabilityUnavailable = errors.New("stream capability unavailable")
 	ErrStreamNotFound              = errors.New("stream not found")
+	ErrStreamLeaseUnsupported      = errors.New("stream lease renewal unsupported")
 )
 
 const (
@@ -66,6 +67,14 @@ type StreamRepository interface {
 	Close(context.Context, string, string, string) (bool, error)
 }
 
+type StreamLeaseRepository interface {
+	Renew(context.Context, string, string, string, time.Time) (time.Time, error)
+}
+
+type StreamLease struct {
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 type Signaling struct {
 	WSSURL    string    `json:"wss_url"`
 	ExpiresAt time.Time `json:"expires_at"`
@@ -104,6 +113,7 @@ type StreamResult struct {
 	Signaling                 Signaling                  `json:"signaling"`
 	ICEServers                []ICEServer                `json:"ice_servers"`
 	ExpiresAt                 time.Time                  `json:"expires_at"`
+	SessionLease              *StreamLease               `json:"session_lease,omitempty"`
 }
 
 type StreamService struct {
@@ -262,8 +272,15 @@ func (service *StreamService) create(
 		}
 		return StreamResult{}, err
 	}
+	var lease *StreamLease
+	if _, ok := service.realtime.(provider.RealtimeSessionRenewer); ok {
+		if _, ok := service.repository.(StreamLeaseRepository); ok {
+			lease = &StreamLease{ExpiresAt: realtimeSession.ExpiresAt}
+		}
+	}
 	return StreamResult{
-		StreamID: viewerID, Provider: providerName, Protocol: protocol,
+		SessionLease: lease,
+		StreamID:     viewerID, Provider: providerName, Protocol: protocol,
 		ClientConfig:              viewerClientConfig(realtimeSession.ClientConfig),
 		CapabilityContractVersion: CapabilityContractVersion,
 		FirmwareVersion:           capabilityFacts.firmwareVersion,
@@ -274,6 +291,45 @@ func (service *StreamService) create(
 		ICEServers:                iceServers,
 		ExpiresAt:                 expiresAt,
 	}, nil
+}
+
+// Renew is reached only after the HTTP boundary re-authorizes the device token.
+// Ownership is checked again before recording the provider's bounded deadline.
+func (service *StreamService) Renew(ctx context.Context, bindingID, deviceSN, streamID string) (StreamLease, error) {
+	if service == nil || strings.TrimSpace(streamID) == "" || strings.TrimSpace(bindingID) == "" || strings.TrimSpace(deviceSN) == "" {
+		return StreamLease{}, ErrInvalidInput
+	}
+	renewer, ok := service.realtime.(provider.RealtimeSessionRenewer)
+	repository, repositoryOK := service.repository.(StreamLeaseRepository)
+	if !ok || !repositoryOK || service.realtimeInstance == "" {
+		return StreamLease{}, ErrStreamLeaseUnsupported
+	}
+	found, err := service.repository.Find(ctx, bindingID, deviceSN, streamID)
+	if err != nil {
+		return StreamLease{}, err
+	}
+	if !found {
+		return StreamLease{}, ErrStreamNotFound
+	}
+	ref := provider.RealtimeSessionRef{ID: streamID, ProviderInstance: service.realtimeInstance}
+	deadline := service.now().UTC().Add(streamTTL)
+	expiresAt, err := renewer.RenewSession(ctx, ref, deadline)
+	if err != nil {
+		return StreamLease{}, err
+	}
+	if !expiresAt.After(service.now().UTC()) || expiresAt.After(deadline) {
+		err = ErrStreamRejected
+	} else {
+		expiresAt, err = repository.Renew(ctx, bindingID, deviceSN, streamID, expiresAt)
+	}
+	if err != nil {
+		// Bound cleanup separately: a cancelled HTTP request must not prevent it.
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = service.realtime.CloseSession(cleanup, ref)
+		return StreamLease{}, err
+	}
+	return StreamLease{ExpiresAt: expiresAt}, nil
 }
 
 func viewerClientConfig(config map[string]any) map[string]any {

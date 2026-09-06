@@ -122,6 +122,11 @@ active binding 时返回授权；该接口不创建 activation、不改 binding�
 实际 SDP 补成接收视频、双向音频且无 DataChannel，并要求设备完整授予；部分授予会撤销本次 viewer
 grant 并返回 409。该兼容映射仍以设备真实 ACK 为准，不伪造设备能力。
 
+支持续期的 realtime provider 会额外返回 `session_lease.expires_at`；App 通过
+`POST .../{device_sn}/streams/{stream_id}/renew`（body `{}`）重新鉴权并延长当前观看，
+不会重建视频或延长原始入场 ticket。AWS KVS 不声明此字段，维持独立路径。
+边界、失败与滚动发布约束见 [signaling 契约](docs/contracts/explorex-signal-v1.md)。
+
 `POST .../{device_sn}/local-media-sessions` 创建 30–900 秒的 `local-media.v1` 租约（body
 省略时为 300 秒）。Gateway 先以设备 PID 检查受控产品目录中的显式 capability，
 再为该请求生成一次性 username/password/generation 和单设备严格递增 revision，经专用

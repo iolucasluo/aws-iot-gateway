@@ -168,6 +168,7 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		(operation == "events" && request.Method == http.MethodGet) ||
 		(operation == "streams" && len(parts) == 2 && request.Method == http.MethodPost) ||
 		(operation == "streams" && len(parts) == 3 && request.Method == http.MethodDelete) ||
+		(operation == "streams" && len(parts) == 4 && parts[3] == "renew" && request.Method == http.MethodPost) ||
 		(operation == "local-media-sessions" && len(parts) == 2 &&
 			(request.Method == http.MethodPost || request.Method == http.MethodDelete)) ||
 		(operation == "snapshots" && len(parts) == 2 && request.Method == http.MethodPost) ||
@@ -319,6 +320,24 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 	case "streams":
 		if s.media == nil {
 			writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "media service is unavailable")
+			return true
+		}
+		if len(parts) == 4 && parts[3] == "renew" {
+			var input map[string]json.RawMessage
+			if !decodeJSON(writer, request, &input) {
+				return true
+			}
+			if input == nil || len(input) != 0 {
+				writeError(writer, http.StatusBadRequest, "invalid_request", "renewal body must be an empty object")
+				return true
+			}
+			lease, err := s.media.Renew(request.Context(), ownedBinding.ID, ownedBinding.DeviceSN, parts[2])
+			if err != nil {
+				writeMediaError(writer, err)
+				return true
+			}
+			writer.Header().Set("Cache-Control", "no-store")
+			writeJSON(writer, http.StatusOK, map[string]any{"stream_id": parts[2], "expires_at": lease.ExpiresAt})
 			return true
 		}
 		if request.Method == http.MethodDelete {
@@ -1230,6 +1249,8 @@ func writeOTAError(writer http.ResponseWriter, err error) {
 
 func writeMediaError(writer http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, media.ErrStreamLeaseUnsupported):
+		writeError(writer, http.StatusConflict, "stream_lease_unsupported", "stream provider does not require renewal")
 	case errors.Is(err, media.ErrInvalidInput), errors.Is(err, devicemodule.ErrInvalidInput):
 		writeError(writer, http.StatusBadRequest, "invalid_request", "media request is invalid")
 	case errors.Is(err, media.ErrInvalidCapabilities):

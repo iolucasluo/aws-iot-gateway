@@ -119,6 +119,12 @@ type RealtimeProvider interface {
 	Health(context.Context) error
 }
 
+// RealtimeSessionRenewer is optional: providers without renewable sessions
+// (including the independent KVS playback adapter) keep their own lifecycle.
+type RealtimeSessionRenewer interface {
+	RenewSession(context.Context, RealtimeSessionRef, time.Time) (time.Time, error)
+}
+
 // ObjectStore is the provider-neutral media object boundary. Credentials,
 // bucket addressing and presigned URL formats remain owned by the selected
 // adapter; media services only use opaque object keys and short-lived URLs.

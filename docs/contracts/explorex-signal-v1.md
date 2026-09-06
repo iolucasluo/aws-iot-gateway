@@ -78,6 +78,27 @@
 
 关闭是幂等的。session 关闭后，ticket 不得再接受新的 WebSocket 连接；自然过期也必须达到同一效果。服务端不依赖客户端提供的 provider instance 来决定资源边界，adapter 会携带并校验该身份。
 
+### `POST /v1/sessions/{session_id}/renew`
+
+此内部接口必须携带 Gateway bearer 认证；请求和成功响应均为
+`{"expires_at":"2030-01-01T00:09:00Z"}`。请求期限必须晚于服务端当前时间，且最多为
+当前时间后五分钟。仅允许仍未过期且 Viewer/Device 均已连接的 session；期限单调延长，
+不创建 session、不重新发 ticket、不修改原始 descriptor 的 `expires_at`（入场期限）。
+原始 ticket 的期限与一次性消费状态不因续期改变。响应为 200；无认证 401、非法期限 400、
+关闭/不存在/已过期 404、双方尚未连接 409。过期 session 不可复活。
+
+Gateway 对 App 暴露 `POST .../{device_sn}/streams/{stream_id}/renew`，请求仅允许空 JSON
+对象 `{}`。每次重新校验 HMAC、Device Token、设备与 active binding；期限由 Gateway 决定。
+返回 `{"stream_id":"…","expires_at":"…"}` 并禁止缓存。provider 续期后必须成功持久化
+才能向 App 报成功；持久化失败会尝试关闭 provider。并发解绑最多留下一个已批准的有限
+lease（最长五分钟，服务端清扫另有最多约 30 秒延迟），不能无限续期绕过撤权。
+
+只有 provider 和 stream repository 均支持续期时，创建 stream 的响应才附带
+`"session_lease":{"expires_at":"…"}`。App 据此提前一分钟续期；失败、超时或过期会关闭
+所属 PeerConnection，退出页面/切环境会取消计时并忽略迟到结果。缺少此字段时不续期，
+AWS KVS adapter 保持原路径；不支持的续期请求返回 409。部署顺序为 signaling → API → App，
+不要求修改设备固件。回退旧 App 会恢复原有限观看时长，不放宽 session 授权。
+
 ### `GET /healthz`
 
 只表示 signaling control-plane 可接收请求，不表示 TURN、设备在线或媒体链路可用。
