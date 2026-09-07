@@ -336,6 +336,7 @@ func validEnvironmentMap() map[string]string {
 		"AWS_KVS_CHANNEL_PREFIX":               "aws-iot-gateway-staging-",
 		"AWS_S3_MEDIA_BUCKET":                  "aws-iot-gateway-staging-media-example",
 		"AWS_S3_OTA_BUCKET":                    "aws-iot-gateway-staging-ota-example",
+		"OTA_DEVICE_DOWNLOAD_BASE_URL":         "https://gateway.example",
 		"TIME_BOOTSTRAP_KEY_ID":                "time-staging-g1",
 		"TIME_BOOTSTRAP_KMS_KEY_ID":            "arn:aws:kms:ap-east-1:000000000000:key/00000000-0000-0000-0000-000000000000",
 		"DATABASE_URL":                         "postgres://gateway:password@postgres.example/gateway?sslmode=require",

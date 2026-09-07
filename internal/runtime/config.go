@@ -66,6 +66,7 @@ type Config struct {
 	DomesticRealtimeAuthorizationToken string
 	InternalApps                       []InternalApp
 	DirectACKSubscriberEnabled         bool
+	OTADeviceDownloadBaseURL           string
 }
 
 func LoadConfig(getenv func(string) string) (Config, error) {
@@ -112,6 +113,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		DomesticRealtimeEndpoint:           strings.TrimSpace(getenv("DOMESTIC_REALTIME_ENDPOINT")),
 		DomesticRealtimeAuthorizationToken: strings.TrimSpace(getenv("DOMESTIC_REALTIME_AUTH_TOKEN")),
 		DirectACKSubscriberEnabled:         directACKSubscriberEnabled,
+		OTADeviceDownloadBaseURL:           strings.TrimSpace(getenv("OTA_DEVICE_DOWNLOAD_BASE_URL")),
 	}
 	if !validEnvironment(config.Environment) {
 		return Config{}, fmt.Errorf("GATEWAY_ENVIRONMENT must be development, staging, or production")
@@ -209,6 +211,13 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	}
 	if config.ProviderMode == "aws" && config.Environment != "development" && config.S3OTABucket == "" {
 		return Config{}, fmt.Errorf("AWS_S3_OTA_BUCKET is required outside development")
+	}
+	if config.Environment != "development" {
+		parsed, err := url.Parse(config.OTADeviceDownloadBaseURL)
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+			(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return Config{}, fmt.Errorf("OTA_DEVICE_DOWNLOAD_BASE_URL must be an HTTPS origin outside development")
+		}
 	}
 	if config.ProviderMode == "aws" && config.Environment == "development" && config.S3OTABucket == "" && len(config.OTADevArtifactAllowedOrigins) == 0 {
 		return Config{}, fmt.Errorf("AWS_S3_OTA_BUCKET or OTA_DEV_ARTIFACT_ALLOWED_ORIGINS is required for development OTA")

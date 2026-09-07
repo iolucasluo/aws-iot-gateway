@@ -177,3 +177,17 @@ func TestExistsDistinguishesMissingObjectFromS3Failure(t *testing.T) {
 		t.Fatal("Exists() must propagate non-not-found S3 errors")
 	}
 }
+
+func TestOpenStreamsS3ObjectWithContentLength(t *testing.T) {
+	t.Parallel()
+	client := &Client{client: &s3APIStub{body: "signed-ota"}, bucket: "ota-bucket"}
+	body, size, err := client.Open(context.Background(), "ota/firmware.tar.gz")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer body.Close()
+	payload, err := io.ReadAll(body)
+	if err != nil || string(payload) != "signed-ota" || size != int64(len(payload)) {
+		t.Fatalf("Open() payload=%q size=%d error=%v", payload, size, err)
+	}
+}

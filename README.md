@@ -53,6 +53,7 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 | `POST/GET /api/v1/openapi/ota/firmware-versions` | OTA 发布方 / 内部 App | HMAC v1 + `ota:publish` / `ota:deploy` |
 | `POST /api/v1/openapi/ota/firmware-versions/{id}/complete` | OTA 发布方 | HMAC v1 + `ota:publish` |
 | `POST /api/v1/openapi/devices/{device_sn}/ota-deployments` | Demo App / 内部 App | HMAC v1 + `ota:deploy` + `X-Device-Token` |
+| `GET /api/v1/device-ota/download/{device_sn}/{capability}` | 已接收 OTA 命令的设备 | 15 分钟随机 capability；设备标识绑定；最多初始下载 + 3 次重试 |
 | `GET /api/v1/openapi/devices/{device_sn}/ota-deployments/{id}` | Demo App / 内部 App | 同上 |
 | `GET /api/v1/openapi/devices/{device_sn}/status` | 内部 App backend | HMAC v1 + `X-Device-Token` |
 | `POST/DELETE /api/v1/openapi/devices/{device_sn}/local-media-sessions` | 内部 App backend | HMAC v1 + `X-Device-Token`；`no-store` |
@@ -209,6 +210,8 @@ go vet ./...
 ```
 
 PostgreSQL integration test 通过 `TEST_POSTGRES_URL` 显式启用。真实 AWS 资源创建与部署只针对获授权的隔离 dev/staging 环境；凭据存在不等于生产授权。
+
+当 OTA artifact 位于私有 S3 时，Gateway 不再把包含 ECS 临时 session token 的长 S3 presigned URL 放入 MQTT。创建 deployment 后会在 Redis 写入仅含 capability SHA-256 的短期 grant，并向设备发送短 Gateway URL；公开下载路由校验 capability 与 `device_sn` 的绑定，最多允许初始下载加 3 次重试，15 分钟后失效。Gateway 从私有 S3 流式返回已发布 artifact，响应 `no-store`；capability 不进入 PostgreSQL、Gateway 应用日志或错误响应。artifact 最终仍由设备只读 OTA verifier 校验签名、release statement、SHA-256 和大小。
 
 OTA 发布记录可选携带成对的 `target_environment_id` 与两位 `target_environment_code`，用于 Demo App
 从当前 Gateway 的 available 版本中选择环境迁移包。两字段必须同时存在，编号范围为 `01`–`99`；普通
