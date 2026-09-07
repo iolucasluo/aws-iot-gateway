@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS ota_firmware_versions (
     idempotency_key varchar(128) NOT NULL,
     pid varchar(64) NOT NULL
         CONSTRAINT ota_firmware_versions_pid_fkey REFERENCES products(pid) ON DELETE RESTRICT,
+    target_environment_id varchar(64),
+    target_environment_code varchar(2),
     version varchar(64) NOT NULL,
     firmware_build bigint NOT NULL
         CONSTRAINT ota_firmware_versions_build_check CHECK (firmware_build > 0),
@@ -27,6 +29,12 @@ CREATE TABLE IF NOT EXISTS ota_firmware_versions (
     available_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT ota_firmware_versions_target_environment_pair_check
+        CHECK ((target_environment_id IS NULL) = (target_environment_code IS NULL)),
+    CONSTRAINT ota_firmware_versions_target_environment_id_check
+        CHECK (target_environment_id IS NULL OR target_environment_id ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$'),
+    CONSTRAINT ota_firmware_versions_target_environment_code_check
+        CHECK (target_environment_code IS NULL OR target_environment_code ~ '^(0[1-9]|[1-9][0-9])$'),
     CONSTRAINT ota_firmware_versions_artifact_source_check
         CHECK ((artifact_key IS NOT NULL) <> (source_url IS NOT NULL)),
     CONSTRAINT ota_firmware_versions_status_available_check

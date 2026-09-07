@@ -4,57 +4,43 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/provider"
 )
-
-type SQSClient interface {
-	ReceiveMessage(context.Context, *sqs.ReceiveMessageInput, ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error)
-	DeleteMessage(context.Context, *sqs.DeleteMessageInput, ...func(*sqs.Options)) (*sqs.DeleteMessageOutput, error)
-}
 
 type IngestHandler interface {
 	Handle(context.Context, []byte) error
 }
 
 type IngestWorker struct {
-	client   SQSClient
-	queueURL string
-	handler  IngestHandler
+	queue   provider.EventQueue
+	handler IngestHandler
 }
 
-func NewIngestWorker(client SQSClient, queueURL string, handler IngestHandler) (*IngestWorker, error) {
-	if client == nil || strings.TrimSpace(queueURL) == "" || handler == nil {
-		return nil, fmt.Errorf("ingest worker requires SQS, queue URL, and handler")
+func NewIngestWorker(queue provider.EventQueue, handler IngestHandler) (*IngestWorker, error) {
+	if queue == nil || handler == nil {
+		return nil, fmt.Errorf("ingest worker requires an event queue and handler")
 	}
-	return &IngestWorker{client: client, queueURL: queueURL, handler: handler}, nil
+	return &IngestWorker{queue: queue, handler: handler}, nil
 }
 
 func (worker *IngestWorker) PollOnce(ctx context.Context) error {
-	result, err := worker.client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-		QueueUrl: aws.String(worker.queueURL), MaxNumberOfMessages: 10, WaitTimeSeconds: 20,
-	})
+	messages, err := worker.queue.Receive(ctx)
 	if err != nil {
-		return fmt.Errorf("receive IoT ingest messages: %w", err)
+		return fmt.Errorf("receive ingest messages: %w", err)
 	}
 	var failures []error
-	for _, message := range result.Messages {
-		body := aws.ToString(message.Body)
-		receipt := aws.ToString(message.ReceiptHandle)
-		if body == "" || receipt == "" {
-			failures = append(failures, fmt.Errorf("SQS ingest message is incomplete"))
+	for _, message := range messages {
+		if len(message.Body) == 0 || message.LeaseToken == "" {
+			failures = append(failures, fmt.Errorf("ingest message is incomplete"))
 			continue
 		}
-		if err := worker.handler.Handle(ctx, []byte(body)); err != nil {
+		if err := worker.handler.Handle(ctx, message.Body); err != nil {
 			failures = append(failures, fmt.Errorf("handle IoT ingest message: %w", err))
 			continue
 		}
-		if _, err := worker.client.DeleteMessage(ctx, &sqs.DeleteMessageInput{
-			QueueUrl: aws.String(worker.queueURL), ReceiptHandle: aws.String(receipt),
-		}); err != nil {
-			failures = append(failures, fmt.Errorf("delete IoT ingest message: %w", err))
+		if err := worker.queue.Ack(ctx, message); err != nil {
+			failures = append(failures, fmt.Errorf("acknowledge ingest message: %w", err))
 		}
 	}
 	return errors.Join(failures...)

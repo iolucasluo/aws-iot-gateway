@@ -1,0 +1,36 @@
+api_version: explorex.io/v1
+kind: ProviderComposition
+metadata:
+  id: dell-domestic-dev
+  environment: development
+  region: cn
+
+# Non-secret operator composition for the DELL LAN staging instance.
+instances:
+  identity.dell_dev_ca:
+    capability: identity
+    driver: ca_mqtt_identity
+    credential_ref: config://dell-domestic-dev/identity-ca
+  messaging.dell_mqtt:
+    capability: messaging
+    driver: mqtt_broker
+    endpoint: mqtts://192.168.11.131:51884
+    trust_anchor_ref: config://dell-domestic-dev/mqtt-ca
+  realtime.dell_signal:
+    capability: realtime
+    driver: explorex_signal
+    endpoint: http://192.168.11.131:18084
+  signer.dell_dev_local:
+    capability: signer
+    driver: local
+    key_ref: config://dell-domestic-dev/time-signer
+
+bindings:
+  identity: identity.dell_dev_ca
+  messaging: messaging.dell_mqtt
+  realtime: realtime.dell_signal
+  signer: signer.dell_dev_local
+
+policy:
+  forbid_regions: [aws]
+  allow_mixed_provider: true

@@ -41,6 +41,92 @@ func TestLoadConfigAcceptsEnvironmentOwnedInternalApps(t *testing.T) {
 	}
 }
 
+func TestLoadConfigAcceptsDellDomesticDevWithoutAWSFields(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{
+		"GATEWAY_ENVIRONMENT":                   "development",
+		"GATEWAY_PROVIDER_MODE":                 "domestic-dev",
+		"GATEWAY_PROVIDER_COMPOSITION_PATH":     "/opt/explorex/domestic-dev/composition.yaml",
+		"DOMESTIC_MQTT_ENDPOINT":                "mqtts://127.0.0.1:51884",
+		"DOMESTIC_MQTT_TOPIC_PREFIX":            "domestic-dev",
+		"DOMESTIC_MQTT_CLIENT_ID":               "gateway-domestic-dev",
+		"DOMESTIC_MQTT_CLIENT_CERT_PATH":        "/var/lib/explorex/domestic-dev/gateway.crt",
+		"DOMESTIC_MQTT_CLIENT_KEY_PATH":         "/var/lib/explorex/domestic-dev/gateway.key",
+		"DOMESTIC_CA_CERT_PATH":                 "/var/lib/explorex/domestic-dev/ca.pem",
+		"DOMESTIC_CA_KEY_PATH":                  "/var/lib/explorex/domestic-dev/ca-key.pem",
+		"DOMESTIC_SIGNER_PRIVATE_KEY_PATH":      "/var/lib/explorex/domestic-dev/signer.pem",
+		"DOMESTIC_SIGNER_KEY_ID":                "domestic-dev-g1",
+		"DOMESTIC_REALTIME_ENDPOINT":            "http://127.0.0.1:18084",
+		"DOMESTIC_REALTIME_AUTH_TOKEN":          "domestic-realtime-secret",
+		"TIME_BOOTSTRAP_KEY_ID":                 "domestic-dev-g1",
+		"TIME_BOOTSTRAP_SIGNER":                 "local",
+		"TIME_BOOTSTRAP_LOCAL_PRIVATE_KEY_PATH": "/var/lib/explorex/domestic-dev/signer.pem",
+		"DATABASE_URL":                          "postgres://gateway:password@postgres.example/gateway?sslmode=require",
+		"REDIS_URL":                             "redis://redis.example:6379/5",
+		"INTERNAL_APPS_JSON":                    `[{"id":"demo-domestic","api_key":"ak_domestic","api_secret":"domestic-api-secret"}]`,
+	}
+	config, err := LoadConfig(func(key string) string { return env[key] })
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if config.ProviderMode != "domestic-dev" {
+		t.Fatalf("ProviderMode = %q, want domestic-dev", config.ProviderMode)
+	}
+	if config.DomesticMQTTClientID != env["DOMESTIC_MQTT_CLIENT_ID"] ||
+		config.DomesticMQTTClientCertPath != env["DOMESTIC_MQTT_CLIENT_CERT_PATH"] ||
+		config.DomesticMQTTClientKeyPath != env["DOMESTIC_MQTT_CLIENT_KEY_PATH"] {
+		t.Fatalf("domestic MQTT client config = %#v", config)
+	}
+}
+
+func TestLoadConfigRejectsDellDomesticDevAWSDataPlane(t *testing.T) {
+	t.Parallel()
+
+	env := domesticDevEnvironmentMap()
+	env["DOMESTIC_MQTT_ENDPOINT"] = "mqtts://iot.amazonaws.com:8883"
+	if _, err := LoadConfig(func(key string) string { return env[key] }); err == nil {
+		t.Fatal("LoadConfig() accepted AWS endpoint in domestic-dev")
+	}
+}
+
+func TestLoadConfigRejectsDellDomesticDevMissingProviderSecretPath(t *testing.T) {
+	t.Parallel()
+
+	env := domesticDevEnvironmentMap()
+	delete(env, "DOMESTIC_CA_KEY_PATH")
+	if _, err := LoadConfig(func(key string) string { return env[key] }); err == nil ||
+		!strings.Contains(err.Error(), "DOMESTIC_CA_KEY_PATH") {
+		t.Fatalf("LoadConfig() error = %v, want missing domestic CA key path", err)
+	}
+}
+
+func domesticDevEnvironmentMap() map[string]string {
+	return map[string]string{
+		"GATEWAY_ENVIRONMENT":                   "development",
+		"GATEWAY_PROVIDER_MODE":                 "domestic-dev",
+		"GATEWAY_PROVIDER_COMPOSITION_PATH":     "/opt/explorex/domestic-dev/composition.yaml",
+		"DOMESTIC_MQTT_ENDPOINT":                "mqtts://127.0.0.1:51884",
+		"DOMESTIC_MQTT_TOPIC_PREFIX":            "domestic-dev",
+		"DOMESTIC_MQTT_CLIENT_ID":               "gateway-domestic-dev",
+		"DOMESTIC_MQTT_CLIENT_CERT_PATH":        "/var/lib/explorex/domestic-dev/gateway.crt",
+		"DOMESTIC_MQTT_CLIENT_KEY_PATH":         "/var/lib/explorex/domestic-dev/gateway.key",
+		"DOMESTIC_CA_CERT_PATH":                 "/var/lib/explorex/domestic-dev/ca.pem",
+		"DOMESTIC_CA_KEY_PATH":                  "/var/lib/explorex/domestic-dev/ca-key.pem",
+		"DOMESTIC_SIGNER_PRIVATE_KEY_PATH":      "/var/lib/explorex/domestic-dev/signer.pem",
+		"DOMESTIC_SIGNER_KEY_ID":                "domestic-dev-g1",
+		"DOMESTIC_REALTIME_ENDPOINT":            "http://127.0.0.1:18084",
+		"DOMESTIC_REALTIME_AUTH_TOKEN":          "domestic-realtime-secret",
+		"TIME_BOOTSTRAP_KEY_ID":                 "domestic-dev-g1",
+		"TIME_BOOTSTRAP_SIGNER":                 "local",
+		"TIME_BOOTSTRAP_LOCAL_PRIVATE_KEY_PATH": "/var/lib/explorex/domestic-dev/signer.pem",
+		"OTA_DEV_ARTIFACT_ALLOWED_ORIGINS":      "http://127.0.0.1:18080",
+		"DATABASE_URL":                          "postgres://gateway:password@postgres.example/gateway?sslmode=require",
+		"REDIS_URL":                             "redis://redis.example:6379/5",
+		"INTERNAL_APPS_JSON":                    `[{"id":"demo-domestic","api_key":"ak_domestic","api_secret":"domestic-api-secret"}]`,
+	}
+}
+
 func TestLoadConfigAllowsOnlyDevelopmentOTAArtifactOrigins(t *testing.T) {
 	t.Parallel()
 	env := validEnvironmentMap()
@@ -250,6 +336,7 @@ func validEnvironmentMap() map[string]string {
 		"AWS_KVS_CHANNEL_PREFIX":               "aws-iot-gateway-staging-",
 		"AWS_S3_MEDIA_BUCKET":                  "aws-iot-gateway-staging-media-example",
 		"AWS_S3_OTA_BUCKET":                    "aws-iot-gateway-staging-ota-example",
+		"OTA_DEVICE_DOWNLOAD_BASE_URL":         "https://gateway.example",
 		"TIME_BOOTSTRAP_KEY_ID":                "time-staging-g1",
 		"TIME_BOOTSTRAP_KMS_KEY_ID":            "arn:aws:kms:ap-east-1:000000000000:key/00000000-0000-0000-0000-000000000000",
 		"DATABASE_URL":                         "postgres://gateway:password@postgres.example/gateway?sslmode=require",

@@ -26,7 +26,7 @@ func TestInternalAPICreatesAndPollsHMACActivation(t *testing.T) {
 
 	now := time.UnixMilli(1_718_000_000_000)
 	handler := newSignedTestHandler(t, activation.NewService(), now)
-	createBody := []byte(`{"method":"ble","pid":"feeder-x1","binding_external_user_id":"livpet-user-42","idempotency_key":"operation-1"}`)
+	createBody := []byte(`{"method":"ble","pid":"feeder-x1","dp_profile":"feeder-v1","binding_external_user_id":"livpet-user-42","idempotency_key":"operation-1"}`)
 	create := signedInternalRequest(t, now, "nonce-create-00001", http.MethodPost, "/api/v1/openapi/device-activations", createBody)
 	createResponse := httptest.NewRecorder()
 	handler.ServeHTTP(createResponse, create)
@@ -70,7 +70,7 @@ func TestInternalAPIPreservesSelectedMinionPIDAcrossActivationLifecycle(t *testi
 
 	now := time.UnixMilli(1_718_000_000_000)
 	handler := newSignedTestHandler(t, activation.NewService(), now)
-	createBody := []byte(`{"method":"ble","pid":"minion-cam-x1","binding_external_user_id":"livpet-user-42","idempotency_key":"minion-operation-1"}`)
+	createBody := []byte(`{"method":"ble","pid":"minion-cam-x1","dp_profile":"feeder-v1","binding_external_user_id":"livpet-user-42","idempotency_key":"minion-operation-1"}`)
 	create := signedInternalRequest(t, now, "nonce-minion-create", http.MethodPost, "/api/v1/openapi/device-activations", createBody)
 	createResponse := httptest.NewRecorder()
 	handler.ServeHTTP(createResponse, create)
@@ -240,7 +240,7 @@ func TestInternalAPIRejectsUnknownProductPID(t *testing.T) {
 
 	now := time.UnixMilli(1_718_000_000_000)
 	handler := newSignedTestHandler(t, activation.NewService(), now)
-	body := []byte(`{"method":"ble","pid":"unknown-x1","binding_external_user_id":"livpet-user-42","idempotency_key":"unknown-product-1"}`)
+	body := []byte(`{"method":"ble","pid":"unknown-x1","dp_profile":"feeder-v1","binding_external_user_id":"livpet-user-42","idempotency_key":"unknown-product-1"}`)
 	request := signedInternalRequest(t, now, "nonce-product-unknown", http.MethodPost, "/api/v1/openapi/device-activations", body)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -284,7 +284,7 @@ func TestInternalAPIReturnsStableIdempotencyConflictCode(t *testing.T) {
 
 	now := time.UnixMilli(1_718_000_000_000)
 	handler := newSignedTestHandler(t, activation.NewService(), now)
-	body := []byte(`{"method":"qr","pid":"feeder-x1","binding_external_user_id":"user-1","idempotency_key":"same-operation"}`)
+	body := []byte(`{"method":"qr","pid":"feeder-x1","dp_profile":"feeder-v1","binding_external_user_id":"user-1","idempotency_key":"same-operation"}`)
 	first := signedInternalRequest(t, now, "nonce-idem-first1", http.MethodPost, "/api/v1/openapi/device-activations", body)
 	firstResponse := httptest.NewRecorder()
 	handler.ServeHTTP(firstResponse, first)
@@ -873,7 +873,7 @@ func TestDevicePrepareUsesCompatibilityDeviceActivationPath(t *testing.T) {
 	service := activation.NewServiceWith(testProvisioner{})
 	created, err := service.Create(context.Background(), activation.CreateInput{
 		InternalAppID: "livpet-staging", BindingExternalUserID: "user-42",
-		IdempotencyKey: "operation-qr", Method: activation.MethodQR, PID: "lamp-x1",
+		IdempotencyKey: "operation-qr", Method: activation.MethodQR, PID: "lamp-x1", DPProfile: "feeder-v1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -912,11 +912,46 @@ func TestDevicePrepareUsesCompatibilityDeviceActivationPath(t *testing.T) {
 	}
 }
 
+func TestDevicePrepareUsesProviderNeutralDomesticRuntimeFields(t *testing.T) {
+	t.Parallel()
+	service := activation.NewServiceWith(domesticTestProvisioner{})
+	created, err := service.Create(context.Background(), activation.CreateInput{
+		InternalAppID: "livpet-staging", BindingExternalUserID: "user-cn",
+		IdempotencyKey: "operation-domestic", Method: activation.MethodQR, PID: "lamp-x1", DPProfile: "feeder-v1",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	handler := newSignedTestHandler(t, service, time.UnixMilli(1_718_000_000_000), Dependencies{DeviceRuntime: DeviceRuntimeConfig{
+		ProviderMode: "domestic-dev", Endpoint: "mqtts://dell.local:8883", TopicPrefix: "domestic-staging",
+	}})
+	body := []byte(fmt.Sprintf(`{"activation_id":%q,"activation_code":%q,"csr_pem":"csr-pem"}`, created.ID, created.Code))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/device-activations/qr/prepare-installation", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("device prepare status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	var installation map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &installation); err != nil {
+		t.Fatalf("decode installation: %v", err)
+	}
+	if installation["endpoint"] != "mqtts://dell.local:8883" || installation["provider_mode"] != "domestic-dev" ||
+		installation["topic_prefix"] != "domestic-staging" {
+		t.Fatalf("domestic installation = %#v", installation)
+	}
+	for _, key := range []string{"aws_iot_endpoint", "aws_region", "aws_iot_credential_endpoint", "aws_iot_role_alias", "aws_iot_shadow_name", "aws_kvs_channel_prefix"} {
+		if _, ok := installation[key]; ok {
+			t.Fatalf("domestic response leaked legacy AWS field %q: %#v", key, installation)
+		}
+	}
+}
+
 func TestLivPetActivationCreateAcceptsLegacyCommissioningEnvelope(t *testing.T) {
 	t.Parallel()
 	now := time.UnixMilli(1_718_000_000_000)
 	handler := newSignedTestHandler(t, activation.NewService(), now)
-	body := []byte(`{"method":"ble","pid":"feeder-x1","session_id":"session-1","client_hello_cbor":"client","device_hello_cbor":"device","binding_external_user_id":"user-1","idempotency_key":"idem-legacy-1"}`)
+	body := []byte(`{"method":"ble","pid":"feeder-x1","dp_profile":"feeder-v1","session_id":"session-1","client_hello_cbor":"client","device_hello_cbor":"device","binding_external_user_id":"user-1","idempotency_key":"idem-legacy-1"}`)
 	request := signedInternalRequest(t, now, "nonce-legacy-create", http.MethodPost, "/api/v1/openapi/device-activations", body)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -944,7 +979,7 @@ func TestQRActivationReturnsLegacyAuthorizationCodeAlias(t *testing.T) {
 	t.Parallel()
 	now := time.UnixMilli(1_718_000_000_000)
 	handler := newSignedTestHandler(t, activation.NewService(), now)
-	body := []byte(`{"method":"qr","pid":"feeder-x1","binding_external_user_id":"user-1","idempotency_key":"idem-qr-alias"}`)
+	body := []byte(`{"method":"qr","pid":"feeder-x1","dp_profile":"feeder-v1","binding_external_user_id":"user-1","idempotency_key":"idem-qr-alias"}`)
 	request := signedInternalRequest(t, now, "nonce-qr-alias-001", http.MethodPost, "/api/v1/openapi/device-activations", body)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -1128,6 +1163,17 @@ func (testProvisioner) Provision(_ context.Context, deviceSN, _ string) (activat
 	}, nil
 }
 
+type domesticTestProvisioner struct{}
+
+func (domesticTestProvisioner) Provision(_ context.Context, deviceSN, _ string) (activation.PreparedIdentity, error) {
+	return activation.PreparedIdentity{
+		DeviceID:       deviceSN,
+		CertificateID:  "certificate-domestic-1",
+		CertificatePEM: "certificate-pem",
+		Endpoint:       "mqtts://dell.local:8883",
+	}, nil
+}
+
 type httpBindingRepository struct {
 	binding         binding.Binding
 	token           binding.DeviceToken
@@ -1223,12 +1269,12 @@ func (*httpCommandRepository) Complete(context.Context, string, string, map[stri
 type httpKVS struct{}
 
 func (httpKVS) EnsureChannel(_ context.Context, name string) (awskvs.Channel, error) {
-	return awskvs.Channel{Name: name, ARN: "arn:aws:kinesisvideo:ap-east-1:123456789012:channel/test/1"}, nil
+	return awskvs.Channel{Name: name, ExternalRef: "arn:aws:kinesisvideo:ap-east-1:123456789012:channel/test/1"}, nil
 }
 
 func (httpKVS) Playback(_ context.Context, channel awskvs.Channel, viewerID string, _ time.Duration) (awskvs.PlaybackConfig, error) {
 	return awskvs.PlaybackConfig{
-		Provider: "aws_kvs", ChannelName: channel.Name, ChannelARN: channel.ARN, ClientID: viewerID,
+		Provider: "aws_kvs", ChannelName: channel.Name, ExternalRef: channel.ExternalRef, ClientID: viewerID,
 		WSSURL: "wss://signaling.example.test", ICEServers: []awskvs.ICEServer{{URLs: "stun:example.test:443"}},
 		ExpiresAt: time.UnixMilli(1_718_000_300_000),
 	}, nil
@@ -1431,5 +1477,17 @@ func TestWriteLocalMediaErrorDoesNotMislabelProductOrInfrastructureFailuresAsKVS
 				t.Fatalf("response = %d %s", response.Code, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestWriteMediaErrorMapsProductDPValidationToBadRequest(t *testing.T) {
+	t.Parallel()
+	response := httptest.NewRecorder()
+
+	writeMediaError(response, fmt.Errorf("%w: %w (stream)", devicemodule.ErrInvalidInput, devicemodule.ErrDPUnknown))
+
+	if response.Code != http.StatusBadRequest ||
+		!bytes.Contains(response.Body.Bytes(), []byte(`"error_code":"invalid_request"`)) {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
 	}
 }

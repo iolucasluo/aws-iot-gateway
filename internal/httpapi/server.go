@@ -35,6 +35,8 @@ type server struct {
 }
 
 type DeviceRuntimeConfig struct {
+	ProviderMode       string
+	Endpoint           string
 	AWSRegion          string
 	CredentialEndpoint string
 	RoleAlias          string
@@ -82,6 +84,10 @@ func (s server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.serveTimeBootstrap(writer, request)
 		return
 	}
+	if request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/api/v1/device-ota/download/") {
+		s.serveDeviceOTADownload(writer, request)
+		return
+	}
 	if strings.HasPrefix(request.URL.Path, "/api/v1/openapi/") {
 		HMACMiddleware(s.verifier, http.HandlerFunc(s.serveInternalApp)).ServeHTTP(writer, request)
 		return
@@ -96,6 +102,33 @@ func (s server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	default:
 		writeError(writer, http.StatusNotFound, "not_found", "endpoint not found")
 	}
+}
+
+func (s server) serveDeviceOTADownload(writer http.ResponseWriter, request *http.Request) {
+	const prefix = "/api/v1/device-ota/download/"
+	parts := strings.Split(strings.TrimPrefix(request.URL.Path, prefix), "/")
+	if s.ota == nil || len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		writeError(writer, http.StatusNotFound, "not_found", "endpoint not found")
+		return
+	}
+	artifact, err := s.ota.OpenDownload(request.Context(), parts[0], parts[1])
+	if err != nil {
+		if errors.Is(err, ota.ErrDownloadNotFound) {
+			writeError(writer, http.StatusNotFound, "not_found", "endpoint not found")
+			return
+		}
+		writeError(writer, http.StatusServiceUnavailable, "ota_download_unavailable", "OTA download is unavailable")
+		return
+	}
+	defer artifact.Body.Close()
+	writer.Header().Set("Content-Type", "application/gzip")
+	writer.Header().Set("Content-Length", strconv.FormatInt(artifact.FileSize, 10))
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.Header().Set("Pragma", "no-cache")
+	writer.Header().Set("X-Content-Type-Options", "nosniff")
+	writer.Header().Set("X-Explorex-OTA-SHA256", artifact.SHA256)
+	writer.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(writer, artifact.Body)
 }
 
 func (s server) serveInternalApp(writer http.ResponseWriter, request *http.Request) {
@@ -114,6 +147,8 @@ func (s server) serveInternalApp(writer http.ResponseWriter, request *http.Reque
 			return
 		}
 		s.completeOTAFirmwareVersion(writer, request, versionID)
+	case request.Method == http.MethodGet && request.URL.Path == "/api/v1/openapi/dp-profiles":
+		s.listActiveDPProfiles(writer, request)
 	case request.Method == http.MethodGet && request.URL.Path == "/api/v1/openapi/device-products":
 		s.listActiveProducts(writer, request)
 	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/openapi/device-activations":
@@ -166,6 +201,7 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 		(operation == "events" && request.Method == http.MethodGet) ||
 		(operation == "streams" && len(parts) == 2 && request.Method == http.MethodPost) ||
 		(operation == "streams" && len(parts) == 3 && request.Method == http.MethodDelete) ||
+		(operation == "streams" && len(parts) == 4 && parts[3] == "renew" && request.Method == http.MethodPost) ||
 		(operation == "local-media-sessions" && len(parts) == 2 &&
 			(request.Method == http.MethodPost || request.Method == http.MethodDelete)) ||
 		(operation == "snapshots" && len(parts) == 2 && request.Method == http.MethodPost) ||
@@ -264,7 +300,15 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 			writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "device service is unavailable")
 			return true
 		}
-		shadow, err := s.device.GetShadow(request.Context(), ownedBinding.DeviceSN)
+		var shadow any
+		if s.deviceRuntime.ProviderMode == "domestic-dev" {
+			shadow, err = s.device.GetDeviceInfoProjection(
+				request.Context(), principal.InternalAppID, ownedBinding.DeviceID,
+				ownedBinding.DeviceSN, ownedBinding.PID,
+			)
+		} else {
+			shadow, err = s.device.GetShadow(request.Context(), ownedBinding.DeviceSN)
+		}
 		if err != nil {
 			writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "device shadow is unavailable")
 			return true
@@ -309,6 +353,24 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 	case "streams":
 		if s.media == nil {
 			writeError(writer, http.StatusServiceUnavailable, "device_service_unavailable", "media service is unavailable")
+			return true
+		}
+		if len(parts) == 4 && parts[3] == "renew" {
+			var input map[string]json.RawMessage
+			if !decodeJSON(writer, request, &input) {
+				return true
+			}
+			if input == nil || len(input) != 0 {
+				writeError(writer, http.StatusBadRequest, "invalid_request", "renewal body must be an empty object")
+				return true
+			}
+			lease, err := s.media.Renew(request.Context(), ownedBinding.ID, ownedBinding.DeviceSN, parts[2])
+			if err != nil {
+				writeMediaError(writer, err)
+				return true
+			}
+			writer.Header().Set("Cache-Control", "no-store")
+			writeJSON(writer, http.StatusOK, map[string]any{"stream_id": parts[2], "expires_at": lease.ExpiresAt})
 			return true
 		}
 		if request.Method == http.MethodDelete {
@@ -756,6 +818,7 @@ func (s server) createActivation(writer http.ResponseWriter, request *http.Reque
 		BindingExternalUserID string `json:"binding_external_user_id"`
 		IdempotencyKey        string `json:"idempotency_key"`
 		PID                   string `json:"pid"`
+		DPProfile             string `json:"dp_profile"`
 		SessionID             string `json:"session_id,omitempty"`
 		ClientHelloCBOR       string `json:"client_hello_cbor,omitempty"`
 		DeviceHelloCBOR       string `json:"device_hello_cbor,omitempty"`
@@ -765,7 +828,7 @@ func (s server) createActivation(writer http.ResponseWriter, request *http.Reque
 	}
 	created, err := s.activation.Create(request.Context(), activation.CreateInput{
 		InternalAppID: principal.InternalAppID, BindingExternalUserID: body.BindingExternalUserID,
-		IdempotencyKey: body.IdempotencyKey, Method: activation.Method(body.Method), PID: body.PID,
+		IdempotencyKey: body.IdempotencyKey, Method: activation.Method(body.Method), PID: body.PID, DPProfile: body.DPProfile,
 	})
 	if err != nil {
 		writeActivationError(writer, err)
@@ -874,13 +937,17 @@ func (s server) listDevices(writer http.ResponseWriter, request *http.Request) {
 		if device.LastSeenAt != nil {
 			lastSeenAt = device.LastSeenAt.UTC().Format(time.RFC3339)
 		}
-		response = append(response, map[string]any{
+		item := map[string]any{
 			"device_sn": device.ID, "pid": device.PID, "status": device.Status,
 			"nickname": "", "is_subscription": false,
-			"activation_id": device.ActivationID, "aws_iot_endpoint": device.Endpoint,
+			"activation_id": device.ActivationID, "endpoint": device.Endpoint,
 			"binding_external_user_id": device.BindingExternalUserID,
 			"online":                   device.Online, "last_seen_at": lastSeenAt,
-		})
+		}
+		if s.deviceRuntime.ProviderMode == "" || s.deviceRuntime.ProviderMode == "aws" {
+			item["aws_iot_endpoint"] = device.Endpoint
+		}
+		response = append(response, item)
 	}
 	if body.Offset >= len(response) {
 		response = response[:0]
@@ -988,19 +1055,27 @@ func (s server) prepareDevice(writer http.ResponseWriter, request *http.Request,
 		writeActivationError(writer, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]string{
+	response := map[string]string{
 		"activation_id": installation.ActivationID, "device_sn": installation.DeviceID,
 		"device_id": installation.DeviceID, "thing_name": installation.DeviceID,
-		"certificate_id":  installation.CertificateID,
-		"certificate_pem": installation.Certificate, "aws_iot_endpoint": installation.Endpoint,
-		"installation_nonce": installation.ProofNonce, "pid": installation.PID,
-		"aws_region":                  s.deviceRuntime.AWSRegion,
-		"aws_iot_credential_endpoint": s.deviceRuntime.CredentialEndpoint,
-		"aws_iot_role_alias":          s.deviceRuntime.RoleAlias,
-		"topic_prefix":                s.deviceRuntime.TopicPrefix,
-		"aws_iot_shadow_name":         s.deviceRuntime.ShadowName,
-		"aws_kvs_channel_prefix":      s.deviceRuntime.KVSChannelPrefix,
-	})
+		"certificate_id": installation.CertificateID, "certificate_pem": installation.Certificate,
+		"endpoint": installation.Endpoint, "installation_nonce": installation.ProofNonce, "pid": installation.PID,
+		"provider_mode": s.deviceRuntime.ProviderMode,
+		"topic_prefix":  s.deviceRuntime.TopicPrefix,
+	}
+	if response["provider_mode"] == "" {
+		response["provider_mode"] = "aws"
+	}
+	if response["provider_mode"] == "aws" {
+		response["aws_iot_endpoint"] = installation.Endpoint
+		response["aws_region"] = s.deviceRuntime.AWSRegion
+		response["aws_iot_credential_endpoint"] = s.deviceRuntime.CredentialEndpoint
+		response["aws_iot_role_alias"] = s.deviceRuntime.RoleAlias
+		response["topic_prefix"] = s.deviceRuntime.TopicPrefix
+		response["aws_iot_shadow_name"] = s.deviceRuntime.ShadowName
+		response["aws_kvs_channel_prefix"] = s.deviceRuntime.KVSChannelPrefix
+	}
+	writeJSON(writer, http.StatusOK, response)
 }
 
 func (s server) confirmDevice(writer http.ResponseWriter, request *http.Request) {
@@ -1045,13 +1120,14 @@ func (response activationResponse) MarshalJSON() ([]byte, error) {
 		Activated           bool      `json:"activated"`
 		DeviceSN            string    `json:"device_sn"`
 		PID                 string    `json:"pid"`
+		DPProfile           string    `json:"dp_profile"`
 		ActivationCode      string    `json:"activation_code,omitempty"`
 		QRAuthorizationCode string    `json:"qr_authorization_code,omitempty"`
 	}
 	value := payload{
 		ActivationID: response.Activation.ID, Method: string(response.Activation.Method),
 		Status: status, ExpiresAt: response.Activation.ExpiresAt, Activated: activated,
-		DeviceSN: response.Activation.DeviceSN, PID: response.Activation.PID,
+		DeviceSN: response.Activation.DeviceSN, PID: response.Activation.PID, DPProfile: response.Activation.DPProfile,
 	}
 	if response.IncludeCode {
 		value.ActivationCode = response.Activation.Code
@@ -1208,7 +1284,9 @@ func writeOTAError(writer http.ResponseWriter, err error) {
 
 func writeMediaError(writer http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, media.ErrInvalidInput):
+	case errors.Is(err, media.ErrStreamLeaseUnsupported):
+		writeError(writer, http.StatusConflict, "stream_lease_unsupported", "stream provider does not require renewal")
+	case errors.Is(err, media.ErrInvalidInput), errors.Is(err, devicemodule.ErrInvalidInput):
 		writeError(writer, http.StatusBadRequest, "invalid_request", "media request is invalid")
 	case errors.Is(err, media.ErrInvalidCapabilities):
 		writeError(writer, http.StatusBadRequest, "invalid_stream_capabilities", "invalid requested stream capabilities")
@@ -1264,6 +1342,8 @@ func writeActivationError(writer http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, activation.ErrInvalidInput):
 		writeError(writer, http.StatusBadRequest, "invalid_request", "request is invalid")
+	case errors.Is(err, activation.ErrDPProfileUnavailable):
+		writeError(writer, http.StatusBadRequest, "dp_profile_unavailable", "DP profile is unavailable for activation")
 	case errors.Is(err, activation.ErrProductUnavailable):
 		writeError(writer, http.StatusBadRequest, "product_unavailable", "product is unavailable for activation")
 	case errors.Is(err, activation.ErrActivationNotFound):
@@ -1291,4 +1371,15 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 
 func writeError(writer http.ResponseWriter, status int, code, message string) {
 	writeJSON(writer, status, map[string]string{"error_code": code, "message": message, "error": message})
+}
+
+func (s server) listActiveDPProfiles(writer http.ResponseWriter, request *http.Request) {
+	profiles, err := s.activation.ListActiveDPProfiles(request.Context())
+	if err != nil {
+		writeActivationError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, struct {
+		Profiles []activation.DPProfile `json:"profiles"`
+	}{Profiles: profiles})
 }

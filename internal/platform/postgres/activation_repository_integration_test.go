@@ -38,7 +38,7 @@ func TestActivationRepositorySurvivesServiceRestartAndCreatesBinding(t *testing.
 	service := activation.NewServiceWithRepository(persistentProvisioner{}, repository)
 	created, err := service.Create(ctx, activation.CreateInput{
 		InternalAppID: "livpet-staging", BindingExternalUserID: "user-persistent",
-		IdempotencyKey: "persistent-operation", Method: activation.MethodBLE, PID: "minion-cam-x1",
+		DPProfile: "feeder-v1", IdempotencyKey: "persistent-operation", Method: activation.MethodBLE, PID: "minion-cam-x1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)

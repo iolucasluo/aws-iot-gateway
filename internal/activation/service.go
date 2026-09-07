@@ -28,6 +28,8 @@ type Service struct {
 // even if an MQTT LWT or its SQS delivery is lost.
 const deviceOnlineFreshness = 3 * time.Minute
 
+var dpProfilePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]*-v[1-9][0-9]*$`)
+
 var productCapabilityPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,63}$`)
 
 func NewService() *Service {
@@ -45,15 +47,23 @@ func NewServiceWithRepository(provisioner Provisioner, repository Repository) *S
 func (service *Service) Create(ctx context.Context, input CreateInput) (Activation, error) {
 	if service.repository == nil || strings.TrimSpace(input.InternalAppID) == "" ||
 		strings.TrimSpace(input.BindingExternalUserID) == "" || strings.TrimSpace(input.IdempotencyKey) == "" ||
-		len(input.IdempotencyKey) > 128 || !input.Method.valid() || strings.TrimSpace(input.PID) == "" {
+		len(input.IdempotencyKey) > 128 || !input.Method.valid() || strings.TrimSpace(input.PID) == "" ||
+		len(input.DPProfile) > 96 || !dpProfilePattern.MatchString(input.DPProfile) {
 		return Activation{}, ErrInvalidInput
 	}
 	product, err := service.findActiveProduct(ctx, input.PID)
 	if err != nil {
 		return Activation{}, err
 	}
+	profile, err := service.repository.FindActiveDPProfile(ctx, input.DPProfile)
+	if err != nil {
+		return Activation{}, err
+	}
+	if profile.Code != input.DPProfile {
+		return Activation{}, ErrDPProfileUnavailable
+	}
 	requestHash := sha256.Sum256([]byte(strings.Join([]string{
-		input.InternalAppID, input.BindingExternalUserID, string(input.Method), product.PID,
+		input.InternalAppID, input.BindingExternalUserID, string(input.Method), product.PID, profile.Code,
 	}, "\n")))
 	if existing, err := service.repository.FindByIdempotency(ctx, input.InternalAppID, input.IdempotencyKey); err == nil {
 		if existing.Activation.RequestHash != requestHash {
@@ -72,7 +82,7 @@ func (service *Service) Create(ctx context.Context, input CreateInput) (Activati
 		return Activation{}, fmt.Errorf("generate activation code: %w", err)
 	}
 	value := Activation{
-		ID: id, Code: code, Method: input.Method, PID: product.PID, InternalAppID: input.InternalAppID,
+		ID: id, Code: code, Method: input.Method, PID: product.PID, DPProfile: profile.Code, InternalAppID: input.InternalAppID,
 		BindingExternalUserID: input.BindingExternalUserID, IdempotencyKey: input.IdempotencyKey,
 		RequestHash: requestHash, Status: StatusPending, ExpiresAt: service.now().Add(5 * time.Minute),
 	}
@@ -122,12 +132,16 @@ func (service *Service) Prepare(ctx context.Context, input PrepareInput) (Instal
 	}
 	identity, err := service.provisioner.Provision(ctx, record.Activation.DeviceSN, input.CSRPEM)
 	if err != nil {
-		_ = service.repository.FailPreparation(ctx, input.ActivationID, "aws_iot_provision_failed")
+		_ = service.repository.FailPreparation(ctx, input.ActivationID, "operational_identity_provision_failed")
 		return Installation{}, fmt.Errorf("provision operational identity: %w", err)
 	}
+	endpoint := strings.TrimSpace(identity.Endpoint)
+	if endpoint == "" {
+		endpoint = strings.TrimSpace(identity.AWSIoTEndpoint)
+	}
 	if identity.DeviceID != record.Activation.DeviceSN || identity.CertificateID == "" ||
-		identity.CertificatePEM == "" || identity.AWSIoTEndpoint == "" {
-		_ = service.repository.FailPreparation(ctx, input.ActivationID, "aws_iot_incomplete_result")
+		identity.CertificatePEM == "" || endpoint == "" {
+		_ = service.repository.FailPreparation(ctx, input.ActivationID, "operational_identity_incomplete_result")
 		return Installation{}, fmt.Errorf("provision operational identity: incomplete result")
 	}
 	nonce, err := randomToken(32)
@@ -137,7 +151,7 @@ func (service *Service) Prepare(ctx context.Context, input PrepareInput) (Instal
 	}
 	installation := Installation{
 		ActivationID: input.ActivationID, DeviceID: identity.DeviceID, CertificateID: identity.CertificateID,
-		PID: record.Activation.PID, Certificate: identity.CertificatePEM, Endpoint: identity.AWSIoTEndpoint, ProofNonce: nonce,
+		PID: record.Activation.PID, Certificate: identity.CertificatePEM, Endpoint: endpoint, ProofNonce: nonce,
 	}
 	completed, err := service.repository.CompletePreparation(ctx, input.ActivationID, installation)
 	if err != nil {
@@ -370,4 +384,24 @@ func randomUUID() (string, error) {
 	value[8] = (value[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		value[0:4], value[4:6], value[6:8], value[8:10], value[10:16]), nil
+}
+
+// ListActiveDPProfiles is independent of the product directory. Retired profiles
+// remain available to registered devices but cannot be selected for new activations.
+func (service *Service) ListActiveDPProfiles(ctx context.Context) ([]DPProfile, error) {
+	if service.repository == nil {
+		return nil, ErrDPProfileUnavailable
+	}
+	profiles, err := service.repository.ListActiveDPProfiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(profiles))
+	for _, profile := range profiles {
+		if len(profile.Code) > 96 || !dpProfilePattern.MatchString(profile.Code) || strings.TrimSpace(profile.Name) == "" || seen[profile.Code] {
+			return nil, fmt.Errorf("invalid DP profile catalog")
+		}
+		seen[profile.Code] = true
+	}
+	return profiles, nil
 }

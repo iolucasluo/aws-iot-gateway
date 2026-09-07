@@ -43,12 +43,12 @@ func (waiter ackWaiterStub) Wait(context.Context, string, string, time.Duration)
 
 type commandRepositoryStub struct{ commands []Command }
 
-type productDPDefinitionLoaderStub struct {
-	definitions []ProductDPDefinition
+type dpDefinitionLoaderStub struct {
+	definitions []DPDefinition
 	err         error
 }
 
-func (loader productDPDefinitionLoaderStub) LoadProductDPDefinitions(_ context.Context, _ string) ([]ProductDPDefinition, error) {
+func (loader dpDefinitionLoaderStub) LoadDPDefinitions(_ context.Context, _ string) ([]DPDefinition, error) {
 	return loader.definitions, loader.err
 }
 
@@ -99,12 +99,42 @@ func TestSendCommandsPreservesLivPetPayloadAndResponseShape(t *testing.T) {
 	}
 }
 
+func TestGetDeviceInfoProjectionUsesProviderNeutralCommand(t *testing.T) {
+	t.Parallel()
+	publisher := &publisherStub{}
+	repository := &commandRepositoryStub{}
+	service := NewService(publisher, ackWaiterStub{ack: map[string]any{
+		"code": float64(0), "device_config": map[string]any{
+			"pid": "feeder-x1", "device_sn": "fdr-0001",
+		},
+		"wifi_mac": "48:a4:fd:7d:6f:0b", "version": "dev-cn-20260902d",
+		"build": float64(790), "ip": "192.168.11.228",
+	}}, repository, "cn-staging", func() (string, error) { return "device-info-session", nil })
+
+	projection, err := service.GetDeviceInfoProjection(context.Background(), "demo-local", "device-id", "fdr-0001", "feeder-x1")
+	if err != nil {
+		t.Fatalf("GetDeviceInfoProjection() error = %v", err)
+	}
+	if projection["sn"] != "fdr-0001" || projection["pid"] != "feeder-x1" || projection["online"] != true ||
+		projection["wifi_mac"] != "48:a4:fd:7d:6f:0b" || projection["version"] != "dev-cn-20260902d" ||
+		projection["build"] != float64(790) || projection["ip"] != "192.168.11.228" {
+		t.Fatalf("projection = %#v", projection)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(publisher.payload, &payload); err != nil {
+		t.Fatalf("decode command payload: %v", err)
+	}
+	if payload["action"] != "device_info" || publisher.topic != "cmd/cn-staging/fdr-0001/req" {
+		t.Fatalf("command = topic %q payload %#v", publisher.topic, payload)
+	}
+}
+
 func TestSendDPCommandsRejectsUnknownDPBeforePersistenceOrPublish(t *testing.T) {
 	t.Parallel()
 	publisher := &publisherStub{}
 	repository := &commandRepositoryStub{}
 	service := NewServiceWithDP(publisher, ackWaiterStub{}, repository, "aws-iot-gateway-staging", nil,
-		productDPDefinitionLoaderStub{definitions: []ProductDPDefinition{{
+		dpDefinitionLoaderStub{definitions: []DPDefinition{{
 			Code: "video_res", Type: "object", Direction: "wo", Status: "active",
 		}}})
 
@@ -373,7 +403,7 @@ func TestGetPTZStatusPublishesFixedQueryAndReturnsValidatedDeviceState(t *testin
 	service := NewService(publisher, ackWaiterStub{ack: map[string]any{
 		"action": "ptz", "session_id": "session-ptz", "code": float64(0), "op": "get_position",
 		"pan": float64(1800), "tilt": float64(-500), "limit_h": float64(4000), "limit_v": float64(2000),
-		"pan_normalized": 0.45, "tilt_normalized": -0.25, "moving": true,
+		"pan_normalized": 0.45, "tilt_normalized": -0.25, "moving": true, "calibrated": true,
 	}}, repository, "aws-iot-gateway-staging", func() (string, error) { return "session-ptz", nil })
 
 	status, err := service.GetPTZStatus(context.Background(), "livpet-staging", "device-id", "fdr-0001")
@@ -381,7 +411,7 @@ func TestGetPTZStatusPublishesFixedQueryAndReturnsValidatedDeviceState(t *testin
 		t.Fatalf("GetPTZStatus() error = %v", err)
 	}
 	if status.Pan != 1800 || status.Tilt != -500 || status.LimitH != 4000 || status.LimitV != 2000 ||
-		status.PanNormalized != 0.45 || status.TiltNormalized != -0.25 || !status.Moving {
+		status.PanNormalized != 0.45 || status.TiltNormalized != -0.25 || !status.Moving || !status.Calibrated {
 		t.Fatalf("status = %#v", status)
 	}
 	var payload map[string]any

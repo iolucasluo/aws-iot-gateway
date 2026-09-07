@@ -27,7 +27,18 @@ esac
 require_value DEVICE_SERVICE_BOOTSTRAP_SERVICE_URL
 require_value DEVICE_SERVICE_BOOTSTRAP_TIME_URL
 require_value DEVICE_SERVICE_BOOTSTRAP_KEY_ID
-require_value DEVICE_SERVICE_BOOTSTRAP_PRIVATE_KEY
+PRIVATE_KEY=${DEVICE_SERVICE_BOOTSTRAP_PRIVATE_KEY:-}
+PUBLIC_KEY=${DEVICE_SERVICE_BOOTSTRAP_PUBLIC_KEY:-}
+if { [ -n "$PRIVATE_KEY" ] && [ -n "$PUBLIC_KEY" ]; } ||
+   { [ -z "$PRIVATE_KEY" ] && [ -z "$PUBLIC_KEY" ]; }; then
+    echo "exactly one of DEVICE_SERVICE_BOOTSTRAP_PRIVATE_KEY or DEVICE_SERVICE_BOOTSTRAP_PUBLIC_KEY is required" >&2
+    exit 2
+fi
+if [ -n "$PRIVATE_KEY" ]; then
+    set -- --private-key "$PRIVATE_KEY"
+else
+    set -- --public-key "$PUBLIC_KEY"
+fi
 [ ! -e "$OUTPUT" ] || { echo "--out already exists: $OUTPUT" >&2; exit 2; }
 
 NEXT_KEY_ID=${DEVICE_SERVICE_BOOTSTRAP_NEXT_KEY_ID:-}
@@ -37,9 +48,7 @@ if [ -n "$NEXT_KEY_ID" ] || [ -n "$NEXT_PUBLIC_KEY" ]; then
         echo "DEVICE_SERVICE_BOOTSTRAP_NEXT_KEY_ID and DEVICE_SERVICE_BOOTSTRAP_NEXT_PUBLIC_KEY must be set together" >&2
         exit 2
     }
-    set -- --next-key-id "$NEXT_KEY_ID" --next-public-key "$NEXT_PUBLIC_KEY"
-else
-    set --
+    set -- "$@" --next-key-id "$NEXT_KEY_ID" --next-public-key "$NEXT_PUBLIC_KEY"
 fi
 
 cd "$ROOT"
@@ -48,5 +57,4 @@ exec go run ./cmd/device-service-bootstrap-contract local \
     --service-url "$DEVICE_SERVICE_BOOTSTRAP_SERVICE_URL" \
     --time-bootstrap-url "$DEVICE_SERVICE_BOOTSTRAP_TIME_URL" \
     --key-id "$DEVICE_SERVICE_BOOTSTRAP_KEY_ID" \
-    --private-key "$DEVICE_SERVICE_BOOTSTRAP_PRIVATE_KEY" \
     "$@"

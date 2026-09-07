@@ -69,6 +69,7 @@ type PTZStatus struct {
 	PanNormalized  float64 `json:"pan_normalized"`
 	TiltNormalized float64 `json:"tilt_normalized"`
 	Moving         bool    `json:"moving"`
+	Calibrated     bool    `json:"calibrated"`
 }
 
 type Publisher interface {
@@ -141,6 +142,48 @@ func (service *Service) GetShadow(ctx context.Context, deviceSN string) (any, er
 		return nil, fmt.Errorf("decode AWS IoT shadow: reported projection is invalid")
 	}
 	return envelope.State.Reported, nil
+}
+
+// GetDeviceInfoProjection obtains the provider-neutral device_info response
+// and presents the same flattened projection consumed by the App shadow API.
+// Domestic providers do not need to implement an AWS Shadow read port.
+func (service *Service) GetDeviceInfoProjection(
+	ctx context.Context, internalAppID, deviceID, deviceSN, pid string,
+) (map[string]any, error) {
+	result, err := service.SendCommands(ctx, internalAppID, deviceID, deviceSN, []CommandInput{{
+		Code: "device_info", Value: json.RawMessage(`{}`),
+	}}, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(result.Results) != 1 || result.Results[0].Status != "success" {
+		return nil, ErrInvalidDeviceResponse
+	}
+	data := result.Results[0].Data
+	config, ok := data["device_config"].(map[string]any)
+	if !ok {
+		return nil, ErrInvalidDeviceResponse
+	}
+	projection := map[string]any{
+		"sn": deviceSN, "pid": pid, "online": true, "device_config": config,
+	}
+	for _, key := range []string{"wifi_mac", "version", "build", "ip", "speaker_volume",
+		"motion_detection_enabled", "night_mode", "motion_sensitivity", "motion_report_interval_sec",
+		"video_resolution"} {
+		if value, found := data[key]; found {
+			projection[key] = value
+		} else if value, found := config[key]; found {
+			projection[key] = value
+		}
+	}
+	if _, found := projection["build"]; !found {
+		if value, found := data["firmware_build"]; found {
+			projection["build"] = value
+		} else if value, found := config["firmware_build"]; found {
+			projection["build"] = value
+		}
+	}
+	return projection, nil
 }
 
 func (service *Service) GetPTZStatus(ctx context.Context, internalAppID, deviceID, deviceSN string) (PTZStatus, error) {
@@ -265,11 +308,16 @@ func (service *Service) SendCommands(
 // SendOTACommand is the only path that may publish ota_install. The deployment table is the
 // execution authority, so presigned URLs and signed release metadata never enter device_commands.
 func (service *Service) SendOTACommand(ctx context.Context, command ota.Command) error {
+	upgradeType := command.UpgradeType
+	if upgradeType == "" {
+		upgradeType = ota.UpgradeTypeApp
+	}
 	if service == nil || service.publisher == nil || service.ackWaiter == nil ||
 		!topicPrefixRegexp.MatchString(service.topicPrefix) ||
 		strings.TrimSpace(command.DeploymentID) == "" || len(command.DeploymentID) > 63 ||
 		strings.TrimSpace(command.DeviceID) == "" || strings.TrimSpace(command.DeviceSN) == "" ||
 		strings.TrimSpace(command.PID) == "" || strings.TrimSpace(command.Version) == "" ||
+		(upgradeType != ota.UpgradeTypeApp && upgradeType != ota.UpgradeTypeEnvironment) ||
 		command.FirmwareBuild <= 0 || command.FileSize <= 0 || command.FileSize > 3*1024*1024 ||
 		len(command.DownloadURL) < 8 || len(command.DownloadURL) > 1023 ||
 		len(command.SHA256) != 64 || len(command.ReleaseStatement) == 0 ||
@@ -279,7 +327,7 @@ func (service *Service) SendOTACommand(ctx context.Context, command ota.Command)
 	payload := map[string]any{
 		"action": "ota_install", "session_id": command.DeploymentID,
 		"schema": "explorex-device-ota-v1", "deployment_id": command.DeploymentID,
-		"pid": command.PID, "version": command.Version, "firmware_build": command.FirmwareBuild,
+		"pid": command.PID, "upgrade_type": upgradeType, "version": command.Version, "firmware_build": command.FirmwareBuild,
 		"download_url": command.DownloadURL, "sha256": command.SHA256,
 		"file_size": command.FileSize, "release_statement": command.ReleaseStatement,
 		"signature": command.Signature,
@@ -387,14 +435,18 @@ func parsePTZStatus(data map[string]any, expectedSessionID string) (PTZStatus, e
 	panNormalized, panNormalizedOK := numericFloat(data["pan_normalized"])
 	tiltNormalized, tiltNormalizedOK := numericFloat(data["tilt_normalized"])
 	moving, movingOK := data["moving"].(bool)
+	calibrated, calibratedOK := data["calibrated"].(bool)
+	if _, present := data["calibrated"]; !present {
+		calibratedOK = true
+	}
 	if !panOK || !tiltOK || !limitHOK || !limitVOK || limitH <= 0 || limitV <= 0 ||
 		!panNormalizedOK || !tiltNormalizedOK || panNormalized < -1 || panNormalized > 1 ||
-		tiltNormalized < -1 || tiltNormalized > 1 || !movingOK {
+		tiltNormalized < -1 || tiltNormalized > 1 || !movingOK || !calibratedOK {
 		return PTZStatus{}, ErrInvalidDeviceResponse
 	}
 	return PTZStatus{
 		Pan: pan, Tilt: tilt, LimitH: limitH, LimitV: limitV,
-		PanNormalized: panNormalized, TiltNormalized: tiltNormalized, Moving: moving,
+		PanNormalized: panNormalized, TiltNormalized: tiltNormalized, Moving: moving, Calibrated: calibrated,
 	}, nil
 }
 

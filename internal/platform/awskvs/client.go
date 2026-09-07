@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kinesisvideo"
 	kvtypes "github.com/aws/aws-sdk-go-v2/service/kinesisvideo/types"
 	"github.com/aws/aws-sdk-go-v2/service/kinesisvideosignaling"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/provider"
 )
 
 var (
@@ -27,27 +28,11 @@ var (
 
 const maxWSSPresignTTL = 299 * time.Second
 
-type ICEServer struct {
-	URLs       any    `json:"urls"`
-	Username   string `json:"username,omitempty"`
-	Credential string `json:"credential,omitempty"`
-}
-
-type PlaybackConfig struct {
-	Provider    string
-	ChannelName string
-	ChannelARN  string
-	Region      string
-	ClientID    string
-	WSSURL      string
-	ICEServers  []ICEServer
-	ExpiresAt   time.Time
-}
-
-type Channel struct {
-	Name string
-	ARN  string
-}
+// These aliases keep the AWS adapter's public test surface source-compatible
+// while the owning media port remains provider-neutral.
+type ICEServer = provider.ICEServer
+type PlaybackConfig = provider.RealtimePlayback
+type Channel = provider.RealtimeChannel
 
 type Client struct {
 	config aws.Config
@@ -55,6 +40,8 @@ type Client struct {
 	client *kinesisvideo.Client
 	now    func() time.Time
 }
+
+var _ provider.PlaybackProvider = (*Client)(nil)
 
 func NewClient(config aws.Config, region string) (*Client, error) {
 	region = strings.TrimSpace(region)
@@ -99,22 +86,22 @@ func (client *Client) describe(ctx context.Context, channelName string) (Channel
 	if result.ChannelInfo == nil || result.ChannelInfo.ChannelARN == nil {
 		return Channel{}, ErrChannelNotFound
 	}
-	return Channel{Name: channelName, ARN: aws.ToString(result.ChannelInfo.ChannelARN)}, nil
+	return Channel{Name: channelName, ExternalRef: aws.ToString(result.ChannelInfo.ChannelARN)}, nil
 }
 
 func (client *Client) Playback(ctx context.Context, channel Channel, viewerClientID string, ttl time.Duration) (PlaybackConfig, error) {
-	if channel.Name == "" || channel.ARN == "" || strings.TrimSpace(viewerClientID) == "" || ttl <= 0 || ttl > 15*time.Minute {
+	if channel.Name == "" || channel.ExternalRef == "" || strings.TrimSpace(viewerClientID) == "" || ttl <= 0 || ttl > 15*time.Minute {
 		return PlaybackConfig{}, ErrUnavailable
 	}
-	endpoints, err := client.endpoints(ctx, channel.ARN)
+	endpoints, err := client.endpoints(ctx, channel.ExternalRef)
 	if err != nil {
 		return PlaybackConfig{}, err
 	}
-	iceServers, iceExpiry, err := client.iceServers(ctx, endpoints["HTTPS"], channel.ARN, viewerClientID)
+	iceServers, iceExpiry, err := client.iceServers(ctx, endpoints["HTTPS"], channel.ExternalRef, viewerClientID)
 	if err != nil {
 		return PlaybackConfig{}, err
 	}
-	wssURL, wssExpiry, err := client.signWSS(ctx, endpoints["WSS"], channel.ARN, viewerClientID, ttl)
+	wssURL, wssExpiry, err := client.signWSS(ctx, endpoints["WSS"], channel.ExternalRef, viewerClientID, ttl)
 	if err != nil {
 		return PlaybackConfig{}, fmt.Errorf("%w: %v", ErrSigningFailed, err)
 	}
@@ -123,7 +110,7 @@ func (client *Client) Playback(ctx context.Context, channel Channel, viewerClien
 		expiresAt = iceExpiry
 	}
 	return PlaybackConfig{
-		Provider: "aws_kvs", ChannelName: channel.Name, ChannelARN: channel.ARN,
+		Provider: "aws_kvs", ChannelName: channel.Name, ExternalRef: channel.ExternalRef,
 		Region: client.region, ClientID: viewerClientID, WSSURL: wssURL,
 		ICEServers: iceServers, ExpiresAt: expiresAt,
 	}, nil

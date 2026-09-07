@@ -67,15 +67,19 @@ func (repository *ActivationRepository) ListActiveProducts(ctx context.Context) 
 }
 
 func (repository *ActivationRepository) Create(ctx context.Context, record activation.Record) error {
-	_, err := repository.pool.Exec(ctx, `
+	result, err := repository.pool.Exec(ctx, `
 		INSERT INTO device_activations (
 			id, internal_app_id, binding_external_user_id, method, pid, status,
-			code_hash, idempotency_key, request_hash, expires_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+			code_hash, idempotency_key, request_hash, expires_at, dp_profile_id
+		) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10, profile.id
+		  FROM dp_profiles profile WHERE profile.code=$11 AND profile.status='active'
 	`, record.Activation.ID, record.Activation.InternalAppID, record.Activation.BindingExternalUserID,
 		string(record.Activation.Method), record.Activation.PID, string(record.Activation.Status), record.CodeHash[:],
-		record.Activation.IdempotencyKey, record.Activation.RequestHash[:], record.Activation.ExpiresAt)
+		record.Activation.IdempotencyKey, record.Activation.RequestHash[:], record.Activation.ExpiresAt, record.Activation.DPProfile)
 	if err == nil {
+		if result.RowsAffected() != 1 {
+			return activation.ErrDPProfileUnavailable
+		}
 		return nil
 	}
 	var postgresError *pgconn.PgError
@@ -118,17 +122,17 @@ func (repository *ActivationRepository) ReservePreparation(
 		return activation.Record{}, fmt.Errorf("begin preparation reservation: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
-	var status, method, pid, existingCSR string
+	var status, method, pid, existingCSR, profileID string
 	var productActive bool
 	var expiresAt time.Time
 	if err := transaction.QueryRow(ctx, `
-		SELECT a.status, a.method, a.pid, a.expires_at, COALESCE(s.csr_pem, ''), p.status='active'
+		SELECT a.status, a.method, a.pid, a.expires_at, COALESCE(s.csr_pem, ''), p.status='active', COALESCE(a.dp_profile_id::text, '')
 		FROM device_activations a
 		JOIN products p ON p.pid=a.pid
 		LEFT JOIN device_activation_sessions s ON s.device_activation_id=a.id
 		WHERE a.id=$1
 		FOR UPDATE OF a, p
-	`, activationID).Scan(&status, &method, &pid, &expiresAt, &existingCSR, &productActive); err != nil {
+	`, activationID).Scan(&status, &method, &pid, &expiresAt, &existingCSR, &productActive, &profileID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return activation.Record{}, activation.ErrActivationNotFound
 		}
@@ -139,10 +143,20 @@ func (repository *ActivationRepository) ReservePreparation(
 		if !productActive {
 			return activation.Record{}, activation.ErrProductUnavailable
 		}
+		if profileID == "" {
+			return activation.Record{}, activation.ErrDPProfileUnavailable
+		}
+		var profileStatus string
+		if err := transaction.QueryRow(ctx, `SELECT status FROM dp_profiles WHERE id=$1 FOR SHARE`, profileID).Scan(&profileStatus); err != nil {
+			return activation.Record{}, fmt.Errorf("lock activation DP profile: %w", err)
+		}
+		if profileStatus != "active" && profileStatus != "retired" {
+			return activation.Record{}, activation.ErrDPProfileUnavailable
+		}
 		if _, err := transaction.Exec(ctx, `
-			INSERT INTO device_registry (id, device_sn, thing_name, pid, status)
-			VALUES ($1,$2,$2,$3,'provisioning')
-		`, deviceInternalID, deviceSN, pid); err != nil {
+			INSERT INTO device_registry (id, device_sn, thing_name, pid, dp_profile_id, status)
+			VALUES ($1,$2,$2,$3,$4,'provisioning')
+		`, deviceInternalID, deviceSN, pid, profileID); err != nil {
 			return activation.Record{}, fmt.Errorf("reserve device identity: %w", err)
 		}
 		csrHash := sha256.Sum256([]byte(csrPEM))
@@ -326,8 +340,9 @@ func loadActivationRecord(ctx context.Context, querier rowQuerier, id string, fo
 		       COALESCE(a.device_registry_id::text, ''), COALESCE(d.device_sn, ''),
 		       COALESCE(s.csr_pem, ''), COALESCE(d.certificate_id, ''),
 		       COALESCE(s.certificate_pem, ''), COALESCE(d.aws_iot_endpoint, ''),
-		       COALESCE(s.installation_nonce, ''), COALESCE(a.failure_code, '')
+		       COALESCE(s.installation_nonce, ''), COALESCE(a.failure_code, ''), COALESCE(profile.code, '')
 		FROM device_activations a
+		LEFT JOIN dp_profiles profile ON profile.id=a.dp_profile_id
 		LEFT JOIN device_registry d ON d.id=a.device_registry_id
 		LEFT JOIN device_activation_sessions s ON s.device_activation_id=a.id
 		WHERE a.id=$1
@@ -344,7 +359,7 @@ func loadActivationRecord(ctx context.Context, querier rowQuerier, id string, fo
 		&record.Activation.ID, &record.Activation.InternalAppID, &record.Activation.BindingExternalUserID,
 		&method, &record.Activation.PID, &status, &codeHash, &record.Activation.IdempotencyKey, &requestHash,
 		&record.Activation.ExpiresAt, &record.DeviceInternalID, &record.Activation.DeviceSN,
-		&record.CSRPEM, &certificateID, &certificatePEM, &endpoint, &nonce, &record.FailureCode,
+		&record.CSRPEM, &certificateID, &certificatePEM, &endpoint, &nonce, &record.FailureCode, &record.Activation.DPProfile,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return activation.Record{}, activation.ErrActivationNotFound
@@ -365,4 +380,32 @@ func loadActivationRecord(ctx context.Context, querier rowQuerier, id string, fo
 		}
 	}
 	return record, nil
+}
+
+func (repository *ActivationRepository) FindActiveDPProfile(ctx context.Context, code string) (activation.DPProfile, error) {
+	var profile activation.DPProfile
+	if err := repository.pool.QueryRow(ctx, `SELECT code,name FROM dp_profiles WHERE code=$1 AND status='active'`, code).Scan(&profile.Code, &profile.Name); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return activation.DPProfile{}, activation.ErrDPProfileUnavailable
+		}
+		return activation.DPProfile{}, fmt.Errorf("find active DP profile: %w", err)
+	}
+	return profile, nil
+}
+
+func (repository *ActivationRepository) ListActiveDPProfiles(ctx context.Context) ([]activation.DPProfile, error) {
+	rows, err := repository.pool.Query(ctx, `SELECT code,name FROM dp_profiles WHERE status='active' ORDER BY code`)
+	if err != nil {
+		return nil, fmt.Errorf("list DP profiles: %w", err)
+	}
+	defer rows.Close()
+	profiles := make([]activation.DPProfile, 0)
+	for rows.Next() {
+		var profile activation.DPProfile
+		if err := rows.Scan(&profile.Code, &profile.Name); err != nil {
+			return nil, fmt.Errorf("scan DP profile: %w", err)
+		}
+		profiles = append(profiles, profile)
+	}
+	return profiles, rows.Err()
 }

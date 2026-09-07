@@ -33,10 +33,13 @@ pending -> activating -> installing -> finalizing -> activated
 
 - 拒绝未知 JSON 字段、畸形 percent escape、超限 body、过期/重放 nonce 和错误 method。
 - `reset_wifi`、`factory_reset(scope=wifi)` 和缺失显式 scope 的 `factory_reset` 必须在 MQTT publish
-  前以 `400 invalid_request` 拒绝；设备移交走 ACK-based `recommission(runtime)`。物理恢复出厂后
-  仍由原绑定用户换网时必须走下一条预签名授权路径，防止设备运行身份与 Gateway binding/token 分裂。
-- 物理按键恢复出厂不等于解绑：设备保留运行身份与 binding，但清除 Wi-Fi 和用户数据。重新写入 Wi-Fi
-  必须转发原绑定 App 预签名的 `network-reconfiguration-authorizations` 请求，并同时通过 HMAC v1、
+  前以 `400 invalid_request` 拒绝；需要同步释放云端 binding 的设备移交走 ACK-based
+  `recommission(runtime|all)`。
+- MCU 物理长按 `#RST` 是纯设备内部的所有权清理：不发布 MQTT、不调用 Gateway API；设备清除 Wi-Fi、
+  用户数据和本地运行身份，保留有效 OTA release，重启后进入普通 activation。Gateway 不释放旧 binding，
+  旧记录可能离线保留；新 activation 生成新的 `device_sn` 和 binding。
+- 显式的 identity-preserving 网络恢复与物理 `#RST` 不同。它必须转发原绑定 App 预签名的
+  `network-reconfiguration-authorizations` 请求，并同时通过 HMAC v1、
   nonce/时效、`binding_external_user_id` 精确比较和该 binding 的 `X-Device-Token`；body 只能携带
   Wi-Fi 凭据摘要，不能上传明文。摘要字段依次为 domain、device_sn、wifi_ssid、wifi_password；每个
   UTF-8 字段前置 4 字节无符号大端长度，最后取 SHA-256 小写 hex。`device_sn` 使用受限可打印 ASCII；
@@ -61,10 +64,20 @@ pending -> activating -> installing -> finalizing -> activated
 - `lm_` session 前缀只属于 typed `local_media` 路径；通用 DP command 必须在落库和 MQTT
   publish 前拒绝该前缀，避免 ACK 路由冲突和副作用重试。
 
-## 产品 DP 合同
+## 设备 OTA 下载 capability
 
-- `products` 与 `product_dps` 是 Gateway-owned 的只读运行合同目录；产品/DP 变更必须通过 reviewed
-  migration/seed 完成，当前不提供运行时 CRUD。
-- 通用 `commands` 和 `schedules` 在写入 `device_commands` 或发布 MQTT 前，按设备登记的 PID 加载
-  `product_dps`，拒绝未知、disabled、只读方向或 JSON 形状不匹配的 DP；typed media、local media、OTA
-  和 recommission 仍走各自的受控服务路径。
+- staging/production 的私有 S3 OTA 不得把 ECS 临时凭据生成的长 presigned URL 直接放入 MQTT；Gateway 只发送本服务 HTTPS origin 下的短期 capability URL。
+- capability 使用不可预测随机值，Redis 只保存 SHA-256 派生 key；grant 必须绑定 `device_sn`、deployment、artifact key、SHA-256 和大小。
+- 下载窗口固定 15 分钟，允许初始 GET 加设备现有的 3 次重试；错误设备路径、伪造、过期和超次数统一返回 404，不回显 capability。
+- 下载响应必须 `Cache-Control: no-store`，S3 保持私有；Gateway 流式返回对象且在写响应前核对 Content-Length。capability 不进入 PostgreSQL、Gateway 应用日志或错误响应。
+- capability URL 是受限 bearer 能力，不等于设备 mTLS 身份认证；最终授权边界仍由不可预测 capability、短 TTL、设备路径绑定及设备端签名/摘要验证共同构成。
+
+## 设备 DP profile 合同
+
+- 产品目录与 DP 合同独立；设备/activation 直接引用一个版本化 profile，不以 PID 推断。
+- HMAC `GET /api/v1/openapi/dp-profiles` 返回 active code/name；创建 activation 必须显式传 `dp_profile`，
+  与 PID 一同绑定幂等摘要。缺失/畸形返回 invalid_request，不可用返回 dp_profile_unavailable；响应回显选择。
+- 通用 commands/schedules 在落库和 MQTT 发布前按设备 profile 加载成员，拒绝未知、disabled、只读 DP 或不合法参数。
+- retired profile 仅供已登记设备和已创建 activation；新 activation 只能选 active。固件/commands 请求不能覆盖登记。
+- 正式合同通过所有环境通用的 reviewed contract seed 发布；修改协议新增版本，不原地覆盖。无运行时 CRUD。
+- 完整发布、迁移与回滚边界见 [DP profiles v1](../../contracts/dp-profiles-v1.md)。

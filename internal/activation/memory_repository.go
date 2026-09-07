@@ -10,11 +10,17 @@ type MemoryRepository struct {
 	mu       sync.Mutex
 	records  map[string]Record
 	products map[string]Product
+	profiles map[string]DPProfile
 }
 
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
 		records: make(map[string]Record),
+		profiles: map[string]DPProfile{
+			"feeder-v1":      {Code: "feeder-v1", Name: "Feeder v1"},
+			"camera-v1":      {Code: "camera-v1", Name: "Camera v1"},
+			"no-commands-v1": {Code: "no-commands-v1", Name: "No commands v1"},
+		},
 		products: map[string]Product{
 			"feeder-x1": {
 				PID: "feeder-x1", Name: "Feeder X1",
@@ -178,4 +184,25 @@ func (repository *MemoryRepository) ListDevices(_ context.Context, internalAppID
 	}
 	sort.Slice(devices, func(left, right int) bool { return devices[left].ID < devices[right].ID })
 	return devices, nil
+}
+
+func (repository *MemoryRepository) FindActiveDPProfile(_ context.Context, code string) (DPProfile, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	profile, ok := repository.profiles[code]
+	if !ok {
+		return DPProfile{}, ErrDPProfileUnavailable
+	}
+	return profile, nil
+}
+
+func (repository *MemoryRepository) ListActiveDPProfiles(_ context.Context) ([]DPProfile, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	profiles := make([]DPProfile, 0, len(repository.profiles))
+	for _, profile := range repository.profiles {
+		profiles = append(profiles, profile)
+	}
+	sort.Slice(profiles, func(i, j int) bool { return profiles[i].Code < profiles[j].Code })
+	return profiles, nil
 }

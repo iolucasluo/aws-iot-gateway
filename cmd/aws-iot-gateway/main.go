@@ -77,6 +77,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure internal app authentication: %v", err)
 	}
+	if err := gatewayruntime.RequireAWSDataPlane(config); err != nil {
+		if config.ProviderMode == "domestic-dev" {
+			if err := runDomesticGateway(ctx, config, database, redis, verifier); err != nil {
+				log.Fatalf("start domestic development gateway: %v", err)
+			}
+			return
+		}
+		log.Fatalf("refusing legacy AWS startup: %v", err)
+	}
 	awsConfig, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(config.AWSRegion))
 	if err != nil {
 		log.Fatalf("load AWS configuration: %v", err)
@@ -131,27 +140,42 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure command repository: %v", err)
 	}
-	productDPRepository, err := gatewaypostgres.NewProductDPRepository(database)
+	dpProfileRepository, err := gatewaypostgres.NewDPProfileRepository(database)
 	if err != nil {
 		log.Fatalf("configure product DP repository: %v", err)
 	}
 	deviceService := devicemodule.NewServiceWithDP(
-		deviceRuntime, ackStore, commandRepository, config.IoTTopicPrefix, nil, productDPRepository,
+		deviceRuntime, ackStore, commandRepository, config.IoTTopicPrefix, nil, dpProfileRepository,
 	)
 	otaRepository, err := gatewaypostgres.NewOTARepository(database)
 	if err != nil {
 		log.Fatalf("configure OTA repository: %v", err)
 	}
 	var otaArtifacts ota.ArtifactStore
+	var otaOptions []ota.ServiceOption
 	if config.S3OTABucket != "" {
-		otaArtifacts, err = awss3.NewClient(awsConfig, config.S3OTABucket)
+		otaArtifactClient, err := awss3.NewClient(awsConfig, config.S3OTABucket)
 		if err != nil {
 			log.Fatalf("configure OTA artifact store: %v", err)
+		}
+		otaArtifacts = otaArtifactClient
+		if config.OTADeviceDownloadBaseURL != "" {
+			downloadGrants, err := redisstore.NewOTADownloadGrantStore(redis, config.Environment)
+			if err != nil {
+				log.Fatalf("configure OTA download grants: %v", err)
+			}
+			downloadProxy, err := ota.NewDownloadProxy(
+				config.OTADeviceDownloadBaseURL, downloadGrants, otaArtifactClient, nil,
+			)
+			if err != nil {
+				log.Fatalf("configure OTA download proxy: %v", err)
+			}
+			otaOptions = append(otaOptions, ota.WithDownloadProxy(downloadProxy))
 		}
 	}
 	otaService := ota.NewService(
 		otaRepository, otaArtifacts, deviceService, config.Environment,
-		config.OTADevArtifactAllowedOrigins, nil, time.Now,
+		config.OTADevArtifactAllowedOrigins, nil, time.Now, otaOptions...,
 	)
 	localMediaRevisions, err := redisstore.NewLocalMediaRevisionStore(redis, config.Environment)
 	if err != nil {

@@ -20,8 +20,8 @@ func TestLocalRecordingEventProjectionIsIdempotentConflictSafeAndDeleteFinal(t *
 	deviceID := "018f0000-0000-7000-8000-000000000010"
 	bindingID := "018f0000-0000-7000-8000-000000000011"
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO device_registry (id, device_sn, thing_name, pid, status)
-		VALUES ($1,'fdr-0001','fdr-0001','feeder-x1','active')
+		INSERT INTO device_registry (dp_profile_id, id, device_sn, thing_name, pid, status)
+		VALUES ('40000000-0000-0000-0000-000000000001', $1,'fdr-0001','fdr-0001','feeder-x1','active')
 	`, deviceID); err != nil {
 		t.Fatalf("seed local recording device: %v", err)
 	}
@@ -160,8 +160,8 @@ func TestLocalRecordingReconciliationDeletesOnlyAfterCompleteGeneration(t *testi
 	bindingID := "018f0000-0000-7000-8000-000000000021"
 	generation := "018f0000-0000-7000-8000-000000000022"
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO device_registry (id, device_sn, thing_name, pid, status)
-		VALUES ($1,'fdr-0002','fdr-0002','feeder-x1','active')
+		INSERT INTO device_registry (dp_profile_id, id, device_sn, thing_name, pid, status)
+		VALUES ('40000000-0000-0000-0000-000000000001', $1,'fdr-0002','fdr-0002','feeder-x1','active')
 	`, deviceID); err != nil {
 		t.Fatalf("seed reconciliation device: %v", err)
 	}
