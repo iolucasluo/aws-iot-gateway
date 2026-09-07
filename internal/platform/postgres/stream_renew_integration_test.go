@@ -20,7 +20,7 @@ func TestStreamRenewalKeepsOwnershipAndTerminalStates(t *testing.T) {
 	const streamID = "018f0000-0000-7000-8000-000000000003"
 	const sn = "fdr-00000000000000000000000000000001"
 	_, err := pool.Exec(ctx, `
- INSERT INTO device_registry(id,device_sn,thing_name,pid,status) VALUES($1,$2,$2,'feeder-x1','active')`, deviceID, sn)
+ INSERT INTO device_registry(dp_profile_id, id,device_sn,thing_name,pid,status) VALUES('40000000-0000-0000-0000-000000000001', $1,$2,$2,'feeder-x1','active')`, deviceID, sn)
 	if err != nil {
 		t.Fatal(err)
 	}

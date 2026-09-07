@@ -3,9 +3,6 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"io/fs"
-	"sort"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -14,8 +11,18 @@ import (
 
 const seedAdvisoryLockID int64 = 7_114_920_042_026_081_301
 
-// ApplySeeds explicitly applies every embedded non-production seed in filename order.
+// ApplySeeds applies demo products and runtime contracts for development/staging.
 func ApplySeeds(ctx context.Context, pool *pgxpool.Pool) error {
+	return applySeeds(ctx, pool, []string{"001_products.sql", "002_dp_profiles.sql"})
+}
+
+// ApplyContractSeeds publishes only runtime contracts, including in production.
+// It never loads demo products.
+func ApplyContractSeeds(ctx context.Context, pool *pgxpool.Pool) error {
+	return applySeeds(ctx, pool, []string{"002_dp_profiles.sql"})
+}
+
+func applySeeds(ctx context.Context, pool *pgxpool.Pool, names []string) error {
 	if pool == nil {
 		return fmt.Errorf("PostgreSQL pool is required")
 	}
@@ -27,21 +34,13 @@ func ApplySeeds(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := transaction.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, seedAdvisoryLockID); err != nil {
 		return fmt.Errorf("lock database seeds: %w", err)
 	}
-	entries, err := fs.ReadDir(seeds.Files, ".")
-	if err != nil {
-		return fmt.Errorf("read embedded seeds: %w", err)
-	}
-	sort.Slice(entries, func(left, right int) bool { return entries[left].Name() < entries[right].Name() })
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
-			continue
-		}
-		seedSQL, err := seeds.Files.ReadFile(entry.Name())
+	for _, name := range names {
+		seedSQL, err := seeds.Files.ReadFile(name)
 		if err != nil {
-			return fmt.Errorf("read seed %s: %w", entry.Name(), err)
+			return fmt.Errorf("read seed %s: %w", name, err)
 		}
 		if _, err := transaction.Exec(ctx, string(seedSQL)); err != nil {
-			return fmt.Errorf("apply seed %s: %w", entry.Name(), err)
+			return fmt.Errorf("apply seed %s: %w", name, err)
 		}
 	}
 	if err := transaction.Commit(ctx); err != nil {

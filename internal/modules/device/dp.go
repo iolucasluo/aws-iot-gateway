@@ -21,9 +21,9 @@ var (
 	ErrDPUnavailable  = errors.New("device DP contract is unavailable")
 )
 
-// ProductDPDefinition is the product-scoped command contract loaded from the
-// Gateway-owned product_dps catalog.
-type ProductDPDefinition struct {
+// DPDefinition is the reusable command contract loaded from the
+// Gateway-owned dp_definitions catalog.
+type DPDefinition struct {
 	Code      string
 	Type      string
 	Direction string
@@ -31,16 +31,16 @@ type ProductDPDefinition struct {
 	Status    string
 }
 
-// DPDefinitionLoader resolves the active product contract for a registered device.
+// DPDefinitionLoader resolves the registered device profile contract for a registered device.
 type DPDefinitionLoader interface {
-	LoadProductDPDefinitions(context.Context, string) ([]ProductDPDefinition, error)
+	LoadDPDefinitions(context.Context, string) ([]DPDefinition, error)
 }
 
 // ValidateCommands verifies command existence, lifecycle state, direction and
-// the JSON shape described by the product DP catalog. It intentionally does not
+// the JSON shape described by the DP profile catalog. It intentionally does not
 // validate device ACKs; those remain part of the existing command state machine.
-func ValidateCommands(definitions []ProductDPDefinition, commands []CommandInput) error {
-	byCode := make(map[string]ProductDPDefinition, len(definitions))
+func ValidateCommands(definitions []DPDefinition, commands []CommandInput) error {
+	byCode := make(map[string]DPDefinition, len(definitions))
 	for _, definition := range definitions {
 		code := strings.TrimSpace(definition.Code)
 		if code != "" {
@@ -80,7 +80,7 @@ func isControlledDP(code string) bool {
 	}
 }
 
-// SendDPCommands is the product-contract-aware command entry point used by
+// SendDPCommands is the profile-contract-aware command entry point used by
 // generic HTTP commands. The legacy constructor intentionally keeps a nil
 // loader as a compatibility mode for isolated unit tests and typed internal
 // services; production wiring always supplies a loader.
@@ -93,9 +93,9 @@ func (service *Service) SendDPCommands(
 	if service.dpLoader == nil {
 		return service.SendCommands(ctx, internalAppID, deviceID, deviceSN, commands, waitACK)
 	}
-	definitions, err := service.dpLoader.LoadProductDPDefinitions(ctx, deviceSN)
+	definitions, err := service.dpLoader.LoadDPDefinitions(ctx, deviceSN)
 	if err != nil {
-		return SendCommandsResult{}, fmt.Errorf("load product DP contract: %w", err)
+		return SendCommandsResult{}, fmt.Errorf("load DP profile contract: %w", err)
 	}
 	if err := ValidateCommands(definitions, commands); err != nil {
 		return SendCommandsResult{}, err
@@ -103,7 +103,7 @@ func (service *Service) SendDPCommands(
 	return service.SendCommands(ctx, internalAppID, deviceID, deviceSN, commands, waitACK)
 }
 
-func validateDPValue(definition ProductDPDefinition, raw json.RawMessage) error {
+func validateDPValue(definition DPDefinition, raw json.RawMessage) error {
 	typeName := strings.ToLower(strings.TrimSpace(definition.Type))
 	if len(raw) == 0 {
 		if typeName == "object" {
@@ -352,7 +352,7 @@ func validateProperty(value any, property map[string]any) error {
 	if strings.TrimSpace(typeName) == "" {
 		return errors.New("property type is required")
 	}
-	definition := ProductDPDefinition{Type: typeName}
+	definition := DPDefinition{Type: typeName}
 	if typeName == "object" {
 		spec, err := json.Marshal(property)
 		if err != nil {

@@ -25,8 +25,8 @@ func TestRuntimeRepositoriesPersistCommandMediaEventAndWebhookOutbox(t *testing.
 		deviceSN  = "fdr-20000000000000000000000000000001"
 	)
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO device_registry (id, device_sn, thing_name, pid, certificate_id, status)
-		VALUES ($1,$2,$2,'feeder-x1','certificate-runtime-test','active')
+		INSERT INTO device_registry (dp_profile_id, id, device_sn, thing_name, pid, certificate_id, status)
+		VALUES ('40000000-0000-0000-0000-000000000001', $1,$2,$2,'feeder-x1','certificate-runtime-test','active')
 	`, deviceID, deviceSN); err != nil {
 		t.Fatalf("insert device: %v", err)
 	}

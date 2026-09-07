@@ -147,6 +147,8 @@ func (s server) serveInternalApp(writer http.ResponseWriter, request *http.Reque
 			return
 		}
 		s.completeOTAFirmwareVersion(writer, request, versionID)
+	case request.Method == http.MethodGet && request.URL.Path == "/api/v1/openapi/dp-profiles":
+		s.listActiveDPProfiles(writer, request)
 	case request.Method == http.MethodGet && request.URL.Path == "/api/v1/openapi/device-products":
 		s.listActiveProducts(writer, request)
 	case request.Method == http.MethodPost && request.URL.Path == "/api/v1/openapi/device-activations":
@@ -816,6 +818,7 @@ func (s server) createActivation(writer http.ResponseWriter, request *http.Reque
 		BindingExternalUserID string `json:"binding_external_user_id"`
 		IdempotencyKey        string `json:"idempotency_key"`
 		PID                   string `json:"pid"`
+		DPProfile             string `json:"dp_profile"`
 		SessionID             string `json:"session_id,omitempty"`
 		ClientHelloCBOR       string `json:"client_hello_cbor,omitempty"`
 		DeviceHelloCBOR       string `json:"device_hello_cbor,omitempty"`
@@ -825,7 +828,7 @@ func (s server) createActivation(writer http.ResponseWriter, request *http.Reque
 	}
 	created, err := s.activation.Create(request.Context(), activation.CreateInput{
 		InternalAppID: principal.InternalAppID, BindingExternalUserID: body.BindingExternalUserID,
-		IdempotencyKey: body.IdempotencyKey, Method: activation.Method(body.Method), PID: body.PID,
+		IdempotencyKey: body.IdempotencyKey, Method: activation.Method(body.Method), PID: body.PID, DPProfile: body.DPProfile,
 	})
 	if err != nil {
 		writeActivationError(writer, err)
@@ -1117,13 +1120,14 @@ func (response activationResponse) MarshalJSON() ([]byte, error) {
 		Activated           bool      `json:"activated"`
 		DeviceSN            string    `json:"device_sn"`
 		PID                 string    `json:"pid"`
+		DPProfile           string    `json:"dp_profile"`
 		ActivationCode      string    `json:"activation_code,omitempty"`
 		QRAuthorizationCode string    `json:"qr_authorization_code,omitempty"`
 	}
 	value := payload{
 		ActivationID: response.Activation.ID, Method: string(response.Activation.Method),
 		Status: status, ExpiresAt: response.Activation.ExpiresAt, Activated: activated,
-		DeviceSN: response.Activation.DeviceSN, PID: response.Activation.PID,
+		DeviceSN: response.Activation.DeviceSN, PID: response.Activation.PID, DPProfile: response.Activation.DPProfile,
 	}
 	if response.IncludeCode {
 		value.ActivationCode = response.Activation.Code
@@ -1338,6 +1342,8 @@ func writeActivationError(writer http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, activation.ErrInvalidInput):
 		writeError(writer, http.StatusBadRequest, "invalid_request", "request is invalid")
+	case errors.Is(err, activation.ErrDPProfileUnavailable):
+		writeError(writer, http.StatusBadRequest, "dp_profile_unavailable", "DP profile is unavailable for activation")
 	case errors.Is(err, activation.ErrProductUnavailable):
 		writeError(writer, http.StatusBadRequest, "product_unavailable", "product is unavailable for activation")
 	case errors.Is(err, activation.ErrActivationNotFound):
@@ -1365,4 +1371,15 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 
 func writeError(writer http.ResponseWriter, status int, code, message string) {
 	writeJSON(writer, status, map[string]string{"error_code": code, "message": message, "error": message})
+}
+
+func (s server) listActiveDPProfiles(writer http.ResponseWriter, request *http.Request) {
+	profiles, err := s.activation.ListActiveDPProfiles(request.Context())
+	if err != nil {
+		writeActivationError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, struct {
+		Profiles []activation.DPProfile `json:"profiles"`
+	}{Profiles: profiles})
 }

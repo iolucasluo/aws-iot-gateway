@@ -140,12 +140,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure command repository: %v", err)
 	}
-	productDPRepository, err := gatewaypostgres.NewProductDPRepository(database)
+	dpProfileRepository, err := gatewaypostgres.NewDPProfileRepository(database)
 	if err != nil {
 		log.Fatalf("configure product DP repository: %v", err)
 	}
 	deviceService := devicemodule.NewServiceWithDP(
-		deviceRuntime, ackStore, commandRepository, config.IoTTopicPrefix, nil, productDPRepository,
+		deviceRuntime, ackStore, commandRepository, config.IoTTopicPrefix, nil, dpProfileRepository,
 	)
 	otaRepository, err := gatewaypostgres.NewOTARepository(database)
 	if err != nil {

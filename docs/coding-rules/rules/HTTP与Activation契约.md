@@ -72,10 +72,12 @@ pending -> activating -> installing -> finalizing -> activated
 - 下载响应必须 `Cache-Control: no-store`，S3 保持私有；Gateway 流式返回对象且在写响应前核对 Content-Length。capability 不进入 PostgreSQL、Gateway 应用日志或错误响应。
 - capability URL 是受限 bearer 能力，不等于设备 mTLS 身份认证；最终授权边界仍由不可预测 capability、短 TTL、设备路径绑定及设备端签名/摘要验证共同构成。
 
-## 产品 DP 合同
+## 设备 DP profile 合同
 
-- `products` 与 `product_dps` 是 Gateway-owned 的只读运行合同目录；产品/DP 变更必须通过 reviewed
-  migration/seed 完成，当前不提供运行时 CRUD。
-- 通用 `commands` 和 `schedules` 在写入 `device_commands` 或发布 MQTT 前，按设备登记的 PID 加载
-  `product_dps`，拒绝未知、disabled、只读方向或 JSON 形状不匹配的 DP；typed media、local media、OTA
-  和 recommission 仍走各自的受控服务路径。
+- 产品目录与 DP 合同独立；设备/activation 直接引用一个版本化 profile，不以 PID 推断。
+- HMAC `GET /api/v1/openapi/dp-profiles` 返回 active code/name；创建 activation 必须显式传 `dp_profile`，
+  与 PID 一同绑定幂等摘要。缺失/畸形返回 invalid_request，不可用返回 dp_profile_unavailable；响应回显选择。
+- 通用 commands/schedules 在落库和 MQTT 发布前按设备 profile 加载成员，拒绝未知、disabled、只读 DP 或不合法参数。
+- retired profile 仅供已登记设备和已创建 activation；新 activation 只能选 active。固件/commands 请求不能覆盖登记。
+- 正式合同通过所有环境通用的 reviewed contract seed 发布；修改协议新增版本，不原地覆盖。无运行时 CRUD。
+- 完整发布、迁移与回滚边界见 [DP profiles v1](../../contracts/dp-profiles-v1.md)。

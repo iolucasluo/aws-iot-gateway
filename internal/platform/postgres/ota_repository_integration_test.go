@@ -25,9 +25,9 @@ func TestSingleDeviceOTARepositoryPersistsEarlyProgressAndBootProof(t *testing.T
 	)
 	now := time.Now().UTC()
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO device_registry (
+		INSERT INTO device_registry (dp_profile_id,
 			id, device_sn, thing_name, pid, status, presence_online, presence_updated_at
-		) VALUES ($1,$2,$2,'feeder-x1','active',true,$3)
+		) VALUES ('40000000-0000-0000-0000-000000000001', $1,$2,$2,'feeder-x1','active',true,$3)
 	`, deviceID, deviceSN, now); err != nil {
 		t.Fatalf("insert OTA device: %v", err)
 	}

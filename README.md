@@ -1,8 +1,10 @@
 # aws-iot-gateway
 
-`aws-iot-gateway` 是 LivPet 和内部 Demo App 共用的 **Internal AWS API**。它拥有用户激活、全局唯一绑定、设备运行身份和受限设备操作；`products` 与 `product_dps` 作为受控的只读激活/设备合同目录，不实现 Developer、Project、Product/DP CRUD/owner、Factory、tenant、IDevID、RMA 或 OTA campaign 平台。OTA 只保留签名版本和单设备 deployment。
+`aws-iot-gateway` 是 LivPet 和内部 Demo App 共用的 **Internal AWS API**。它拥有用户激活、全局唯一绑定、设备运行身份和受限设备操作；`products` 与独立的 `dp_profiles`/`dp_definitions`/`dp_profile_members` 作为受控的只读激活/设备合同目录，不实现 Developer、Project、Product/DP CRUD/owner、Factory、tenant、IDevID、RMA 或 OTA campaign 平台。OTA 只保留签名版本和单设备 deployment。
 
-`/api/v1/openapi/*` 中的 `openapi` 只是 LivPet wire compatibility，产品和代码语义均使用 internal app。App 必须先读取受控产品目录并在创建 activation 时显式提交 active PID；Gateway 不再默认 `feeder-x1`。
+`/api/v1/openapi/*` 中的 `openapi` 只是 LivPet wire compatibility，产品和代码语义均使用 internal app。App 必须读取受控产品目录和独立 DP profile 目录，在创建 activation 时显式提交 active `pid` 和 `dp_profile`。
+设备直接绑定一个版本化 profile，不通过产品关联。正式 DP 合同通过所有环境通用的显式 contract seed 发布；
+模型、旧设备迁移和协调发布要求见 [DP profiles v1](docs/contracts/dp-profiles-v1.md)。
 
 ## 认证与隔离
 
@@ -43,6 +45,7 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 | `GET /healthz` | 运行检查 | 无 |
 | `POST /api/v1/device-time/bootstrap` | 无可信 RTC 的设备 | 公共窄路由；COSE 验签后可信 |
 | `GET /api/v1/openapi/device-products` | 内部 App backend | HMAC v1；只读 active PID/name/capabilities 目录 |
+| `GET /api/v1/openapi/dp-profiles` | 内部 App backend | HMAC v1；只读 active profile code/name |
 | `POST /api/v1/openapi/device-activations` | 内部 App backend | HMAC v1 |
 | `GET /api/v1/openapi/device-activations/{id}` | 内部 App backend | HMAC v1 |
 | `POST /api/v1/openapi/device-activations/{id}/sessions` | LivPet commissioning 兼容路径 | HMAC v1 |
@@ -182,7 +185,8 @@ go run ./cmd/aws-iot-gateway
 
 `aws-iot-gateway-db-seed` 是 development/staging 的显式一次性初始化命令：它先幂等执行 migration，再事务执行
 `db/seeds/`，当前写入 `feeder-x1`、`lamp-x1` 和 `minion-cam-x1`。API/worker 启动不会自动 seed；漏掉该步骤时产品目录为空、
-activation 必然返回 `product_unavailable`。该命令拒绝空环境和 `production`。详细边界见
+activation 必然返回 `product_unavailable`。该命令拒绝空环境和未知环境；`production` 只执行 `seeds/002_dp_profiles.sql` 正式合同，
+不执行演示产品 seed。详细边界见
 [db/seeds/README.md](db/seeds/README.md)，staging 一次性 ECS 执行方式见
 [deploy/staging/README.md](deploy/staging/README.md)。
 

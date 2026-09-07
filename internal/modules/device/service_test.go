@@ -43,12 +43,12 @@ func (waiter ackWaiterStub) Wait(context.Context, string, string, time.Duration)
 
 type commandRepositoryStub struct{ commands []Command }
 
-type productDPDefinitionLoaderStub struct {
-	definitions []ProductDPDefinition
+type dpDefinitionLoaderStub struct {
+	definitions []DPDefinition
 	err         error
 }
 
-func (loader productDPDefinitionLoaderStub) LoadProductDPDefinitions(_ context.Context, _ string) ([]ProductDPDefinition, error) {
+func (loader dpDefinitionLoaderStub) LoadDPDefinitions(_ context.Context, _ string) ([]DPDefinition, error) {
 	return loader.definitions, loader.err
 }
 
@@ -134,7 +134,7 @@ func TestSendDPCommandsRejectsUnknownDPBeforePersistenceOrPublish(t *testing.T) 
 	publisher := &publisherStub{}
 	repository := &commandRepositoryStub{}
 	service := NewServiceWithDP(publisher, ackWaiterStub{}, repository, "aws-iot-gateway-staging", nil,
-		productDPDefinitionLoaderStub{definitions: []ProductDPDefinition{{
+		dpDefinitionLoaderStub{definitions: []DPDefinition{{
 			Code: "video_res", Type: "object", Direction: "wo", Status: "active",
 		}}})
 

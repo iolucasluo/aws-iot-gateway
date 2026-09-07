@@ -21,7 +21,7 @@ func TestMigrateCreatesRequiredTablesAndGlobalBindingConstraint(t *testing.T) {
 	}
 
 	for _, table := range []string{
-		"products", "product_dps", "device_registry", "device_activations", "device_activation_sessions", "device_bindings", "device_tokens",
+		"products", "dp_profiles", "dp_definitions", "dp_profile_members", "device_registry", "device_activations", "device_activation_sessions", "device_bindings", "device_tokens",
 		"device_commands", "device_events", "device_schedules", "device_streams", "device_snapshots", "device_recordings",
 		"ota_firmware_versions", "device_ota_deployments",
 		"webhook_outbox", "webhook_deliveries", "device_lifecycle_outbox",
@@ -57,17 +57,20 @@ func TestMigrateCreatesRequiredTablesAndGlobalBindingConstraint(t *testing.T) {
 
 	deviceID := "018f0000-0000-7000-8000-000000000001"
 	_, err := pool.Exec(ctx, `
-		INSERT INTO device_registry (id, device_sn, thing_name, pid, status)
-		VALUES ($1, 'fdr-00000000000000000000000000000001', 'fdr-00000000000000000000000000000001', 'feeder-x1', 'active')
+		INSERT INTO device_registry (dp_profile_id, id, device_sn, thing_name, pid, status)
+		VALUES ('40000000-0000-0000-0000-000000000001', $1, 'fdr-00000000000000000000000000000001', 'fdr-00000000000000000000000000000001', 'feeder-x1', 'active')
 	`, deviceID)
 	if err != nil {
 		t.Fatalf("insert device: %v", err)
 	}
-	dpRepository, err := NewProductDPRepository(pool)
+	if _, err := pool.Exec(ctx, `UPDATE device_registry SET dp_profile_id=(SELECT id FROM dp_profiles WHERE code='feeder-v1') WHERE id=$1`, deviceID); err != nil {
+		t.Fatal(err)
+	}
+	dpRepository, err := NewDPProfileRepository(pool)
 	if err != nil {
 		t.Fatalf("create product DP repository: %v", err)
 	}
-	definitions, err := dpRepository.LoadProductDPDefinitions(ctx, "fdr-00000000000000000000000000000001")
+	definitions, err := dpRepository.LoadDPDefinitions(ctx, "fdr-00000000000000000000000000000001")
 	if err != nil {
 		t.Fatalf("load feeder product DPs: %v", err)
 	}
@@ -244,8 +247,8 @@ func TestMigrateUpgradesLegacySquashedInitialWithoutDroppingData(t *testing.T) {
 
 	applyProductSeeds(t, ctx, pool)
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO device_registry (id, device_sn, thing_name, pid, status)
-		VALUES ('018f0000-0000-7000-8000-000000000014',
+		INSERT INTO device_registry (dp_profile_id, id, device_sn, thing_name, pid, status)
+		VALUES ('40000000-0000-0000-0000-000000000001', '018f0000-0000-7000-8000-000000000014',
 		        'fdr-00000000000000000000000000000014',
 		        'fdr-00000000000000000000000000000014', 'minion-cam-x1', 'active')
 	`); err != nil {
@@ -317,16 +320,16 @@ func TestProductSeedIsExplicitAndIdempotent(t *testing.T) {
 		}
 	}
 	var dpCount, feederDPCount, minionDPCount int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM product_dps`).Scan(&dpCount); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM dp_profile_members`).Scan(&dpCount); err != nil {
 		t.Fatalf("count seeded product DPs: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
-		SELECT count(*) FROM product_dps dp JOIN products p ON p.id=dp.product_id WHERE p.pid='feeder-x1'
+		SELECT count(*) FROM dp_profile_members member JOIN dp_profiles profile ON profile.id=member.dp_profile_id WHERE profile.code='feeder-v1'
 	`).Scan(&feederDPCount); err != nil {
 		t.Fatalf("count feeder product DPs: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
-		SELECT count(*) FROM product_dps dp JOIN products p ON p.id=dp.product_id WHERE p.pid='minion-cam-x1'
+		SELECT count(*) FROM dp_profile_members member JOIN dp_profiles profile ON profile.id=member.dp_profile_id WHERE profile.code='camera-v1'
 	`).Scan(&minionDPCount); err != nil {
 		t.Fatalf("count minion product DPs: %v", err)
 	}
@@ -335,8 +338,8 @@ func TestProductSeedIsExplicitAndIdempotent(t *testing.T) {
 	}
 	var minionDetailedCount int
 	if err := pool.QueryRow(ctx, `
-		SELECT count(*) FROM product_dps dp JOIN products p ON p.id=dp.product_id
-		WHERE p.pid='minion-cam-x1' AND jsonb_typeof(dp.spec->'properties')='object'
+		SELECT count(*) FROM dp_definitions dp JOIN dp_profile_members member ON member.dp_definition_id=dp.id JOIN dp_profiles profile ON profile.id=member.dp_profile_id
+		WHERE profile.code='camera-v1' AND jsonb_typeof(dp.spec->'properties')='object'
 	`).Scan(&minionDetailedCount); err != nil {
 		t.Fatalf("count detailed minion product DP specs: %v", err)
 	}
@@ -349,9 +352,11 @@ func TestProductSeedIsExplicitAndIdempotent(t *testing.T) {
 			volume.spec->'properties'->'volume'->>'minimum',
 			volume.spec->'properties'->'volume'->>'maximum',
 			files.spec->'ack'->>'files'
-		FROM product_dps volume
-		JOIN products vp ON vp.id=volume.product_id AND vp.pid='minion-cam-x1'
-		JOIN product_dps files ON files.code='sd_files' AND files.product_id=volume.product_id
+		FROM dp_definitions volume
+        JOIN dp_profile_members vm ON vm.dp_definition_id=volume.id
+        JOIN dp_profiles profile ON profile.id=vm.dp_profile_id AND profile.code='camera-v1'
+        JOIN dp_profile_members fm ON fm.dp_profile_id=profile.id AND fm.code='sd_files'
+        JOIN dp_definitions files ON files.id=fm.dp_definition_id
 		WHERE volume.code='speaker_vol'
 	`).Scan(&volumeMin, &volumeMax, &sdFilesAck); err != nil {
 		t.Fatalf("load detailed minion DP spec examples: %v", err)
@@ -446,8 +451,8 @@ func seedLocalThumbnailOutboxStatusFixture(
 	const recordingID = "018f0000-0000-7000-8000-000000000052"
 	const outboxID = "018f0000-0000-7000-8000-000000000053"
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO device_registry (id, device_sn, thing_name, pid, status)
-		VALUES ($1, 'fdr-thumbnail-status', 'fdr-thumbnail-status', 'feeder-x1', 'active')
+		INSERT INTO device_registry (dp_profile_id, id, device_sn, thing_name, pid, status)
+		VALUES ('40000000-0000-0000-0000-000000000001', $1, 'fdr-thumbnail-status', 'fdr-thumbnail-status', 'feeder-x1', 'active')
 	`, deviceID); err != nil {
 		t.Fatalf("seed local thumbnail device: %v", err)
 	}

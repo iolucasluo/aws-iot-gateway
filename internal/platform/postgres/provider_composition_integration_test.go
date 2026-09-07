@@ -19,8 +19,8 @@ func TestProviderCompositionBindingEnforcesOneActiveInstancePerCapability(t *tes
 	deviceID := "018f0000-0000-7000-8000-000000000061"
 	bindingID := "018f0000-0000-7000-8000-000000000062"
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO device_registry (id, device_sn, thing_name, pid, status)
-		VALUES ($1, 'fdr-00000000000000000000000000000061', 'fdr-00000000000000000000000000000061', 'feeder-x1', 'active')
+		INSERT INTO device_registry (dp_profile_id, id, device_sn, thing_name, pid, status)
+		VALUES ('40000000-0000-0000-0000-000000000001', $1, 'fdr-00000000000000000000000000000061', 'fdr-00000000000000000000000000000061', 'feeder-x1', 'active')
 	`, deviceID); err != nil {
 		t.Fatalf("insert provider device fixture: %v", err)
 	}

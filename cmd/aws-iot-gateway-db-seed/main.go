@@ -20,7 +20,8 @@ func main() {
 }
 
 func run(ctx context.Context, getenv func(string) string) error {
-	if err := validateEnvironment(getenv("GATEWAY_ENVIRONMENT")); err != nil {
+	environment := strings.TrimSpace(getenv("GATEWAY_ENVIRONMENT"))
+	if err := validateEnvironment(environment); err != nil {
 		return err
 	}
 	databaseURL, err := gatewayruntime.LoadDatabaseURL(getenv)
@@ -38,17 +39,17 @@ func run(ctx context.Context, getenv func(string) string) error {
 	if err := gatewaypostgres.ApplyMigrations(ctx, pool); err != nil {
 		return fmt.Errorf("migrate PostgreSQL: %w", err)
 	}
-	if err := gatewaypostgres.ApplySeeds(ctx, pool); err != nil {
-		return err
+	if environment == "production" {
+		return gatewaypostgres.ApplyContractSeeds(ctx, pool)
 	}
-	return nil
+	return gatewaypostgres.ApplySeeds(ctx, pool)
 }
 
 func validateEnvironment(environment string) error {
 	switch strings.TrimSpace(environment) {
-	case "development", "staging":
+	case "development", "staging", "production":
 		return nil
 	default:
-		return fmt.Errorf("GATEWAY_ENVIRONMENT must be development or staging for database seeds")
+		return fmt.Errorf("GATEWAY_ENVIRONMENT must be development, staging or production for database seeds")
 	}
 }

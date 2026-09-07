@@ -19,6 +19,7 @@ var (
 	ErrIdempotencyConflict       = errors.New("idempotency key conflicts with another request")
 	ErrActivationInProgress      = errors.New("activation already exists for idempotency key")
 	ErrDeviceBindingConflict     = errors.New("device already has an active binding")
+	ErrDPProfileUnavailable      = errors.New("DP profile is unavailable for activation")
 	ErrProductUnavailable        = errors.New("product is unavailable for activation")
 )
 
@@ -48,6 +49,7 @@ type CreateInput struct {
 	IdempotencyKey        string
 	Method                Method
 	PID                   string
+	DPProfile             string
 }
 
 type PrepareInput struct {
@@ -68,6 +70,7 @@ type Activation struct {
 	Code                  string
 	Method                Method
 	PID                   string
+	DPProfile             string
 	InternalAppID         string
 	BindingExternalUserID string
 	IdempotencyKey        string
@@ -114,6 +117,12 @@ type Product struct {
 	Capabilities []string `json:"capabilities"`
 }
 
+// DPProfile identifies an explicitly published, versioned command contract.
+type DPProfile struct {
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
+
 type Record struct {
 	Activation       Activation
 	CodeHash         [sha256.Size]byte
@@ -130,6 +139,8 @@ type ProductCatalog interface {
 
 type Repository interface {
 	ProductCatalog
+	FindActiveDPProfile(context.Context, string) (DPProfile, error)
+	ListActiveDPProfiles(context.Context) ([]DPProfile, error)
 	Create(context.Context, Record) error
 	FindByID(context.Context, string) (Record, error)
 	FindByIdempotency(context.Context, string, string) (Record, error)

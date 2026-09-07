@@ -44,8 +44,8 @@ type Commander interface {
 	SendCommands(context.Context, string, string, string, []device.CommandInput, bool) (device.SendCommandsResult, error)
 }
 
-// DPCommander is the product-contract-aware command entry point. Typed
-// product DP services use it so their payloads cannot bypass product_dps
+// DPCommander is the profile-contract-aware command entry point. Typed
+// profile-aware DP services use it so their payloads cannot bypass DP profile
 // validation, while workers that speak internal protocols keep Commander.
 type DPCommander interface {
 	SendDPCommands(context.Context, string, string, string, []device.CommandInput, bool) (device.SendCommandsResult, error)

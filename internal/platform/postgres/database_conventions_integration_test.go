@@ -23,14 +23,16 @@ func TestSquashedInitialSchemaEnforcesDatabaseConventions(t *testing.T) {
 	applyProductSeeds(t, ctx, pool)
 
 	_, err := pool.Exec(ctx, `
-		INSERT INTO device_registry (id, device_sn, thing_name, pid, status)
-		VALUES ('018f0000-0000-7000-8000-000000000001',
+		INSERT INTO device_registry (dp_profile_id, id, device_sn, thing_name, pid, status)
+		VALUES ('40000000-0000-0000-0000-000000000001', '018f0000-0000-7000-8000-000000000001',
 		        'fdr-00000000000000000000000000000001',
 		        'fdr-00000000000000000000000000000001', 'feeder-x1', 'active');
 		INSERT INTO device_activations (
+            dp_profile_id,
 			id, internal_app_id, binding_external_user_id, method, pid, status,
 			code_hash, idempotency_key, request_hash, device_registry_id, expires_at
 		) VALUES (
+            '40000000-0000-0000-0000-000000000001',
 			'018f0000-0000-7000-8000-000000000002', 'livpet-staging', 'user-1',
 			'ble', 'feeder-x1', 'activated', decode(repeat('aa', 32), 'hex'), 'migration-fixture',
 			decode(repeat('bb', 32), 'hex'), '018f0000-0000-7000-8000-000000000001',
@@ -206,6 +208,7 @@ func TestApplyMigrationsRecordsInitialAndForwardCompatibilityMigration(t *testin
 		"008_ota_environment_metadata.up.sql",
 		"008_provider_composition.up.sql",
 		"009_environment_ota_non_monotonic.up.sql",
+		"010_dp_profiles.up.sql",
 	}
 	if fmt.Sprint(appliedNames) != fmt.Sprint(want) {
 		t.Fatalf("applied migrations = %v, want %v", appliedNames, want)

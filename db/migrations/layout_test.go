@@ -34,6 +34,8 @@ func TestMigrationLayoutKeepsInitialAndForwardCompatibilityPair(t *testing.T) {
 		"008_provider_composition.up.sql",
 		"009_environment_ota_non_monotonic.down.sql",
 		"009_environment_ota_non_monotonic.up.sql",
+		"010_dp_profiles.down.sql",
+		"010_dp_profiles.up.sql",
 	}
 	if got := migrationNames(entries); len(got) != len(want) || fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("migration files = %v, want %v", got, want)
@@ -86,6 +88,22 @@ func TestProductDPMigrationDefinesGatewayOwnedContractCatalog(t *testing.T) {
 	} {
 		if !strings.Contains(migration, fragment) {
 			t.Errorf("product DP migration missing %q", fragment)
+		}
+	}
+}
+
+func TestMigrationsDoNotPublishNewRuntimeDPProfiles(t *testing.T) {
+	entries, err := fs.ReadDir(Files, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		content, err := Files.ReadFile(entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(content), "'feeder-v1'") || strings.Contains(string(content), "'camera-v1'") {
+			t.Fatalf("%s publishes initial DP data; put it in seeds", entry.Name())
 		}
 	}
 }
