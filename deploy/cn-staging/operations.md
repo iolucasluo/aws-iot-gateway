@@ -41,6 +41,26 @@ operator 根、Compose project/volume、`domestic-dev`、`CN_STAGING_*`、`DOMES
 5. 日常更新保留 CA、签名密钥、App 凭据、数据库、Redis 和绑定；备份涉及私钥/业务数据，
    留在 owner 认可的受限路径，不下载到聚合根/Git。确认上个镜像仍可用，但不把旧镜像当作已验证 rollback。
 
+## 旧库不兼容时的重建决策
+
+这是更新前的决策清单，不是已验证的自动重置/迁移实现。数据库说明要求空库时，停止 image-only：
+
+- 只读确认实际 `DATABASE_URL` 指向的库（不打印凭据）、关键表/列、migration ledger、有效绑定数量；
+  同名 ledger 和 API healthy 都不证明候选 schema 兼容。
+- 向用户明确旧记录不兼容搬迁、需要重新激活。优先建议保留旧库并另建具名空库，不删除旧库或卷；
+  旧库仍在同一 ECS 不等于独立备份，切换前另行确认一致性备份、受限保存位置和恢复验证范围。
+- 执行前取得具体新库或重置目标、停写/切库、seed、API 服务和设备重新激活范围的授权；
+  “是不是重置一下”仅是方案询问，部署授权不自动包含数据丢弃。
+- 先完成候选镜像门禁和备份前提，再停止旧 API 的写入/ingest；仅修改本地期望配置中已确认的
+  数据库选择并部署副本，使用同一候选版本执行空库 migration + seed，核对 exit code 和产品/profile 后启动 API。
+  同时检查 stack 的数据库默认值与 Gateway/seed URL，不能只改 `POSTGRES_DB` 就假定旧卷已切库。
+- 保留 CA/signer/App secret、PG/Redis/MQTT/TURN/OSS；审查 signaling 兼容性，只变更必要且获授权的服务。
+  换库不撤销旧 MQTT 证书，也不清除 Redis grant、设备运行身份和 App 缓存；旧 `X-Device-Token`
+  在新空库没有对应记录，会被数据库鉴权拒绝。重新激活前须审查
+  对应租约/授权失效及原设备身份处置，不能伪造绑定、只重启 App 或无差别 flush Redis。
+- 旧库与旧镜像仅为候选恢复点：设备重新激活或外部状态变化后，不能承诺仅切回 URL 就恢复。
+  失败保留现场，恢复按本次独立授权和兼容性证据执行。
+
 ## 首次初始化
 
 只对新且明确批准的 operator 根调用 `scripts/prepare_cloud_staging_operator.sh`。
