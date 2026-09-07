@@ -1,5 +1,12 @@
 # 国内 `cn-staging` 本地/ECS 模拟
 
+> 当前源码目录为 `deploy/cn-staging`（原 `deploy/domestic-staging`）。首次初始化与已有实例更新
+> 的操作边界见 [operations.md](operations.md)。目录更名不修改既有服务器 release、project、
+> 数据卷或运行配置；下文保留各阶段说明，不能用早期阶段状态代替当前源码/部署验收。
+
+真实期望配置在维护电脑的 Gateway `deploy/environments/aliyun-staging/` 留存，服务器为部署副本。
+首次只读接管、配置漂移与服务器释放前的数据备份边界见 [本地事实源](operations.md#本地运行配置事实源)。
+
 本目录是国内 `cn-staging` 的基础设施等价模拟。`compose.yaml` 提供 PostgreSQL、Redis、Mosquitto、coturn（及可选 MinIO）基础设施；`compose.single-node.yaml` 在同一 Docker host 上增加数据库 seed、Gateway API 和真实自建 signaling。当前 `domestic-dev` 窄运行时已覆盖 activation、development CA、signed-time、provider-neutral MQTT ingest 与 realtime session；它只用于 DELL/LAN staging，不等同于公网或量产配置。
 
 ## ExploreX signaling（Phase 10.1）
@@ -29,20 +36,20 @@ DELL 运行时 composition 可参考 [composition.dell-domestic-dev.example.yaml
 真实 `.env.cn-staging.local` 必须位于仓库根目录并被 Git 忽略：
 
 ```sh
-cp deploy/domestic-staging/.env.example .env.cn-staging.local
+cp deploy/cn-staging/.env.example .env.cn-staging.local
 # 只在本机 ignored 文件中替换 replace-with-local-secret
 # state bind 保持 127.0.0.1；仅受控协议 harness 才设置 edge bind
 docker compose --env-file .env.cn-staging.local \
-  -f deploy/domestic-staging/compose.yaml --profile harness config --quiet
+  -f deploy/cn-staging/compose.yaml --profile harness config --quiet
 docker compose --env-file .env.cn-staging.local \
-  -f deploy/domestic-staging/compose.yaml --profile harness up -d --wait postgres redis mqtt turn
+  -f deploy/cn-staging/compose.yaml --profile harness up -d --wait postgres redis mqtt turn
 ```
 
 可选启动 MinIO 只用于 ObjectStore adapter 的本地接口测试：
 
 ```sh
 docker compose --env-file .env.cn-staging.local \
-  -f deploy/domestic-staging/compose.yaml --profile object up -d --wait
+  -f deploy/cn-staging/compose.yaml --profile object up -d --wait
 ```
 
 ## 单 ECS / DELL 单机 application profile（Phase 11.1）
@@ -52,12 +59,12 @@ docker compose --env-file .env.cn-staging.local \
 先在 operator-owned 目录准备配置，真实值不得提交：
 
 ```sh
-cp deploy/domestic-staging/single-node.stack.env.example .env.cn-single-node.local
+cp deploy/cn-staging/single-node.stack.env.example .env.cn-single-node.local
 install -d -m 0700 /opt/explorex-cn-single-node/config
 install -d -o 10001 -g 10001 -m 0700 /opt/explorex-cn-single-node/runtime
-cp deploy/domestic-staging/gateway-single-node.env.example /opt/explorex-cn-single-node/config/gateway.env
-cp deploy/domestic-staging/signal-single-node.env.example /opt/explorex-cn-single-node/config/signal.env
-cp deploy/domestic-staging/composition.single-node.example.yaml /opt/explorex-cn-single-node/runtime/composition.yaml
+cp deploy/cn-staging/gateway-single-node.env.example /opt/explorex-cn-single-node/config/gateway.env
+cp deploy/cn-staging/signal-single-node.env.example /opt/explorex-cn-single-node/config/signal.env
+cp deploy/cn-staging/composition.single-node.example.yaml /opt/explorex-cn-single-node/runtime/composition.yaml
 chmod 0600 /opt/explorex-cn-single-node/config/*.env
 # 再填入应用凭据、数据库/Redis URL、LAN/public endpoints、CA/signer 和 MQTT mTLS 文件。
 ```
@@ -68,12 +75,12 @@ chmod 0600 /opt/explorex-cn-single-node/config/*.env
 
 ```sh
 docker compose --env-file .env.cn-single-node.local \
-  -f deploy/domestic-staging/compose.yaml \
-  -f deploy/domestic-staging/compose.single-node.yaml \
+  -f deploy/cn-staging/compose.yaml \
+  -f deploy/cn-staging/compose.single-node.yaml \
   --profile single-node config --quiet
 docker compose --env-file .env.cn-single-node.local \
-  -f deploy/domestic-staging/compose.yaml \
-  -f deploy/domestic-staging/compose.single-node.yaml \
+  -f deploy/cn-staging/compose.yaml \
+  -f deploy/cn-staging/compose.single-node.yaml \
   --profile single-node up -d --build --wait
 ```
 
@@ -98,7 +105,7 @@ export CN_CLOUD_OSS_BUCKET=replace-with-media-bucket
 export CN_CLOUD_OSS_ACCESS_KEY_ID=replace-with-access-key-id
 export CN_CLOUD_OSS_ACCESS_KEY_SECRET=replace-with-access-key-secret
 export CN_CLOUD_GATEWAY_IMAGE=explorex-cn-gateway:replace-with-immutable-revision
-deploy/domestic-staging/scripts/prepare_cloud_staging_operator.sh \
+deploy/cn-staging/scripts/prepare_cloud_staging_operator.sh \
   /opt/explorex-cn-cloud-staging
 ```
 
@@ -118,8 +125,8 @@ docker compose --env-file /opt/explorex-cn-cloud-staging/config/stack.env \
 发布前本地 contract：
 
 ```sh
-bash deploy/domestic-staging/test_cloud_staging_compose_contract.sh
-bash deploy/domestic-staging/test_prepare_cloud_staging_operator.sh
+bash deploy/cn-staging/test_cloud_staging_compose_contract.sh
+bash deploy/cn-staging/test_prepare_cloud_staging_operator.sh
 ```
 
 LAN 允许按用户要求继续使用 HTTP/WS；ECS overlay 已提供 Host reverse proxy，并可在 DNS 和 80/443 可达后自动签发 HTTPS/WSS 证书。Anyka 当前仍使用 WS，Demo App/API 可优先使用 HTTPS；这不改变本环境的 nonproduction 定位。实际 ECS 镜像必须把 `CN_STAGING_GATEWAY_IMAGE` 固定到不可变 revision 并用 `--no-build` 启动；本地 `:local + --build` 只用于 DELL 源码验收。
@@ -127,17 +134,17 @@ LAN 允许按用户要求继续使用 HTTP/WS；ECS overlay 已提供 Host rever
 试产前置 contract（只验证边界，不把 NO-SHIP 变成可部署）：
 
 ```sh
-bash deploy/domestic-staging/test_trial_contract.sh
+bash deploy/cn-staging/test_trial_contract.sh
 ```
 
 组合运行时入口（不启动 Gateway API，不访问 AWS）：
 
 ```sh
 GATEWAY_ENVIRONMENT=staging \
-GATEWAY_PROVIDER_COMPOSITION_PATH=deploy/domestic-staging/composition.cn-staging.example.yaml \
+GATEWAY_PROVIDER_COMPOSITION_PATH=deploy/cn-staging/composition.cn-staging.example.yaml \
 go run ./cmd/provider-composition-preflight
-bash deploy/domestic-staging/test_provider_preflight_contract.sh
-bash deploy/domestic-staging/test_runtime_audit_contract.sh
+bash deploy/cn-staging/test_provider_preflight_contract.sh
+bash deploy/cn-staging/test_runtime_audit_contract.sh
 ```
 
 preflight 只读取公开的 composition 形状，输出 instance 的 capability/driver；凭据引用、证书路径和
@@ -148,7 +155,7 @@ runtime audit 是 preflight 之后的装配前检查，不启动 Gateway API，�
 
 ```sh
 GATEWAY_ENVIRONMENT=staging \
-GATEWAY_PROVIDER_COMPOSITION_PATH=deploy/domestic-staging/composition.cn-staging.example.yaml \
+GATEWAY_PROVIDER_COMPOSITION_PATH=deploy/cn-staging/composition.cn-staging.example.yaml \
 go run ./cmd/provider-composition-runtime-audit
 ```
 
@@ -171,7 +178,7 @@ runtime audit 标记为 `BLOCKED`。
 
 ```sh
 docker compose --env-file .env.cn-staging.local \
-  -f deploy/domestic-staging/compose.yaml down
+  -f deploy/cn-staging/compose.yaml down
 ```
 
 本地 MQTT listener 使用 loopback 发布端口和匿名测试配置，只能验证容器网络和协议 harness，不能用于 feeder HIL 或云 staging。国内设备接入必须在后续阶段切换到 MQTTS/mTLS、ACL 和受控证书。
@@ -184,10 +191,10 @@ Phase 7.2 增加 `mtls` profile：它使用独立的 8883 listener、客户端�
 # 并从 mosquitto.mtls.acl.example 复制为 CN_STAGING_MQTT_ACL_FILE
 # operator-owned composition copy 中 messaging endpoint 必须指向实际 mqtts://<host>:<port>
 docker compose --env-file .env.cn-staging.local \
-  -f deploy/domestic-staging/compose.yaml --profile mtls up -d --wait mqtt-mtls
+  -f deploy/cn-staging/compose.yaml --profile mtls up -d --wait mqtt-mtls
 
 GATEWAY_ENVIRONMENT=staging \
-GATEWAY_PROVIDER_COMPOSITION_PATH=deploy/domestic-staging/composition.cn-staging.example.yaml \
+GATEWAY_PROVIDER_COMPOSITION_PATH=deploy/cn-staging/composition.cn-staging.example.yaml \
 GATEWAY_MQTT_CLIENT_ID=gateway-cn-staging \
 GATEWAY_MQTT_TOPIC_PREFIX=cn-staging \
 GATEWAY_MQTT_CA_FILE=.runtime/cn-staging/mqtt-tls/ca.crt \
@@ -206,7 +213,7 @@ topic 和 payload 字节数，不打印 payload：
 ```sh
 GATEWAY_MQTT_SMOKE_WAIT_FOR_DEVICE_MESSAGE=1 \
 GATEWAY_ENVIRONMENT=staging \
-GATEWAY_PROVIDER_COMPOSITION_PATH=deploy/domestic-staging/composition.cn-staging.example.yaml \
+GATEWAY_PROVIDER_COMPOSITION_PATH=deploy/cn-staging/composition.cn-staging.example.yaml \
 GATEWAY_MQTT_CLIENT_ID=gateway-cn-staging \
 GATEWAY_MQTT_TOPIC_PREFIX=cn-staging \
 GATEWAY_MQTT_CA_FILE=.runtime/cn-staging/mqtt-tls/ca.crt \

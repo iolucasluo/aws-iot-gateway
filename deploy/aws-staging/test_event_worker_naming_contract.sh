@@ -9,7 +9,7 @@ import sys
 
 root = Path(sys.argv[1])
 dockerfile = (root / "Dockerfile").read_text()
-template = (root / "deploy/cloudformation/staging.yaml").read_text()
+template = (root / "deploy/aws-staging/cloudformation/staging.yaml").read_text()
 
 def require(condition: bool, message: str) -> None:
     if not condition:

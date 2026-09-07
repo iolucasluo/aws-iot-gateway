@@ -249,7 +249,7 @@ run_gateway() {
 run_tests() {
   bash "$REPO_ROOT/test/tool/dev_launcher_test.sh"
   bash "$REPO_ROOT/deploy/local/test_local_compose_contract.sh"
-  bash "$REPO_ROOT/deploy/domestic-staging/test_compose_contract.sh"
+  bash "$REPO_ROOT/deploy/cn-staging/test_compose_contract.sh"
   (
     cd "$REPO_ROOT"
     go test -race -count=1 ./...

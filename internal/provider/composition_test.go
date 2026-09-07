@@ -53,7 +53,7 @@ func TestLoadCompositionRejectsMixedProvidersWhenPolicyDisallowsIt(t *testing.T)
 }
 
 func TestDomesticCompositionExampleIsLoadable(t *testing.T) {
-	content, err := os.ReadFile("../../deploy/domestic-staging/composition.cn-staging.example.yaml")
+	content, err := os.ReadFile("../../deploy/cn-staging/composition.cn-staging.example.yaml")
 	if err != nil {
 		t.Fatalf("read domestic composition example: %v", err)
 	}

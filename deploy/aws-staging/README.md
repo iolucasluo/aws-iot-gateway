@@ -11,7 +11,7 @@ The `INTERNAL_APPS_JSON` value lives in one explicitly created Secrets Manager s
 当前仓库的 staging owner entrypoint 是：
 
 ```sh
-./deploy/staging/deploy.sh --env staging --status
+./deploy/aws-staging/deploy.sh --env staging --status
 ```
 
 聚合工作区从 `docs/coding-rules/skills/aws-deploy/scripts/deploy.sh` 薄转发到本脚本。入口只支持 AWS account `135359468083`、region `ap-east-1`、runtime stack `aws-iot-gateway-staging`，不支持 production、`--force`、DB reset、Redis flush 或自动替换 secret。
@@ -20,23 +20,23 @@ The `INTERNAL_APPS_JSON` value lives in one explicitly created Secrets Manager s
 
 ```sh
 # 只读 AWS 状态与公开 health
-./deploy/staging/deploy.sh --env staging --status
+./deploy/aws-staging/deploy.sh --env staging --status
 
 # 模板/source/release 计划；不 build/push/update
-./deploy/staging/deploy.sh --env staging --plan
+./deploy/aws-staging/deploy.sh --env staging --plan
 
 # 完整本地发布门禁；不 build/push/update
-./deploy/staging/deploy.sh --env staging --dry-run
+./deploy/aws-staging/deploy.sh --env staging --dry-run
 
 # CloudWatch 日志
-./deploy/staging/deploy.sh --env staging --logs api 200
-./deploy/staging/deploy.sh --env staging --logs event-worker 200
+./deploy/aws-staging/deploy.sh --env staging --logs api 200
+./deploy/aws-staging/deploy.sh --env staging --logs event-worker 200
 
 # 线上 health/time/HMAC smoke
-./deploy/staging/deploy.sh --env staging --verify
+./deploy/aws-staging/deploy.sh --env staging --verify
 
 # 本地生成公开 Device Bootstrap Contract 候选目录
-./deploy/staging/deploy.sh --env staging \
+./deploy/aws-staging/deploy.sh --env staging \
   --render-device-bootstrap-contract /absolute/new/staging-contract-candidate
 ```
 
@@ -46,10 +46,10 @@ The `INTERNAL_APPS_JSON` value lives in one explicitly created Secrets Manager s
 
 ```sh
 CONFIRM_AWS_STAGING_DEPLOY=deploy-aws-iot-gateway-staging \
-  ./deploy/staging/deploy.sh --env staging --deploy
+  ./deploy/aws-staging/deploy.sh --env staging --deploy
 
 CONFIRM_AWS_STAGING_SEED=seed-aws-iot-gateway-staging \
-  ./deploy/staging/deploy.sh --env staging --seed
+  ./deploy/aws-staging/deploy.sh --env staging --seed
 ```
 
 普通 deploy 保留现有 CloudFormation NoEcho 参数，`InternalAppsSecretArn`、`IoTCredentialProviderEndpoint`、`EnvironmentName`、`DatabaseInstanceClass` 和 `RedisNodeType` 均使用 `UsePreviousValue=true`。Internal App secret 创建或轮换是独立高风险操作，不由该入口执行。
@@ -74,10 +74,10 @@ Contract candidate。脚本不自动执行二进制回退；migration 是 forwar
 
 初次建站顺序：
 
-1. Deploy `deploy/cloudformation/bootstrap.yaml`.
+1. Deploy `deploy/aws-staging/cloudformation/bootstrap.yaml`.
 2. Build the container for `linux/amd64`, push an immutable ECR tag, and capture its URI.
 3. Create/update the internal-app secret from a local file using `aws secretsmanager create-secret --secret-string file://...`.
-4. Deploy `deploy/cloudformation/staging.yaml` with the image URI, secret ARN, and account credential-provider endpoint.
+4. Deploy `deploy/aws-staging/cloudformation/staging.yaml` with the image URI, secret ARN, and account credential-provider endpoint.
 5. Wait for both ECS services to stabilize; API/worker startup completes schema migration but deliberately does not run seeds.
 6. Run the image's one-off `aws-iot-gateway-db-seed` task from the active API task definition, then require exit code 0. This is a release gate for every fresh staging database and is safe to repeat:
 
@@ -101,8 +101,8 @@ Contract candidate。脚本不自动执行二进制回退；migration 是 forwar
 After a deployment, run the owner-side HMAC v1 smoke from the Gateway repository:
 
 ```sh
-python3 deploy/staging/test_internal_apps_smoke.py
-python3 deploy/staging/smoke_internal_apps.py \
+python3 deploy/aws-staging/test_internal_apps_smoke.py
+python3 deploy/aws-staging/smoke_internal_apps.py \
   --profile explorex-staging-hk --region ap-east-1 \
   --stack aws-iot-gateway-staging --cluster aws-iot-gateway-staging
 ```

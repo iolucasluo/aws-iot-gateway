@@ -33,7 +33,7 @@ Gateway 根据 `products.dp_profile_code` 确定协议；多个产品可共享 p
 - 局域网媒体：Gateway 只授权并经 MQTT 开关设备的 ONVIF/RTSP 短租约；不代理、
   不拨号 RFC 1918 设备地址，App 在同一 LAN 直连设备。
 
-隔离的 dev/staging IaC 位于 `deploy/cloudformation/`。内部 API 仍走 API Gateway → VPC Link → private NLB；另一个公开 ALB 的 HTTP listener 只转发精确的 `/api/v1/device-time/bootstrap`，默认拒绝其他 path。两者共用双 API ECS，后台为双 worker ECS、RDS PostgreSQL、ElastiCache Redis、SQS/DLQ、IoT Rule、KVS、S3 和独立 KMS time signer。它不是生产部署基线。
+隔离的 dev/staging IaC 位于 `deploy/aws-staging/cloudformation/`。内部 API 仍走 API Gateway → VPC Link → private NLB；另一个公开 ALB 的 HTTP listener 只转发精确的 `/api/v1/device-time/bootstrap`，默认拒绝其他 path。两者共用双 API ECS，后台为双 worker ECS、RDS PostgreSQL、ElastiCache Redis、SQS/DLQ、IoT Rule、KVS、S3 和独立 KMS time signer。它不是生产部署基线。
 
 更新 CloudFormation 时，不得把 `describe-stacks` 返回的 NoEcho 参数值 `****` 当成原值重新提交。
 需要保持现有 secret ARN 时使用 `UsePreviousValue`；确需显式传值时，只能从获批准的安全输入或当前
@@ -192,7 +192,7 @@ go run ./cmd/aws-iot-gateway
 activation 必然返回 `product_unavailable`。该命令拒绝空环境和未知环境；`production` 只执行 `seeds/002_dp_profiles.sql` 正式合同，
 不执行演示产品 seed。详细边界见
 [db/seeds/README.md](db/seeds/README.md)，staging 一次性 ECS 执行方式见
-[deploy/staging/README.md](deploy/staging/README.md)。
+[deploy/aws-staging/README.md](deploy/aws-staging/README.md)。
 
 需要让真实 Taixin/Anyka 硬件访问 Gateway 时，不要在各硬件仓手写 endpoint、CA 或 time SPKI。共享
 `development`（local/LAN）与 `staging` 环境的公开 `Gateway Device Bootstrap Contract` 发布位置分别是

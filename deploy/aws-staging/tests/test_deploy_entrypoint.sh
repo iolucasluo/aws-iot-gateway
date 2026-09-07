@@ -6,14 +6,14 @@ set -eu
 unset CONFIRM_AWS_STAGING_DEPLOY CONFIRM_AWS_STAGING_SEED
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-DEPLOY="$ROOT/deploy/staging/deploy.sh"
+DEPLOY="$ROOT/deploy/aws-staging/deploy.sh"
 
 fail() {
     echo "FAIL: $*" >&2
     exit 1
 }
 
-[ -x "$DEPLOY" ] || fail "deploy/staging/deploy.sh must exist and be executable"
+[ -x "$DEPLOY" ] || fail "deploy/aws-staging/deploy.sh must exist and be executable"
 bash -n "$DEPLOY" || fail "deploy.sh syntax"
 
 help=$($DEPLOY --help)
@@ -84,11 +84,11 @@ expect_reject_before_aws 'seed without confirmation' --env staging --seed
 
 # Validate source publication and reject external images before AWS access.
 fixture="$tmp/fixture"
-mkdir -p "$fixture/deploy/staging" "$fixture/deploy/cloudformation"
-cp "$DEPLOY" "$fixture/deploy/staging/deploy.sh"
+mkdir -p "$fixture/deploy/aws-staging" "$fixture/deploy/aws-staging/cloudformation"
+cp "$DEPLOY" "$fixture/deploy/aws-staging/deploy.sh"
 printf 'FROM scratch\n' > "$fixture/Dockerfile"
-printf 'AWSTemplateFormatVersion: 2010-09-09\nResources: {}\n' > "$fixture/deploy/cloudformation/staging.yaml"
-printf 'AWSTemplateFormatVersion: 2010-09-09\nResources: {}\n' > "$fixture/deploy/cloudformation/bootstrap.yaml"
+printf 'AWSTemplateFormatVersion: 2010-09-09\nResources: {}\n' > "$fixture/deploy/aws-staging/cloudformation/staging.yaml"
+printf 'AWSTemplateFormatVersion: 2010-09-09\nResources: {}\n' > "$fixture/deploy/aws-staging/cloudformation/bootstrap.yaml"
 git -C "$fixture" init -q
 git -C "$fixture" config user.name aws-deploy-test
 git -C "$fixture" config user.email aws-deploy-test@example.invalid
@@ -111,7 +111,7 @@ AWS
 chmod +x "$tmp/bin/aws-plan"
 ln -sf "$tmp/bin/aws-plan" "$tmp/bin/aws"
 if PATH="$tmp/bin:$PATH" CONFIRM_AWS_STAGING_DEPLOY=deploy-aws-iot-gateway-staging \
-    "$fixture/deploy/staging/deploy.sh" --env staging --deploy \
+    "$fixture/deploy/aws-staging/deploy.sh" --env staging --deploy \
     >"$tmp/out" 2>"$tmp/err"; then
     fail "deploy without a published upstream unexpectedly succeeded"
 fi

@@ -2,8 +2,8 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-LIB="$ROOT/deploy/staging/lib/release_source.sh"
-DEPLOY="$ROOT/deploy/staging/deploy.sh"
+LIB="$ROOT/deploy/aws-staging/lib/release_source.sh"
+DEPLOY="$ROOT/deploy/aws-staging/deploy.sh"
 
 fail() {
     echo "FAIL: $*" >&2
@@ -39,7 +39,10 @@ grep -F '"$RELEASE_SOURCE_ROOT"' "$DEPLOY" >/dev/null || \
 
 archive_gate="$tmp/archive-gate"
 mkdir -p "$archive_gate"
-(cd "$ROOT" && tar --exclude=.git --exclude=.runtime -cf - .) | tar -xf - -C "$archive_gate"
+(cd "$ROOT" && tar --exclude=.git --exclude=.runtime --exclude=.local \
+    --exclude=./deploy/environments --exclude=.env --exclude='.env.*' -cf - .) | tar -xf - -C "$archive_gate"
+[ ! -e "$archive_gate/deploy/environments" ] || fail "archive gate copied private deployment configuration"
+[ ! -e "$archive_gate/.local" ] || fail "archive gate copied private local configuration"
 bash "$archive_gate/deploy/device-bootstrap/tests/test_contract_publishers.sh" >/dev/null || \
     fail "device bootstrap contract gate is not archive-safe"
 

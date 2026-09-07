@@ -2,7 +2,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-TEMPLATE="$ROOT/deploy/cloudformation/staging.yaml"
+TEMPLATE="$ROOT/deploy/aws-staging/cloudformation/staging.yaml"
 
 python3 - "$TEMPLATE" <<'PY'
 import sys

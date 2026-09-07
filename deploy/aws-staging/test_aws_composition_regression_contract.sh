@@ -25,8 +25,8 @@ from pathlib import Path
 
 root = Path(sys.argv[1])
 composition = (root / "internal/provider/composition.go").read_text(encoding="utf-8")
-template = (root / "deploy/cloudformation/staging.yaml").read_text(encoding="utf-8")
-deploy = (root / "deploy/staging/deploy.sh").read_text(encoding="utf-8")
+template = (root / "deploy/aws-staging/cloudformation/staging.yaml").read_text(encoding="utf-8")
+deploy = (root / "deploy/aws-staging/deploy.sh").read_text(encoding="utf-8")
 
 
 def require(condition, message):

@@ -9,8 +9,8 @@ RUNTIME_ROOT="$GATEWAY_ROOT/.runtime/aws-deploy"
 RELEASE_SOURCE_ROOT="$GATEWAY_ROOT"
 RELEASE_DEPLOY_DIR="$DEPLOY_DIR"
 RELEASE_SOURCE_PARENT=""
-TEMPLATE="$RELEASE_SOURCE_ROOT/deploy/cloudformation/staging.yaml"
-BOOTSTRAP_TEMPLATE="$RELEASE_SOURCE_ROOT/deploy/cloudformation/bootstrap.yaml"
+TEMPLATE="$RELEASE_SOURCE_ROOT/deploy/aws-staging/cloudformation/staging.yaml"
+BOOTSTRAP_TEMPLATE="$RELEASE_SOURCE_ROOT/deploy/aws-staging/cloudformation/bootstrap.yaml"
 SMOKE="$RELEASE_DEPLOY_DIR/smoke_internal_apps.py"
 CONTRACT_RENDERER="$RELEASE_SOURCE_ROOT/deploy/device-bootstrap/scripts/render-staging-contract.sh"
 
@@ -263,9 +263,9 @@ validate_release_id() {
 
 use_release_source() {
     RELEASE_SOURCE_ROOT=$1
-    RELEASE_DEPLOY_DIR="$RELEASE_SOURCE_ROOT/deploy/staging"
-    TEMPLATE="$RELEASE_SOURCE_ROOT/deploy/cloudformation/staging.yaml"
-    BOOTSTRAP_TEMPLATE="$RELEASE_SOURCE_ROOT/deploy/cloudformation/bootstrap.yaml"
+    RELEASE_DEPLOY_DIR="$RELEASE_SOURCE_ROOT/deploy/aws-staging"
+    TEMPLATE="$RELEASE_SOURCE_ROOT/deploy/aws-staging/cloudformation/staging.yaml"
+    BOOTSTRAP_TEMPLATE="$RELEASE_SOURCE_ROOT/deploy/aws-staging/cloudformation/bootstrap.yaml"
     SMOKE="$RELEASE_DEPLOY_DIR/smoke_internal_apps.py"
     CONTRACT_RENDERER="$RELEASE_SOURCE_ROOT/deploy/device-bootstrap/scripts/render-staging-contract.sh"
 }
