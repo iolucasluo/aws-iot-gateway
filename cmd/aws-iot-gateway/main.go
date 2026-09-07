@@ -23,6 +23,7 @@ import (
 	devicemodule "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/device"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/events"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/media"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/ota"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/timebootstrap"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awskms"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awskvs"
@@ -32,6 +33,7 @@ import (
 	gatewaypostgres "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/postgres"
 	redisstore "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/redis"
 	gatewayruntime "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/runtime"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/worker"
 )
 
 func main() {
@@ -68,11 +70,21 @@ func main() {
 	for _, app := range config.InternalApps {
 		credentials = append(credentials, internalauth.Credential{
 			InternalAppID: app.ID, APIKey: app.APIKey, APISecret: app.APISecret,
+			Permissions: app.Permissions,
 		})
 	}
 	verifier, err := internalauth.NewVerifier(credentials, nonceStore, time.Now)
 	if err != nil {
 		log.Fatalf("configure internal app authentication: %v", err)
+	}
+	if err := gatewayruntime.RequireAWSDataPlane(config); err != nil {
+		if config.ProviderMode == "domestic-dev" {
+			if err := runDomesticGateway(ctx, config, database, redis, verifier); err != nil {
+				log.Fatalf("start domestic development gateway: %v", err)
+			}
+			return
+		}
+		log.Fatalf("refusing legacy AWS startup: %v", err)
 	}
 	awsConfig, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(config.AWSRegion))
 	if err != nil {
@@ -128,7 +140,43 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure command repository: %v", err)
 	}
-	deviceService := devicemodule.NewService(deviceRuntime, ackStore, commandRepository, config.IoTTopicPrefix, nil)
+	productDPRepository, err := gatewaypostgres.NewProductDPRepository(database)
+	if err != nil {
+		log.Fatalf("configure product DP repository: %v", err)
+	}
+	deviceService := devicemodule.NewServiceWithDP(
+		deviceRuntime, ackStore, commandRepository, config.IoTTopicPrefix, nil, productDPRepository,
+	)
+	otaRepository, err := gatewaypostgres.NewOTARepository(database)
+	if err != nil {
+		log.Fatalf("configure OTA repository: %v", err)
+	}
+	var otaArtifacts ota.ArtifactStore
+	var otaOptions []ota.ServiceOption
+	if config.S3OTABucket != "" {
+		otaArtifactClient, err := awss3.NewClient(awsConfig, config.S3OTABucket)
+		if err != nil {
+			log.Fatalf("configure OTA artifact store: %v", err)
+		}
+		otaArtifacts = otaArtifactClient
+		if config.OTADeviceDownloadBaseURL != "" {
+			downloadGrants, err := redisstore.NewOTADownloadGrantStore(redis, config.Environment)
+			if err != nil {
+				log.Fatalf("configure OTA download grants: %v", err)
+			}
+			downloadProxy, err := ota.NewDownloadProxy(
+				config.OTADeviceDownloadBaseURL, downloadGrants, otaArtifactClient, nil,
+			)
+			if err != nil {
+				log.Fatalf("configure OTA download proxy: %v", err)
+			}
+			otaOptions = append(otaOptions, ota.WithDownloadProxy(downloadProxy))
+		}
+	}
+	otaService := ota.NewService(
+		otaRepository, otaArtifacts, deviceService, config.Environment,
+		config.OTADevArtifactAllowedOrigins, nil, time.Now, otaOptions...,
+	)
 	localMediaRevisions, err := redisstore.NewLocalMediaRevisionStore(redis, config.Environment)
 	if err != nil {
 		log.Fatalf("configure local media revisions: %v", err)
@@ -186,11 +234,25 @@ func main() {
 		log.Fatalf("configure snapshot converter: %v", err)
 	}
 	assetService := media.NewAssetService(mediaStore, deviceService, mediaRepository, config.Environment, snapshotConverter, nil)
+	localThumbnailWorker, err := worker.NewLocalThumbnailWorker(
+		mediaRepository, mediaStore, deviceService, config.Environment,
+	)
+	if err != nil {
+		log.Fatalf("configure local thumbnail worker: %v", err)
+	}
+	go runLocalThumbnailWorker(ctx, localThumbnailWorker)
+	localReconciliationWorker, err := worker.NewLocalReconciliationWorker(
+		mediaRepository, deviceService,
+	)
+	if err != nil {
+		log.Fatalf("configure local recording reconciliation worker: %v", err)
+	}
+	go runLocalReconciliationWorker(ctx, localReconciliationWorker)
 	server := &http.Server{
 		Addr: config.ListenAddress,
 		Handler: httpapi.NewInternalAPI(service, verifier, httpapi.Dependencies{
 			Binding: bindingService, Device: deviceService, Events: events.NewQueryService(eventRepository),
-			Media: streamService, LocalMedia: localMediaService, Assets: assetService,
+			Media: streamService, LocalMedia: localMediaService, Assets: assetService, OTA: otaService,
 			TimeBootstrap: timeService, TimeBootstrapLimiter: rateLimiter,
 			DeviceRuntime: httpapi.DeviceRuntimeConfig{
 				AWSRegion: config.AWSRegion, CredentialEndpoint: config.IoTCredentialEndpoint,
@@ -206,6 +268,39 @@ func main() {
 	log.Printf("aws-iot-gateway listening on %s", config.ListenAddress)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("serve gateway: %v", err)
+	}
+}
+
+func runLocalReconciliationWorker(
+	ctx context.Context,
+	reconciliationWorker *worker.LocalReconciliationWorker,
+) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := reconciliationWorker.PollOnce(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("local recording reconciliation failed: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func runLocalThumbnailWorker(ctx context.Context, thumbnailWorker *worker.LocalThumbnailWorker) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		if err := thumbnailWorker.PollOnce(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("local recording thumbnail worker failed: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }
 

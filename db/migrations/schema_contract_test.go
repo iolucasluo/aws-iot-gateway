@@ -28,6 +28,8 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 		"device_lifecycle_outbox",
 		"idempotency_records",
 		"audit_logs",
+		"ota_firmware_versions",
+		"device_ota_deployments",
 	} {
 		requireMigrationContains(t, initial, "CREATE TABLE "+table+" (")
 	}
@@ -41,6 +43,8 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 		"idx_device_recordings_history",
 		"idx_audit_logs_app_time",
 		"idx_device_lifecycle_outbox_ready",
+		"uniq_device_ota_deployments_active",
+		"idx_device_ota_deployments_history",
 	} {
 		requireMigrationContains(t, initial, "INDEX "+indexName)
 	}
@@ -59,6 +63,8 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 		"device_recordings",
 		"webhook_outbox",
 		"device_lifecycle_outbox",
+		"ota_firmware_versions",
+		"device_ota_deployments",
 	} {
 		requireMigrationContains(t, initial, "CREATE TRIGGER trg_"+table+"_updated_at")
 	}
@@ -97,6 +103,24 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 	} {
 		if strings.Contains(strings.ToLower(initial), strings.ToLower(forbidden)) {
 			t.Errorf("squashed initial schema contains forbidden legacy/platform fragment %q", forbidden)
+		}
+	}
+}
+
+func TestSingleDeviceOTAMigrationHasExecutionRecordsWithoutCampaignPlatform(t *testing.T) {
+	t.Parallel()
+	migration := readMigration(t, "004_single_device_ota.up.sql")
+	for _, fragment := range []string{
+		"CREATE TABLE IF NOT EXISTS ota_firmware_versions",
+		"CREATE TABLE IF NOT EXISTS device_ota_deployments",
+		"uniq_device_ota_deployments_active",
+		"firmware_version_id uuid NOT NULL",
+	} {
+		requireMigrationContains(t, migration, fragment)
+	}
+	for _, forbidden := range []string{"ota_campaigns", "aws_iot_jobs", "tenant_id", "project_id"} {
+		if strings.Contains(strings.ToLower(migration), forbidden) {
+			t.Errorf("single-device OTA migration contains platform fragment %q", forbidden)
 		}
 	}
 }
@@ -169,4 +193,53 @@ func requireMigrationContains(t *testing.T, migration, fragment string) {
 	if !strings.Contains(migration, fragment) {
 		t.Errorf("migration missing %q", fragment)
 	}
+}
+
+func TestLocalRecordingProjectionMigrationIsNarrowAndFailClosed(t *testing.T) {
+	t.Parallel()
+	migration := readMigration(t, "005_local_recording_projection.up.sql")
+	for _, fragment := range []string{
+		"CREATE TABLE device_local_recordings (",
+		"device_local_recordings_identity_key",
+		"recording_id ~ '^rec_[0-9a-f]{32}$'",
+		"revision ~ '^rev_[0-9a-f]{64}$'",
+		"projection_status IN ('active', 'conflict', 'deleted')",
+		"recording_date date NOT NULL",
+		"thumbnail_status IN ('pending', 'uploading', 'ready', 'failed')",
+		"CREATE TABLE device_local_recording_tombstones (",
+		"CREATE TABLE local_recording_cursors (",
+		"CREATE TABLE local_recording_reconciliations (",
+		"started_at timestamptz NOT NULL DEFAULT now()",
+		"CREATE TABLE local_recording_reconciliation_sightings (",
+		"CREATE TABLE local_recording_thumbnail_outbox (",
+		"idx_local_recording_thumbnail_outbox_ready",
+		"'delete_pending', 'delete_processing', 'deleted'",
+		"ON DELETE CASCADE",
+	} {
+		requireMigrationContains(t, migration, fragment)
+	}
+	for _, forbidden := range []string{
+		"tenant_id", "product_id", "factory_id", "public_url", "video_object_key",
+	} {
+		if strings.Contains(strings.ToLower(migration), forbidden) {
+			t.Errorf("local recording migration contains forbidden platform/upload field %q", forbidden)
+		}
+	}
+}
+
+func TestLocalThumbnailStatusTextMigrationKeepsTheCheckConstraintFailClosed(t *testing.T) {
+	t.Parallel()
+	up := readMigration(t, "006_local_thumbnail_status_text.up.sql")
+	requireMigrationContains(t, up, "ALTER TABLE local_recording_thumbnail_outbox")
+	requireMigrationContains(t, up, "ALTER COLUMN status TYPE text")
+	for _, forbidden := range []string{"DROP CONSTRAINT", "DROP TABLE", "TRUNCATE", "DELETE FROM"} {
+		if strings.Contains(strings.ToUpper(up), forbidden) {
+			t.Errorf("local thumbnail status migration contains destructive fragment %q", forbidden)
+		}
+	}
+
+	down := readMigration(t, "006_local_thumbnail_status_text.down.sql")
+	requireMigrationContains(t, down, "SET status='delete_pending'")
+	requireMigrationContains(t, down, "WHERE status='delete_processing'")
+	requireMigrationContains(t, down, "ALTER COLUMN status TYPE varchar(16)")
 }

@@ -199,6 +199,13 @@ func TestApplyMigrationsRecordsInitialAndForwardCompatibilityMigration(t *testin
 		"001_initial.sql",
 		"002_legacy_product_catalog.up.sql",
 		"003_product_capabilities.up.sql",
+		"004_single_device_ota.up.sql",
+		"005_local_recording_projection.up.sql",
+		"006_local_thumbnail_status_text.up.sql",
+		"007_product_dps.up.sql",
+		"008_ota_environment_metadata.up.sql",
+		"008_provider_composition.up.sql",
+		"009_environment_ota_non_monotonic.up.sql",
 	}
 	if fmt.Sprint(appliedNames) != fmt.Sprint(want) {
 		t.Fatalf("applied migrations = %v, want %v", appliedNames, want)

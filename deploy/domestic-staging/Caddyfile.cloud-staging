@@ -1,0 +1,14 @@
+{
+	admin off
+	http_port 8080
+	https_port 8443
+	auto_https disable_redirects
+}
+
+http://api-staging.livpet.top, https://api-staging.livpet.top {
+	reverse_proxy gateway-api:14080
+}
+
+http://rtc-staging.livpet.top, https://rtc-staging.livpet.top {
+	reverse_proxy rtc-signaling:18084
+}

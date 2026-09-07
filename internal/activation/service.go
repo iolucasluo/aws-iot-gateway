@@ -122,12 +122,16 @@ func (service *Service) Prepare(ctx context.Context, input PrepareInput) (Instal
 	}
 	identity, err := service.provisioner.Provision(ctx, record.Activation.DeviceSN, input.CSRPEM)
 	if err != nil {
-		_ = service.repository.FailPreparation(ctx, input.ActivationID, "aws_iot_provision_failed")
+		_ = service.repository.FailPreparation(ctx, input.ActivationID, "operational_identity_provision_failed")
 		return Installation{}, fmt.Errorf("provision operational identity: %w", err)
 	}
+	endpoint := strings.TrimSpace(identity.Endpoint)
+	if endpoint == "" {
+		endpoint = strings.TrimSpace(identity.AWSIoTEndpoint)
+	}
 	if identity.DeviceID != record.Activation.DeviceSN || identity.CertificateID == "" ||
-		identity.CertificatePEM == "" || identity.AWSIoTEndpoint == "" {
-		_ = service.repository.FailPreparation(ctx, input.ActivationID, "aws_iot_incomplete_result")
+		identity.CertificatePEM == "" || endpoint == "" {
+		_ = service.repository.FailPreparation(ctx, input.ActivationID, "operational_identity_incomplete_result")
 		return Installation{}, fmt.Errorf("provision operational identity: incomplete result")
 	}
 	nonce, err := randomToken(32)
@@ -137,7 +141,7 @@ func (service *Service) Prepare(ctx context.Context, input PrepareInput) (Instal
 	}
 	installation := Installation{
 		ActivationID: input.ActivationID, DeviceID: identity.DeviceID, CertificateID: identity.CertificateID,
-		PID: record.Activation.PID, Certificate: identity.CertificatePEM, Endpoint: identity.AWSIoTEndpoint, ProofNonce: nonce,
+		PID: record.Activation.PID, Certificate: identity.CertificatePEM, Endpoint: endpoint, ProofNonce: nonce,
 	}
 	completed, err := service.repository.CompletePreparation(ctx, input.ActivationID, installation)
 	if err != nil {

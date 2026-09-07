@@ -76,6 +76,12 @@ export DEVICE_SERVICE_BOOTSTRAP_PRIVATE_KEY="$PWD/.local/device-bootstrap/$USER/
   --out /tmp/device-bootstrap-contract-local-next
 ```
 
+当 signer 位于远端 ECS、HSM 边界或另一受控主机时，不复制私钥。由 signer owner 导出 P-256 DER
+SPKI，然后在发布主机改用 `DEVICE_SERVICE_BOOTSTRAP_PUBLIC_KEY=/approved/current.der`；脚本要求
+private/public current key 二选一。公开 key 仍需与实际 signer 的回读 fingerprint 一致。国内 ECS
+nonproduction staging 使用 `development` Contract 和明确的 HTTP development gate，不能因此提升为
+production 或绕过未来的 HTTPS/KMS/HSM 门禁。
+
 检查候选目录后，由发布者人工更新 `deploy/device-bootstrap/contracts/development/` 并与 Gateway 变更一同提交。这里的 host 必须是团队设备均可达的稳定地址；不要把某台 Mac 的临时 DHCP IP 提交进去。Contract 只含 public SPKI 和 endpoint；复制不泄露该 PEM private key。
 
 ## Staging：CloudFormation + KMS Contract

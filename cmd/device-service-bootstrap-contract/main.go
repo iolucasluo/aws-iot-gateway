@@ -46,29 +46,25 @@ func runLocal(args []string) error {
 	timeBootstrapURL := flags.String("time-bootstrap-url", "", "development time bootstrap URL")
 	keyID := flags.String("key-id", "", "development time key id")
 	privateKeyPath := flags.String("private-key", "", "owner-only P-256 PKCS#8 PEM private key")
+	publicKeyPath := flags.String("public-key", "", "current P-256 DER SPKI exported by the signer owner")
 	nextKeyID := flags.String("next-key-id", "", "optional next time key id during a planned rotation")
 	nextPublicKeyPath := flags.String("next-public-key", "", "optional next P-256 DER SPKI during a planned rotation")
 	serviceCAPath := flags.String("service-ca", "", "optional CA PEM for a local HTTPS service")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if *output == "" || *serviceURL == "" || *timeBootstrapURL == "" || *keyID == "" || *privateKeyPath == "" {
-		return fmt.Errorf("local requires --out, --service-url, --time-bootstrap-url, --key-id, and --private-key")
+	if *output == "" || *serviceURL == "" || *timeBootstrapURL == "" || *keyID == "" {
+		return fmt.Errorf("local requires --out, --service-url, --time-bootstrap-url, and --key-id")
+	}
+	if (*privateKeyPath == "") == (*publicKeyPath == "") {
+		return fmt.Errorf("local requires exactly one of --private-key or --public-key")
 	}
 	if (*nextKeyID == "") != (*nextPublicKeyPath == "") {
 		return fmt.Errorf("local rotation requires both --next-key-id and --next-public-key")
 	}
-	signer, err := localsigner.Load(*privateKeyPath)
+	spki, err := localCurrentSPKI(*privateKeyPath, *publicKeyPath)
 	if err != nil {
 		return err
-	}
-	publicKey, ok := signer.Public().(*ecdsa.PublicKey)
-	if !ok || publicKey.Curve != elliptic.P256() {
-		return fmt.Errorf("local time signer did not expose a P-256 public key")
-	}
-	spki, err := x509.MarshalPKIXPublicKey(publicKey)
-	if err != nil {
-		return fmt.Errorf("encode local time signer public key: %w", err)
 	}
 	ca, err := readOptionalFile(*serviceCAPath)
 	if err != nil {
@@ -91,6 +87,37 @@ func runLocal(args []string) error {
 		Keys:             keys,
 	})
 	return err
+}
+
+func localCurrentSPKI(privateKeyPath, publicKeyPath string) ([]byte, error) {
+	if publicKeyPath != "" {
+		spki, err := os.ReadFile(publicKeyPath)
+		if err != nil {
+			return nil, fmt.Errorf("read local time signer public key: %w", err)
+		}
+		parsed, err := x509.ParsePKIXPublicKey(spki)
+		if err != nil {
+			return nil, fmt.Errorf("parse local time signer public key: %w", err)
+		}
+		publicKey, ok := parsed.(*ecdsa.PublicKey)
+		if !ok || publicKey.Curve != elliptic.P256() {
+			return nil, fmt.Errorf("local time signer public key must be P-256 DER SPKI")
+		}
+		return spki, nil
+	}
+	signer, err := localsigner.Load(privateKeyPath)
+	if err != nil {
+		return nil, err
+	}
+	publicKey, ok := signer.Public().(*ecdsa.PublicKey)
+	if !ok || publicKey.Curve != elliptic.P256() {
+		return nil, fmt.Errorf("local time signer did not expose a P-256 public key")
+	}
+	spki, err := x509.MarshalPKIXPublicKey(publicKey)
+	if err != nil {
+		return nil, fmt.Errorf("encode local time signer public key: %w", err)
+	}
+	return spki, nil
 }
 
 func runAWSRelease(ctx context.Context, args []string) error {

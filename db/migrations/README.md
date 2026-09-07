@@ -1,8 +1,9 @@
 # aws-iot-gateway PostgreSQL migrations
 
 本目录是 Gateway schema 的唯一权威源。这里只保留用户 activation、全局设备绑定、运行身份、设备控制、
-事件、媒体和 outbox。`products` 是 Gateway schema 自有的只读激活目录，不是旧 IoT 平台的 Product 域；没有
-Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或平台 OTA 表。
+事件、媒体和 outbox。`products` 与 `product_dps` 是 Gateway schema 自有的只读激活/设备合同目录，不是旧 IoT 平台的 Product 域；没有
+Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或 OTA campaign/platform 表。Gateway
+只保留签名固件版本与单设备 deployment 执行事实。
 
 ## 文件与执行约定
 
@@ -14,26 +15,36 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或�
 - `001_initial.sql` 必须保持 Gateway 窄域业务边界，同时继承 explorex-api 的精确表/FK/索引命名、
   `updated_at` trigger、数据库硬约束与 schema contract test 规范。
 - migration 通常只定义 schema，不写产品数据；development/staging 的 active PID 由
-  `aws-iot-gateway-db-seed` 显式执行 `../seeds/001_products.sql` 初始化。唯一例外是 `002` 在识别到旧版
+  `aws-iot-gateway-db-seed` 显式执行 `../seeds/001_products.sql` 和 `../seeds/002_product_dps.sql` 初始化。唯一例外是 `002` 在识别到旧版
   pre-production `001_initial.sql` 时回填其历史上唯一合法的 `feeder-x1`，以便在不删除旧 activation/registry
   数据的前提下建立 PID 外键；fresh schema 不执行该数据回填。
 
-## 当前 schema 快照（17 张业务表）
+## 当前 schema 快照（27 张业务表）
 
 | 表 | 用途 | PK | 主要 FK / 删除语义 |
 |---|---|---|---|
 | `products` | 只读激活产品目录（PID、名称、状态、App 可消费的能力 ID） | `id` | 被 registry/activation 以 PID RESTRICT 引用 |
+| `product_dps` | Gateway-owned 产品 DP 合同（code、类型、方向、JSON spec、状态） | `id` | `product_id → products`（RESTRICT）；按 `(product_id, code)` 唯一 |
 | `device_registry` | 设备运行权威记录、ThingName、证书与 presence | `id` | — |
 | `device_activations` | internal app 用户激活 saga | `id` | `device_registry_id → device_registry`（nullable, RESTRICT） |
 | `device_activation_sessions` | activation 安装 session | `id` | `device_activation_id → device_activations`（CASCADE） |
 | `device_bindings` | 全局唯一设备归属；用户字段含不可变 trigger | `id` | `device_registry_id → device_registry`（RESTRICT） |
+| `device_component_bindings` | 设备 capability 到 provider instance 的当前绑定事实 | `id` | registry + binding（RESTRICT）；每 capability 一个 active |
 | `device_tokens` | binding-scoped token hash | `id` | `device_binding_id → device_bindings`（RESTRICT） |
 | `device_commands` | MQTT command/ACK 状态 | `id` | `device_registry_id → device_registry`（RESTRICT） |
 | `device_events` | append-only 设备事件 | `id` | `device_registry_id → device_registry`（RESTRICT） |
+| `ota_firmware_versions` | 下游发布的签名 app OTA 版本；不保存签名私钥 | `id` | `pid → products`（RESTRICT） |
+| `device_ota_deployments` | 单设备 OTA 执行记录与重启确认结果 | `id` | registry + firmware version（RESTRICT） |
 | `device_schedules` | 每设备一份已确认 schedule 投影 | `device_registry_id` | `device_registry_id → device_registry`（RESTRICT） |
 | `device_streams` | KVS stream grant 生命周期 | `id` | registry + binding（RESTRICT） |
 | `device_snapshots` | snapshot 对象状态 | `id` | registry + binding（RESTRICT） |
 | `device_recordings` | cloud/local recording 状态 | `id` | registry + binding（RESTRICT） |
+| `device_local_recordings` | SD v1 metadata/thumbnail projection | `id` | registry + source event（RESTRICT） |
+| `device_local_recording_tombstones` | 防止乱序 finalized 复活已删录像 | `id` | registry + source event（RESTRICT） |
+| `local_recording_cursors` | binding-scoped opaque pagination cursor | `token` | binding + registry（CASCADE） |
+| `local_recording_reconciliations` | 每设备 catalog 对账游标/代次 | `device_registry_id` | registry（CASCADE） |
+| `local_recording_reconciliation_sightings` | 完整扫描期间看到的 recording_id | composite | registry（CASCADE） |
+| `local_recording_thumbnail_outbox` | private thumbnail upload/reconcile intent | `id` | local recording（CASCADE） |
 | `webhook_outbox` | durable webhook delivery intent | `id` | `device_event_id → device_events`（CASCADE） |
 | `webhook_deliveries` | append-only webhook attempt | `id` | `webhook_outbox_id → webhook_outbox`（CASCADE） |
 | `device_lifecycle_outbox` | 运行证书回收补偿任务 | `id` | `device_registry_id → device_registry`（RESTRICT） |
@@ -54,3 +65,9 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或�
   到 `products(pid)` 的 RESTRICT 外键。fresh schema 为 no-op；为避免丢失历史数据，不提供自动 down。
 - `003_product_capabilities`：为已经应用旧 001/002 的产品目录补充只读 JSON capability ID 数组；fresh schema
   已由 001 直接包含同一字段与约束。
+- `004_single_device_ota`：增加签名固件版本和单设备 deployment；不增加 campaign、调度器或 AWS IoT Jobs。
+- `005_local_recording_projection`：新增 SD v1 metadata projection、binding-scoped opaque cursor 和 private thumbnail outbox；不上传录像主体。
+- `006_local_thumbnail_status_text`：将 thumbnail outbox 的 `status` 从定长 `varchar(16)` 改为 `text`，继续由 CHECK 约束限定合法状态，避免状态名长度与字段宽度漂移。
+- `007_product_dps`：增加 Gateway-owned `product_dps` 合同目录和按产品/code 唯一约束；通用 commands 在发布前按设备 PID
+  加载 active DP 并校验存在性、状态、方向和 JSON 形状。产品/DP 仍只通过 reviewed seed/migration 维护。
+- `008_provider_composition`：增加 provider-neutral `device_component_bindings` 绑定事实；每台设备每项 capability 只允许一个 active provider instance，external ref 保持 opaque，不引入 tenant/Project/Factory 域。

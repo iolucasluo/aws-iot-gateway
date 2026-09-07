@@ -2,6 +2,8 @@
 
 This deployment is intentionally limited to `ap-east-1` staging. It creates two API tasks, two competing `iot-gateway-event-worker` tasks, PostgreSQL, Redis, IoT rules and policy, SQS/DLQ, KVS permissions, private media storage, a KMS P-256 signed-time key, and an AWS-managed HTTPS API Gateway URL. Status-heartbeat and LWT rules feed PostgreSQL-backed device presence through the same ingest queue. There is no Developer/Project/Product/Factory/RMA/OTA service.
 
+迁移和回滚边界见 [`docs/contracts/provider-composition-rollback-v1.md`](../../docs/contracts/provider-composition-rollback-v1.md)；该契约只记录可审计的本地/远端证据分层，不授予 AWS mutation 权限。
+
 The `INTERNAL_APPS_JSON` value lives in one explicitly created Secrets Manager secret. Do not pass it as a CloudFormation parameter or commit it. RDS creates and rotates its own master secret.
 
 ## 受控发布入口

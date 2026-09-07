@@ -2,13 +2,36 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/media"
 )
 
 type StreamRepository struct{ pool *pgxpool.Pool }
+
+func (repository *StreamRepository) Renew(ctx context.Context, bindingID, deviceSN, streamID string, expiresAt time.Time) (time.Time, error) {
+	var renewed time.Time
+	err := repository.pool.QueryRow(ctx, `
+		UPDATE device_streams s SET expires_at=GREATEST(s.expires_at,$4)
+		FROM device_registry d, device_bindings b
+		WHERE s.device_registry_id=d.id AND s.device_binding_id=b.id
+		  AND s.id=$1 AND s.device_binding_id=$2 AND d.device_sn=$3
+		  AND s.status='ready' AND s.expires_at>now() AND b.status='active'
+		  AND $4>now() AND $4<=now()+interval '5 minutes'
+		RETURNING s.expires_at
+	`, streamID, bindingID, deviceSN, expiresAt).Scan(&renewed)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, media.ErrStreamNotFound
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("renew stream lease: %w", err)
+	}
+	return renewed, nil
+}
 
 func NewStreamRepository(pool *pgxpool.Pool) (*StreamRepository, error) {
 	if pool == nil {

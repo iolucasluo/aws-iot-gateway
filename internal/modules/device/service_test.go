@@ -1,11 +1,14 @@
 package device
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"testing"
 	"time"
+
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/ota"
 )
 
 type publisherStub struct {
@@ -39,6 +42,15 @@ func (waiter ackWaiterStub) Wait(context.Context, string, string, time.Duration)
 }
 
 type commandRepositoryStub struct{ commands []Command }
+
+type productDPDefinitionLoaderStub struct {
+	definitions []ProductDPDefinition
+	err         error
+}
+
+func (loader productDPDefinitionLoaderStub) LoadProductDPDefinitions(_ context.Context, _ string) ([]ProductDPDefinition, error) {
+	return loader.definitions, loader.err
+}
 
 func (repository *commandRepositoryStub) Create(_ context.Context, command Command) error {
 	repository.commands = append(repository.commands, command)
@@ -84,6 +96,55 @@ func TestSendCommandsPreservesLivPetPayloadAndResponseShape(t *testing.T) {
 	}
 	if len(repository.commands) != 1 || repository.commands[0].Status != "acked" {
 		t.Fatalf("commands = %#v", repository.commands)
+	}
+}
+
+func TestGetDeviceInfoProjectionUsesProviderNeutralCommand(t *testing.T) {
+	t.Parallel()
+	publisher := &publisherStub{}
+	repository := &commandRepositoryStub{}
+	service := NewService(publisher, ackWaiterStub{ack: map[string]any{
+		"code": float64(0), "device_config": map[string]any{
+			"pid": "feeder-x1", "device_sn": "fdr-0001",
+		},
+		"wifi_mac": "48:a4:fd:7d:6f:0b", "version": "dev-cn-20260902d",
+		"build": float64(790), "ip": "192.168.11.228",
+	}}, repository, "cn-staging", func() (string, error) { return "device-info-session", nil })
+
+	projection, err := service.GetDeviceInfoProjection(context.Background(), "demo-local", "device-id", "fdr-0001", "feeder-x1")
+	if err != nil {
+		t.Fatalf("GetDeviceInfoProjection() error = %v", err)
+	}
+	if projection["sn"] != "fdr-0001" || projection["pid"] != "feeder-x1" || projection["online"] != true ||
+		projection["wifi_mac"] != "48:a4:fd:7d:6f:0b" || projection["version"] != "dev-cn-20260902d" ||
+		projection["build"] != float64(790) || projection["ip"] != "192.168.11.228" {
+		t.Fatalf("projection = %#v", projection)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(publisher.payload, &payload); err != nil {
+		t.Fatalf("decode command payload: %v", err)
+	}
+	if payload["action"] != "device_info" || publisher.topic != "cmd/cn-staging/fdr-0001/req" {
+		t.Fatalf("command = topic %q payload %#v", publisher.topic, payload)
+	}
+}
+
+func TestSendDPCommandsRejectsUnknownDPBeforePersistenceOrPublish(t *testing.T) {
+	t.Parallel()
+	publisher := &publisherStub{}
+	repository := &commandRepositoryStub{}
+	service := NewServiceWithDP(publisher, ackWaiterStub{}, repository, "aws-iot-gateway-staging", nil,
+		productDPDefinitionLoaderStub{definitions: []ProductDPDefinition{{
+			Code: "video_res", Type: "object", Direction: "wo", Status: "active",
+		}}})
+
+	_, err := service.SendDPCommands(context.Background(), "livpet-staging", "device-id", "fdr-0001",
+		[]CommandInput{{Code: "not_registered", Value: json.RawMessage(`{}`)}}, false)
+	if !errors.Is(err, ErrDPUnknown) || !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("SendDPCommands() error = %v, want unknown DP invalid input", err)
+	}
+	if len(repository.commands) != 0 || len(publisher.payload) != 0 {
+		t.Fatalf("unknown DP mutated repository=%#v or published=%s", repository.commands, publisher.payload)
 	}
 }
 
@@ -139,6 +200,57 @@ func TestSendCommandsRejectsLocalMediaBeforePersistenceOrPublish(t *testing.T) {
 	}
 }
 
+func TestSendCommandsRejectsOTAInstallBeforePersistenceOrPublish(t *testing.T) {
+	t.Parallel()
+	publisher := &publisherStub{}
+	repository := &commandRepositoryStub{}
+	service := NewService(publisher, ackWaiterStub{}, repository,
+		"aws-iot-gateway-staging", func() (string, error) { return "must-not-run", nil })
+
+	_, err := service.SendCommands(
+		context.Background(), "livpet-staging", "device-id", "fdr-0001",
+		[]CommandInput{{Code: "ota_install", Value: json.RawMessage(`{"download_url":"must-not-publish"}`)}}, true,
+	)
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("SendCommands() error = %v, want ErrInvalidInput", err)
+	}
+	if len(repository.commands) != 0 || len(publisher.payload) != 0 {
+		t.Fatalf("generic OTA mutated repository=%#v or published=%s", repository.commands, publisher.payload)
+	}
+}
+
+func TestSendOTACommandPublishesTypedPayloadAndRequiresMatchingAcceptedACK(t *testing.T) {
+	t.Parallel()
+	publisher := &publisherStub{}
+	repository := &commandRepositoryStub{}
+	service := NewService(publisher, ackWaiterStub{ack: map[string]any{
+		"action": "ota_install", "session_id": "deployment-id", "code": float64(0),
+		"deployment_id": "deployment-id", "status": "accepted",
+	}}, repository, "aws-iot-gateway-staging", nil)
+	command := ota.Command{
+		DeploymentID: "deployment-id", DeviceID: "device-id", DeviceSN: "fdr-0001",
+		PID: "feeder-x1", Version: "v1.2.3", FirmwareBuild: 42,
+		DownloadURL: "https://download.example/ota.tar.gz", SHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		FileSize: 1234, ReleaseStatement: "signed-statement", Signature: "c2lnbmF0dXJl",
+	}
+
+	if err := service.SendOTACommand(context.Background(), command); err != nil {
+		t.Fatalf("SendOTACommand() error = %v", err)
+	}
+	if len(repository.commands) != 0 {
+		t.Fatalf("OTA secrets/URLs were persisted in generic commands: %#v", repository.commands)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(publisher.payload, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload["action"] != "ota_install" || payload["schema"] != "explorex-device-ota-v1" ||
+		payload["session_id"] != "deployment-id" || payload["deployment_id"] != "deployment-id" ||
+		payload["firmware_build"] != float64(42) {
+		t.Fatalf("payload = %#v", payload)
+	}
+}
+
 func TestSendCommandsRejectsReservedLocalMediaSessionBeforePersistenceOrPublish(t *testing.T) {
 	t.Parallel()
 	publisher := &publisherStub{}
@@ -158,6 +270,36 @@ func TestSendCommandsRejectsReservedLocalMediaSessionBeforePersistenceOrPublish(
 	}
 	if len(repository.commands) != 0 || len(publisher.payload) != 0 {
 		t.Fatalf("reserved session mutated repository=%#v or published=%s", repository.commands, publisher.payload)
+	}
+}
+
+func TestSendCommandsRedactsEphemeralFieldsOnlyFromPersistence(t *testing.T) {
+	t.Parallel()
+	publisher := &publisherStub{}
+	repository := &commandRepositoryStub{}
+	service := NewService(publisher, ackWaiterStub{}, repository,
+		"aws-iot-gateway-staging", func() (string, error) { return "session-sensitive", nil })
+
+	_, err := service.SendCommands(context.Background(), "livpet-staging", "device-id", "fdr-0001", []CommandInput{{
+		Code:         "sd_thumbnail_v1",
+		Value:        json.RawMessage(`{"recording_id":"rec_0123456789abcdef0123456789abcdef","upload_url":"https://private.example/signed"}`),
+		RedactFields: []string{"upload_url"},
+	}}, false)
+	if err != nil {
+		t.Fatalf("SendCommands() error = %v", err)
+	}
+	if !bytes.Contains(publisher.payload, []byte("https://private.example/signed")) {
+		t.Fatalf("published payload lost upload URL: %s", publisher.payload)
+	}
+	if len(repository.commands) != 1 {
+		t.Fatalf("commands = %#v", repository.commands)
+	}
+	persisted, err := json.Marshal(repository.commands[0].Payload)
+	if err != nil {
+		t.Fatalf("marshal persisted payload: %v", err)
+	}
+	if bytes.Contains(persisted, []byte("upload_url")) || bytes.Contains(persisted, []byte("private.example")) {
+		t.Fatalf("persisted command leaked presigned URL: %s", persisted)
 	}
 }
 
@@ -261,7 +403,7 @@ func TestGetPTZStatusPublishesFixedQueryAndReturnsValidatedDeviceState(t *testin
 	service := NewService(publisher, ackWaiterStub{ack: map[string]any{
 		"action": "ptz", "session_id": "session-ptz", "code": float64(0), "op": "get_position",
 		"pan": float64(1800), "tilt": float64(-500), "limit_h": float64(4000), "limit_v": float64(2000),
-		"pan_normalized": 0.45, "tilt_normalized": -0.25, "moving": true,
+		"pan_normalized": 0.45, "tilt_normalized": -0.25, "moving": true, "calibrated": true,
 	}}, repository, "aws-iot-gateway-staging", func() (string, error) { return "session-ptz", nil })
 
 	status, err := service.GetPTZStatus(context.Background(), "livpet-staging", "device-id", "fdr-0001")
@@ -269,7 +411,7 @@ func TestGetPTZStatusPublishesFixedQueryAndReturnsValidatedDeviceState(t *testin
 		t.Fatalf("GetPTZStatus() error = %v", err)
 	}
 	if status.Pan != 1800 || status.Tilt != -500 || status.LimitH != 4000 || status.LimitV != 2000 ||
-		status.PanNormalized != 0.45 || status.TiltNormalized != -0.25 || !status.Moving {
+		status.PanNormalized != 0.45 || status.TiltNormalized != -0.25 || !status.Moving || !status.Calibrated {
 		t.Fatalf("status = %#v", status)
 	}
 	var payload map[string]any

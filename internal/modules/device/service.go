@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/ota"
 )
 
 const commandACKTimeout = 10 * time.Second
@@ -27,9 +29,10 @@ var (
 )
 
 type CommandInput struct {
-	Code      string          `json:"code"`
-	Value     json.RawMessage `json:"value"`
-	CommandID string          `json:"command_id,omitempty"`
+	Code         string          `json:"code"`
+	Value        json.RawMessage `json:"value"`
+	CommandID    string          `json:"command_id,omitempty"`
+	RedactFields []string        `json:"-"`
 }
 
 type Command struct {
@@ -66,6 +69,7 @@ type PTZStatus struct {
 	PanNormalized  float64 `json:"pan_normalized"`
 	TiltNormalized float64 `json:"tilt_normalized"`
 	Moving         bool    `json:"moving"`
+	Calibrated     bool    `json:"calibrated"`
 }
 
 type Publisher interface {
@@ -91,15 +95,27 @@ type Service struct {
 	publisher   Publisher
 	ackWaiter   ACKWaiter
 	repository  CommandRepository
+	dpLoader    DPDefinitionLoader
 	topicPrefix string
 	newID       IDGenerator
 }
 
 func NewService(publisher Publisher, ackWaiter ACKWaiter, repository CommandRepository, topicPrefix string, newID IDGenerator) *Service {
+	return NewServiceWithDP(publisher, ackWaiter, repository, topicPrefix, newID, nil)
+}
+
+func NewServiceWithDP(
+	publisher Publisher,
+	ackWaiter ACKWaiter,
+	repository CommandRepository,
+	topicPrefix string,
+	newID IDGenerator,
+	dpLoader DPDefinitionLoader,
+) *Service {
 	if newID == nil {
 		newID = randomUUID
 	}
-	return &Service{publisher: publisher, ackWaiter: ackWaiter, repository: repository, topicPrefix: topicPrefix, newID: newID}
+	return &Service{publisher: publisher, ackWaiter: ackWaiter, repository: repository, dpLoader: dpLoader, topicPrefix: topicPrefix, newID: newID}
 }
 
 func (service *Service) GetShadow(ctx context.Context, deviceSN string) (any, error) {
@@ -128,8 +144,50 @@ func (service *Service) GetShadow(ctx context.Context, deviceSN string) (any, er
 	return envelope.State.Reported, nil
 }
 
-func (service *Service) GetPTZStatus(ctx context.Context, internalAppID, deviceID, deviceSN string) (PTZStatus, error) {
+// GetDeviceInfoProjection obtains the provider-neutral device_info response
+// and presents the same flattened projection consumed by the App shadow API.
+// Domestic providers do not need to implement an AWS Shadow read port.
+func (service *Service) GetDeviceInfoProjection(
+	ctx context.Context, internalAppID, deviceID, deviceSN, pid string,
+) (map[string]any, error) {
 	result, err := service.SendCommands(ctx, internalAppID, deviceID, deviceSN, []CommandInput{{
+		Code: "device_info", Value: json.RawMessage(`{}`),
+	}}, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(result.Results) != 1 || result.Results[0].Status != "success" {
+		return nil, ErrInvalidDeviceResponse
+	}
+	data := result.Results[0].Data
+	config, ok := data["device_config"].(map[string]any)
+	if !ok {
+		return nil, ErrInvalidDeviceResponse
+	}
+	projection := map[string]any{
+		"sn": deviceSN, "pid": pid, "online": true, "device_config": config,
+	}
+	for _, key := range []string{"wifi_mac", "version", "build", "ip", "speaker_volume",
+		"motion_detection_enabled", "night_mode", "motion_sensitivity", "motion_report_interval_sec",
+		"video_resolution"} {
+		if value, found := data[key]; found {
+			projection[key] = value
+		} else if value, found := config[key]; found {
+			projection[key] = value
+		}
+	}
+	if _, found := projection["build"]; !found {
+		if value, found := data["firmware_build"]; found {
+			projection["build"] = value
+		} else if value, found := config["firmware_build"]; found {
+			projection["build"] = value
+		}
+	}
+	return projection, nil
+}
+
+func (service *Service) GetPTZStatus(ctx context.Context, internalAppID, deviceID, deviceSN string) (PTZStatus, error) {
+	result, err := service.SendDPCommands(ctx, internalAppID, deviceID, deviceSN, []CommandInput{{
 		Code: "ptz", Value: json.RawMessage(`{"op":"get_position"}`),
 	}}, true)
 	if err != nil {
@@ -155,7 +213,7 @@ func (service *Service) SendCommands(
 	results := make([]CommandResult, 0, len(commands))
 	for index, input := range commands {
 		action := strings.TrimSpace(input.Code)
-		if action == "" || action == "local_media" || len(input.Code) > 64 {
+		if action == "" || action == "local_media" || action == "ota_install" || len(input.Code) > 64 {
 			return SendCommandsResult{}, ErrInvalidInput
 		}
 		sessionID := strings.TrimSpace(input.CommandID)
@@ -177,8 +235,12 @@ func (service *Service) SendCommands(
 		if err != nil {
 			return SendCommandsResult{}, ErrInvalidInput
 		}
+		persistedPayload, err := redactCommandFields(payload, input.RedactFields)
+		if err != nil {
+			return SendCommandsResult{}, ErrInvalidInput
+		}
 		command := Command{
-			ID: commandID, DeviceID: deviceID, InternalAppID: internalAppID, SessionID: sessionID, Payload: payload,
+			ID: commandID, DeviceID: deviceID, InternalAppID: internalAppID, SessionID: sessionID, Payload: persistedPayload,
 			Status: "pending", CreatedAt: time.Now().UTC(),
 		}
 		if err := service.repository.Create(ctx, command); err != nil {
@@ -209,24 +271,29 @@ func (service *Service) SendCommands(
 			return SendCommandsResult{}, err
 		}
 		code, ok := numericCode(ack["code"])
+		persistedACK, redactErr := redactCommandFields(ack, input.RedactFields)
+		if redactErr != nil {
+			_ = service.repository.Complete(ctx, commandID, "failed", nil, "invalid_device_response")
+			return SendCommandsResult{}, ErrInvalidDeviceResponse
+		}
 		if !ok {
-			_ = service.repository.Complete(ctx, commandID, "failed", ack, "invalid_device_response")
+			_ = service.repository.Complete(ctx, commandID, "failed", persistedACK, "invalid_device_response")
 			return SendCommandsResult{}, ErrInvalidDeviceResponse
 		}
 		switch code {
 		case -2:
-			_ = service.repository.Complete(ctx, commandID, "failed", ack, "device_busy")
+			_ = service.repository.Complete(ctx, commandID, "failed", persistedACK, "device_busy")
 			return SendCommandsResult{}, ErrDeviceBusy
 		case -6:
-			_ = service.repository.Complete(ctx, commandID, "failed", ack, "device_jammed")
+			_ = service.repository.Complete(ctx, commandID, "failed", persistedACK, "device_jammed")
 			return SendCommandsResult{}, ErrDeviceJammed
 		case 0:
-			if err := service.repository.Complete(ctx, commandID, "acked", ack, ""); err != nil {
+			if err := service.repository.Complete(ctx, commandID, "acked", persistedACK, ""); err != nil {
 				return SendCommandsResult{}, err
 			}
 			results = append(results, CommandResult{Index: index, Code: input.Code, Status: "success", CommandID: sessionID, Data: ack})
 		default:
-			if err := service.repository.Complete(ctx, commandID, "failed", ack, "device_rejected"); err != nil {
+			if err := service.repository.Complete(ctx, commandID, "failed", persistedACK, "device_rejected"); err != nil {
 				return SendCommandsResult{}, err
 			}
 			results = append(results, CommandResult{
@@ -236,6 +303,64 @@ func (service *Service) SendCommands(
 		}
 	}
 	return SendCommandsResult{Results: results}, nil
+}
+
+// SendOTACommand is the only path that may publish ota_install. The deployment table is the
+// execution authority, so presigned URLs and signed release metadata never enter device_commands.
+func (service *Service) SendOTACommand(ctx context.Context, command ota.Command) error {
+	upgradeType := command.UpgradeType
+	if upgradeType == "" {
+		upgradeType = ota.UpgradeTypeApp
+	}
+	if service == nil || service.publisher == nil || service.ackWaiter == nil ||
+		!topicPrefixRegexp.MatchString(service.topicPrefix) ||
+		strings.TrimSpace(command.DeploymentID) == "" || len(command.DeploymentID) > 63 ||
+		strings.TrimSpace(command.DeviceID) == "" || strings.TrimSpace(command.DeviceSN) == "" ||
+		strings.TrimSpace(command.PID) == "" || strings.TrimSpace(command.Version) == "" ||
+		(upgradeType != ota.UpgradeTypeApp && upgradeType != ota.UpgradeTypeEnvironment) ||
+		command.FirmwareBuild <= 0 || command.FileSize <= 0 || command.FileSize > 3*1024*1024 ||
+		len(command.DownloadURL) < 8 || len(command.DownloadURL) > 1023 ||
+		len(command.SHA256) != 64 || len(command.ReleaseStatement) == 0 ||
+		len(command.ReleaseStatement) > 1023 || len(command.Signature) == 0 || len(command.Signature) > 511 {
+		return ErrInvalidInput
+	}
+	payload := map[string]any{
+		"action": "ota_install", "session_id": command.DeploymentID,
+		"schema": "explorex-device-ota-v1", "deployment_id": command.DeploymentID,
+		"pid": command.PID, "upgrade_type": upgradeType, "version": command.Version, "firmware_build": command.FirmwareBuild,
+		"download_url": command.DownloadURL, "sha256": command.SHA256,
+		"file_size": command.FileSize, "release_statement": command.ReleaseStatement,
+		"signature": command.Signature,
+	}
+	body, err := marshalWithoutHTMLEscape(payload)
+	if err != nil {
+		return fmt.Errorf("marshal OTA command: %w", err)
+	}
+	if len(body) > 2048 {
+		return ErrInvalidInput
+	}
+	if err := service.publisher.Publish(ctx, "cmd/"+service.topicPrefix+"/"+command.DeviceSN+"/req", body); err != nil {
+		return fmt.Errorf("%w: %v", ErrPublishFailed, err)
+	}
+	ack, err := service.ackWaiter.Wait(ctx, command.DeviceSN, command.DeploymentID, commandACKTimeout)
+	if err != nil {
+		if errors.Is(err, ErrACKTimeout) || errors.Is(err, context.DeadlineExceeded) {
+			return ErrDeviceOffline
+		}
+		return err
+	}
+	code, ok := numericCode(ack["code"])
+	if !ok || ack["action"] != "ota_install" || ack["session_id"] != command.DeploymentID ||
+		ack["deployment_id"] != command.DeploymentID {
+		return ErrInvalidDeviceResponse
+	}
+	if code == -2 {
+		return ErrDeviceBusy
+	}
+	if code != 0 || ack["status"] != "accepted" {
+		return ErrInvalidDeviceResponse
+	}
+	return nil
 }
 
 // SendLocalMediaCommand publishes the one command whose payload contains temporary LAN media
@@ -310,14 +435,18 @@ func parsePTZStatus(data map[string]any, expectedSessionID string) (PTZStatus, e
 	panNormalized, panNormalizedOK := numericFloat(data["pan_normalized"])
 	tiltNormalized, tiltNormalizedOK := numericFloat(data["tilt_normalized"])
 	moving, movingOK := data["moving"].(bool)
+	calibrated, calibratedOK := data["calibrated"].(bool)
+	if _, present := data["calibrated"]; !present {
+		calibratedOK = true
+	}
 	if !panOK || !tiltOK || !limitHOK || !limitVOK || limitH <= 0 || limitV <= 0 ||
 		!panNormalizedOK || !tiltNormalizedOK || panNormalized < -1 || panNormalized > 1 ||
-		tiltNormalized < -1 || tiltNormalized > 1 || !movingOK {
+		tiltNormalized < -1 || tiltNormalized > 1 || !movingOK || !calibratedOK {
 		return PTZStatus{}, ErrInvalidDeviceResponse
 	}
 	return PTZStatus{
 		Pan: pan, Tilt: tilt, LimitH: limitH, LimitV: limitV,
-		PanNormalized: panNormalized, TiltNormalized: tiltNormalized, Moving: moving,
+		PanNormalized: panNormalized, TiltNormalized: tiltNormalized, Moving: moving, Calibrated: calibrated,
 	}, nil
 }
 
@@ -370,6 +499,21 @@ func commandPayload(input CommandInput, sessionID string) (map[string]any, error
 		payload["value"] = value
 	}
 	return payload, nil
+}
+
+func redactCommandFields(payload map[string]any, fields []string) (map[string]any, error) {
+	result := make(map[string]any, len(payload))
+	for key, value := range payload {
+		result[key] = value
+	}
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" || field == "action" || field == "session_id" {
+			return nil, ErrInvalidInput
+		}
+		delete(result, field)
+	}
+	return result, nil
 }
 
 func marshalWithoutHTMLEscape(value any) ([]byte, error) {

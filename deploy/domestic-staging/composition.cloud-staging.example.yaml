@@ -1,0 +1,43 @@
+api_version: explorex.io/v1
+kind: ProviderComposition
+metadata:
+  id: cn-cloud-staging
+  environment: development
+  region: cn
+
+instances:
+  identity.local_ca:
+    capability: identity
+    driver: ca_mqtt_identity
+    credential_ref: config://cn-cloud-staging/identity-ca
+  messaging.local_mqtt:
+    capability: messaging
+    driver: mqtt_broker
+    endpoint: mqtts://mqtt-mtls:8883
+    trust_anchor_ref: config://cn-cloud-staging/mqtt-ca
+  realtime.local_signal:
+    capability: realtime
+    driver: explorex_signal
+    endpoint: http://rtc-signaling:18084
+  object.aliyun_oss:
+    capability: object
+    driver: aliyun_oss
+    region: cn-shenzhen
+    endpoint: https://oss-cn-shenzhen-internal.aliyuncs.com
+    credential_ref: env://GATEWAY_OBJECT_CREDENTIALS
+    bucket_ref: env://GATEWAY_OBJECT_BUCKET
+  signer.local_file:
+    capability: signer
+    driver: local
+    key_ref: config://cn-cloud-staging/time-signer
+
+bindings:
+  identity: identity.local_ca
+  messaging: messaging.local_mqtt
+  realtime: realtime.local_signal
+  media_object: object.aliyun_oss
+  signer: signer.local_file
+
+policy:
+  forbid_regions: [aws]
+  allow_mixed_provider: true

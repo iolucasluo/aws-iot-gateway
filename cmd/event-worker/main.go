@@ -16,6 +16,7 @@ import (
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/awsiot"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/events"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/webhooks"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awssqs"
 	gatewaypostgres "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/postgres"
 	redisstore "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/redis"
 	gatewayruntime "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/runtime"
@@ -65,7 +66,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("load AWS configuration: %v", err)
 	}
-	ingestWorker, err := worker.NewIngestWorker(sqs.NewFromConfig(awsConfig), config.IngestQueueURL, ingest)
+	ingestQueue, err := awssqs.New(sqs.NewFromConfig(awsConfig), config.IngestQueueURL)
+	if err != nil {
+		log.Fatalf("configure AWS SQS ingest queue: %v", err)
+	}
+	ingestWorker, err := worker.NewIngestWorker(ingestQueue, ingest)
 	if err != nil {
 		log.Fatalf("configure ingest worker: %v", err)
 	}

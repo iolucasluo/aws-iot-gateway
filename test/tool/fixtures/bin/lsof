@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+port=
+for arg in "$@"; do
+  case "$arg" in
+    -iTCP:*) port=${arg#-iTCP:} ;;
+  esac
+done
+
+case ",${GATEWAY_FAKE_LISTEN_PORTS:-}," in
+  *",$port,"*) exit 0 ;;
+  *) exit 1 ;;
+esac

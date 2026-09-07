@@ -17,6 +17,7 @@ import (
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/binding"
 	devicemodule "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/device"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/media"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/ota"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awskvs"
 )
 
@@ -852,7 +853,8 @@ func TestLivPetDeviceRoutesReachTheCompatibleDeviceOperationHandler(t *testing.T
 		{method: http.MethodPost, path: "/api/v1/openapi/devices/fdr-0001/recordings"},
 		{method: http.MethodGet, path: "/api/v1/openapi/devices/fdr-0001/recordings?limit=100"},
 		{method: http.MethodGet, path: "/api/v1/openapi/devices/fdr-0001/recordings/recording-1"},
-		{method: http.MethodGet, path: "/api/v1/openapi/devices/fdr-0001/recordings/local?offset=0&limit=200"},
+		{method: http.MethodGet, path: "/api/v1/openapi/devices/fdr-0001/recordings/local?limit=20"},
+		{method: http.MethodGet, path: "/api/v1/openapi/devices/fdr-0001/recordings/local/rec_0123456789abcdef0123456789abcdef/thumbnail"},
 		{method: http.MethodPost, path: "/api/v1/openapi/devices/fdr-0001/feed-audio"},
 	} {
 		request := signedInternalRequest(t, now, fmt.Sprintf("nested-route-%016d", index), endpoint.method, endpoint.path, nil)
@@ -906,6 +908,41 @@ func TestDevicePrepareUsesCompatibilityDeviceActivationPath(t *testing.T) {
 	} {
 		if installation[key] != expected {
 			t.Fatalf("installation[%s] = %#v, want %q", key, installation[key], expected)
+		}
+	}
+}
+
+func TestDevicePrepareUsesProviderNeutralDomesticRuntimeFields(t *testing.T) {
+	t.Parallel()
+	service := activation.NewServiceWith(domesticTestProvisioner{})
+	created, err := service.Create(context.Background(), activation.CreateInput{
+		InternalAppID: "livpet-staging", BindingExternalUserID: "user-cn",
+		IdempotencyKey: "operation-domestic", Method: activation.MethodQR, PID: "lamp-x1",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	handler := newSignedTestHandler(t, service, time.UnixMilli(1_718_000_000_000), Dependencies{DeviceRuntime: DeviceRuntimeConfig{
+		ProviderMode: "domestic-dev", Endpoint: "mqtts://dell.local:8883", TopicPrefix: "domestic-staging",
+	}})
+	body := []byte(fmt.Sprintf(`{"activation_id":%q,"activation_code":%q,"csr_pem":"csr-pem"}`, created.ID, created.Code))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/device-activations/qr/prepare-installation", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("device prepare status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	var installation map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &installation); err != nil {
+		t.Fatalf("decode installation: %v", err)
+	}
+	if installation["endpoint"] != "mqtts://dell.local:8883" || installation["provider_mode"] != "domestic-dev" ||
+		installation["topic_prefix"] != "domestic-staging" {
+		t.Fatalf("domestic installation = %#v", installation)
+	}
+	for _, key := range []string{"aws_iot_endpoint", "aws_region", "aws_iot_credential_endpoint", "aws_iot_role_alias", "aws_iot_shadow_name", "aws_kvs_channel_prefix"} {
+		if _, ok := installation[key]; ok {
+			t.Fatalf("domestic response leaked legacy AWS field %q: %#v", key, installation)
 		}
 	}
 }
@@ -964,7 +1001,7 @@ func TestQRActivationReturnsLegacyAuthorizationCodeAlias(t *testing.T) {
 func newSignedTestHandler(t *testing.T, service *activation.Service, now time.Time, dependencies ...Dependencies) http.Handler {
 	t.Helper()
 	verifier, err := internalauth.NewVerifier(
-		[]internalauth.Credential{{InternalAppID: "livpet-staging", APIKey: "ak_livpet", APISecret: "livpet-secret"}},
+		[]internalauth.Credential{{InternalAppID: "livpet-staging", APIKey: "ak_livpet", APISecret: "livpet-secret", Permissions: []string{"ota:publish", "ota:deploy"}}},
 		&hmacNonceStore{used: map[string]struct{}{}},
 		func() time.Time { return now },
 	)
@@ -972,6 +1009,126 @@ func newSignedTestHandler(t *testing.T, service *activation.Service, now time.Ti
 		t.Fatalf("NewVerifier() error = %v", err)
 	}
 	return NewInternalAPI(service, verifier, dependencies...)
+}
+
+type httpOTARepository struct {
+	versions    []ota.FirmwareVersion
+	deployments []ota.Deployment
+}
+
+func (repository *httpOTARepository) CreateFirmwareVersion(_ context.Context, version ota.FirmwareVersion) (ota.FirmwareVersion, error) {
+	repository.versions = append(repository.versions, version)
+	return version, nil
+}
+func (repository *httpOTARepository) GetFirmwareVersionForPublisher(context.Context, string, string) (ota.FirmwareVersion, error) {
+	return repository.versions[0], nil
+}
+func (repository *httpOTARepository) CompleteFirmwareVersion(context.Context, string, string) (ota.FirmwareVersion, error) {
+	return repository.versions[0], nil
+}
+func (repository *httpOTARepository) ListAvailableFirmwareVersions(context.Context, string) ([]ota.FirmwareVersion, error) {
+	return repository.versions, nil
+}
+func (repository *httpOTARepository) CreateDeployment(_ context.Context, deployment ota.Deployment) (ota.Deployment, ota.FirmwareVersion, error) {
+	version := repository.versions[0]
+	deployment.TargetVersion = version.Version
+	deployment.TargetBuild = version.FirmwareBuild
+	repository.deployments = append(repository.deployments, deployment)
+	return deployment, version, nil
+}
+func (repository *httpOTARepository) UpdateDeployment(_ context.Context, id, state, reason string) error {
+	for index := range repository.deployments {
+		if repository.deployments[index].ID == id {
+			repository.deployments[index].State = state
+			repository.deployments[index].FailureReason = reason
+			return nil
+		}
+	}
+	return ota.ErrNotFound
+}
+func (repository *httpOTARepository) GetDeployment(_ context.Context, _, _, id string) (ota.Deployment, error) {
+	for _, deployment := range repository.deployments {
+		if deployment.ID == id {
+			return deployment, nil
+		}
+	}
+	return ota.Deployment{}, ota.ErrNotFound
+}
+
+type httpOTACommandSender struct{ calls int }
+
+func (sender *httpOTACommandSender) SendOTACommand(context.Context, ota.Command) error {
+	sender.calls++
+	return nil
+}
+
+func TestInternalAPIManagesOTAFirmwareWithoutLeakingExecutionSecrets(t *testing.T) {
+	t.Parallel()
+	now := time.UnixMilli(1_718_000_000_000)
+	repository := &httpOTARepository{}
+	otaService := ota.NewService(repository, nil, nil, "development", []string{"http://192.168.1.10:18080"}, func() (string, error) {
+		return "11111111-1111-4111-8111-111111111111", nil
+	}, func() time.Time { return now })
+	handler := newSignedTestHandler(t, activation.NewService(), now, Dependencies{OTA: otaService})
+	body := []byte(`{"idempotency_key":"publish-v1","pid":"feeder-x1","version":"v1.2.3","firmware_build":42,"sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","manifest_sha256":"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789","file_size":1234,"release_statement":"schema=explorex-ota-v2|pid=feeder-x1|version=v1.2.3|firmware_build=42|upgrade_type=app|manifest_sha256=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789|sha256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef|file_size=1234","signature":"c2lnbmF0dXJl","source_url":"http://192.168.1.10:18080/ota.tar.gz"}`)
+	create := signedInternalRequest(t, now, "nonce-ota-create", http.MethodPost, "/api/v1/openapi/ota/firmware-versions", body)
+	created := httptest.NewRecorder()
+	handler.ServeHTTP(created, create)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create OTA version = %d %s", created.Code, created.Body.String())
+	}
+
+	list := signedInternalRequest(t, now, "nonce-ota-list-001", http.MethodGet, "/api/v1/openapi/ota/firmware-versions?pid=feeder-x1", nil)
+	listed := httptest.NewRecorder()
+	handler.ServeHTTP(listed, list)
+	if listed.Code != http.StatusOK || strings.Contains(listed.Body.String(), "release_statement") ||
+		strings.Contains(listed.Body.String(), "signature") || strings.Contains(listed.Body.String(), "source_url") {
+		t.Fatalf("list OTA versions = %d %s", listed.Code, listed.Body.String())
+	}
+}
+
+func TestInternalAPICreatesAndPollsOneDeviceOTADeployment(t *testing.T) {
+	t.Parallel()
+	now := time.UnixMilli(1_718_000_000_000)
+	bindingRepository := &httpBindingRepository{binding: binding.Binding{
+		ID: "018f0000-0000-7000-8000-000000000002", DeviceID: "018f0000-0000-7000-8000-000000000001",
+		DeviceSN: "fdr-00000000000000000000000000000001", PID: "feeder-x1",
+		InternalAppID: "livpet-staging", Active: true,
+	}}
+	bindingRepository.token = binding.DeviceToken{
+		BindingID: bindingRepository.binding.ID, TokenHash: binding.HashToken("device-token-ota"),
+		ExpiresAt: now.Add(time.Hour),
+	}
+	bindingService := binding.NewService(bindingRepository, nil, func() time.Time { return now }, nil)
+	repository := &httpOTARepository{versions: []ota.FirmwareVersion{{
+		ID: "22222222-2222-4222-8222-222222222222", PID: "feeder-x1", Version: "v1.2.3",
+		FirmwareBuild: 42, SHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		FileSize: 1234, ReleaseStatement: "signed", Signature: "c2lnbmF0dXJl",
+		SourceURL: "http://192.168.1.10:18080/ota.tar.gz", Status: ota.FirmwareStatusAvailable,
+	}}}
+	commands := &httpOTACommandSender{}
+	otaService := ota.NewService(repository, nil, commands, "development", []string{"http://192.168.1.10:18080"}, func() (string, error) {
+		return "11111111-1111-4111-8111-111111111111", nil
+	}, func() time.Time { return now })
+	handler := newSignedTestHandler(t, activation.NewService(), now, Dependencies{Binding: bindingService, OTA: otaService})
+	path := "/api/v1/openapi/devices/" + bindingRepository.binding.DeviceSN + "/ota-deployments"
+	request := signedInternalRequest(t, now, "nonce-ota-deploy-001", http.MethodPost, path,
+		[]byte(`{"firmware_version_id":"22222222-2222-4222-8222-222222222222","idempotency_key":"one-click-ota-001"}`))
+	request.Header.Set("X-Device-Token", "device-token-ota")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || commands.calls != 1 || !strings.Contains(response.Body.String(), `"state":"accepted"`) {
+		t.Fatalf("create OTA deployment = %d calls=%d body=%s", response.Code, commands.calls, response.Body.String())
+	}
+
+	getPath := path + "/11111111-1111-4111-8111-111111111111"
+	get := signedInternalRequest(t, now, "nonce-ota-deploy-get", http.MethodGet, getPath, nil)
+	get.Header.Set("X-Device-Token", "device-token-ota")
+	got := httptest.NewRecorder()
+	handler.ServeHTTP(got, get)
+	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"state":"accepted"`) {
+		t.Fatalf("get OTA deployment = %d %s", got.Code, got.Body.String())
+	}
 }
 
 func signedInternalRequest(t *testing.T, now time.Time, nonce, method, path string, body []byte) *http.Request {
@@ -1003,6 +1160,17 @@ func (testProvisioner) Provision(_ context.Context, deviceSN, _ string) (activat
 		CertificateID:  "certificate-1",
 		CertificatePEM: "certificate-pem",
 		AWSIoTEndpoint: "example-ats.iot.ap-east-1.amazonaws.com",
+	}, nil
+}
+
+type domesticTestProvisioner struct{}
+
+func (domesticTestProvisioner) Provision(_ context.Context, deviceSN, _ string) (activation.PreparedIdentity, error) {
+	return activation.PreparedIdentity{
+		DeviceID:       deviceSN,
+		CertificateID:  "certificate-domestic-1",
+		CertificatePEM: "certificate-pem",
+		Endpoint:       "mqtts://dell.local:8883",
 	}, nil
 }
 
@@ -1101,12 +1269,12 @@ func (*httpCommandRepository) Complete(context.Context, string, string, map[stri
 type httpKVS struct{}
 
 func (httpKVS) EnsureChannel(_ context.Context, name string) (awskvs.Channel, error) {
-	return awskvs.Channel{Name: name, ARN: "arn:aws:kinesisvideo:ap-east-1:123456789012:channel/test/1"}, nil
+	return awskvs.Channel{Name: name, ExternalRef: "arn:aws:kinesisvideo:ap-east-1:123456789012:channel/test/1"}, nil
 }
 
 func (httpKVS) Playback(_ context.Context, channel awskvs.Channel, viewerID string, _ time.Duration) (awskvs.PlaybackConfig, error) {
 	return awskvs.PlaybackConfig{
-		Provider: "aws_kvs", ChannelName: channel.Name, ChannelARN: channel.ARN, ClientID: viewerID,
+		Provider: "aws_kvs", ChannelName: channel.Name, ExternalRef: channel.ExternalRef, ClientID: viewerID,
 		WSSURL: "wss://signaling.example.test", ICEServers: []awskvs.ICEServer{{URLs: "stun:example.test:443"}},
 		ExpiresAt: time.UnixMilli(1_718_000_300_000),
 	}, nil
@@ -1134,6 +1302,10 @@ func (httpStreamCommander) SendCommands(_ context.Context, _, _, _ string, comma
 			},
 		},
 	}}}, nil
+}
+
+func (commander httpStreamCommander) SendDPCommands(ctx context.Context, internalAppID, deviceID, deviceSN string, commands []devicemodule.CommandInput, waitACK bool) (devicemodule.SendCommandsResult, error) {
+	return commander.SendCommands(ctx, internalAppID, deviceID, deviceSN, commands, waitACK)
 }
 
 type httpCapturingStreamCommander struct {
@@ -1173,6 +1345,10 @@ func (commander *httpCapturingStreamCommander) SendCommands(_ context.Context, _
 			"supported": supported, "accepted": accepted,
 		},
 	}}}, nil
+}
+
+func (commander *httpCapturingStreamCommander) SendDPCommands(ctx context.Context, internalAppID, deviceID, deviceSN string, commands []devicemodule.CommandInput, waitACK bool) (devicemodule.SendCommandsResult, error) {
+	return commander.SendCommands(ctx, internalAppID, deviceID, deviceSN, commands, waitACK)
 }
 
 type httpStreamRepository struct{}
@@ -1301,5 +1477,17 @@ func TestWriteLocalMediaErrorDoesNotMislabelProductOrInfrastructureFailuresAsKVS
 				t.Fatalf("response = %d %s", response.Code, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestWriteMediaErrorMapsProductDPValidationToBadRequest(t *testing.T) {
+	t.Parallel()
+	response := httptest.NewRecorder()
+
+	writeMediaError(response, fmt.Errorf("%w: %w (stream)", devicemodule.ErrInvalidInput, devicemodule.ErrDPUnknown))
+
+	if response.Code != http.StatusBadRequest ||
+		!bytes.Contains(response.Body.Bytes(), []byte(`"error_code":"invalid_request"`)) {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
 	}
 }
