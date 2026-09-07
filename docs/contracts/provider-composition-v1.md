@@ -10,7 +10,7 @@
 - `internal/provider/composition.go` 提供严格 YAML composition 解码和启动前 fail-closed 校验；`internal/provider/ports.go` 定义共享的 messaging、identity、realtime、queue、signer 端口类型。
 - `docs/contracts/domestic-provider-adapter-intake-v1.md` 定义真实国内 provider adapter 进入 TDD/运行时注册前的协议、权限、生命周期、失败/重试、持久化、回滚和三维安全证据门。
 - `internal/modules/media/stream.go` 的窄 media port 已改为 provider-neutral channel/playback 类型；`assets.go` 的 `ObjectStore` 和 OTA `ArtifactStore` 是可复用的现有切入点。
-- `internal/worker/ingest.go` 的队列 port 已收敛为 `provider.EventQueue`，AWS SQS 细节位于 `internal/platform/awssqs/`；`db/migrations/008_provider_composition.up.sql` 保存设备 capability 到 provider instance 的绑定事实。
+- `internal/worker/ingest.go` 的队列 port 已收敛为 `provider.EventQueue`，AWS SQS 细节位于 `internal/platform/awssqs/`；`db/migrations/001_initial.sql` 保存设备 capability 到 provider instance 的绑定事实。
 
 这些是需要逐阶段收敛的现状，不是 v1 契约允许继续扩散的模型。
 

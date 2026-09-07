@@ -35,7 +35,7 @@ func TestPublishedDPProfilesDefinesFeederContinuousRecordingDurations(t *testing
 	}
 	seed := string(content)
 	for _, fragment := range []string{
-		"code='feeder-v1'), 'record_mode'",
+		"'feeder-v1', 'record_mode'",
 		`"segment_s":{"type":"integer","enum":[60,180,300]}`,
 	} {
 		if !strings.Contains(seed, fragment) {
@@ -102,7 +102,7 @@ func TestPublishedDPProfilesDefinesFeederCommandAndMediaContract(t *testing.T) {
 		"ptz", "reboot", "two_way_audio", "video_res", "record_start", "record_stop",
 		"stream", "snapshot", "record_clip", "audio_update", "audio_reset", "sd_files",
 	} {
-		fragment := "code='feeder-v1'), '" + code + "'"
+		fragment := "'feeder-v1', '" + code + "'"
 		if !strings.Contains(seed, fragment) {
 			t.Errorf("feeder DP contract missing %q", code)
 		}

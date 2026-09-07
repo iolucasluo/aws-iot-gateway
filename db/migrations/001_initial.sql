@@ -1,7 +1,5 @@
--- Internal AWS Gateway initial schema.
--- This is a pre-production squash of the former 001-004 migrations. It keeps
--- only the narrow activation, binding, device runtime and OpenAPI operation
--- domain while following the database conventions inherited from explorex-api.
+-- Current pre-production schema. Initialize an empty database, then apply seeds explicitly.
+-- Historical upgrade/backfill/down paths have been removed; existing test databases must be rebuilt.
 
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS trigger
@@ -16,9 +14,52 @@ $$;
 COMMENT ON FUNCTION set_updated_at() IS
     '统一维护 Gateway 可变业务表 updated_at；调用方不得依赖手工更新时间戳。';
 
+CREATE TABLE dp_profiles (
+    id uuid CONSTRAINT dp_profiles_pkey PRIMARY KEY,
+    code varchar(96) NOT NULL CONSTRAINT dp_profiles_code_key UNIQUE,
+    name varchar(128) NOT NULL,
+    status varchar(16) NOT NULL CONSTRAINT dp_profiles_status_check
+        CHECK (status IN ('active', 'retired', 'disabled')),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT dp_profiles_code_check CHECK (code ~ '^[a-z0-9][a-z0-9.-]*-v[1-9][0-9]*$'),
+    CONSTRAINT dp_profiles_name_check CHECK (btrim(name) <> '')
+);
+
+CREATE TABLE dp_definitions (
+    id uuid CONSTRAINT dp_definitions_pkey PRIMARY KEY,
+    code varchar(64) NOT NULL CONSTRAINT dp_definitions_code_check CHECK (btrim(code) <> ''),
+    type varchar(16) NOT NULL CONSTRAINT dp_definitions_type_check
+        CHECK (type IN ('bool', 'int', 'float', 'string', 'enum', 'object', 'array', 'raw')),
+    direction varchar(32) NOT NULL CONSTRAINT dp_definitions_direction_check
+        CHECK (direction IN ('wo', 'rw', 'ro', 'event', 'downlink_request_ack')),
+    spec jsonb NOT NULL CONSTRAINT dp_definitions_spec_check CHECK (jsonb_typeof(spec) = 'object'),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT dp_definitions_id_code_key UNIQUE (id, code)
+);
+
+CREATE TABLE dp_profile_members (
+    id uuid CONSTRAINT dp_profile_members_pkey PRIMARY KEY,
+    dp_profile_code varchar(96) NOT NULL CONSTRAINT dp_profile_members_dp_profile_code_fkey
+        REFERENCES dp_profiles(code) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    dp_definition_id uuid NOT NULL,
+    code varchar(64) NOT NULL,
+    status varchar(16) NOT NULL CONSTRAINT dp_profile_members_status_check CHECK (status IN ('active', 'disabled')),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT dp_profile_members_dp_definition_id_code_fkey
+        FOREIGN KEY (dp_definition_id, code) REFERENCES dp_definitions(id, code) ON DELETE RESTRICT,
+    CONSTRAINT dp_profile_members_dp_profile_code_code_key UNIQUE (dp_profile_code, code)
+);
+CREATE INDEX idx_dp_profile_members_definition ON dp_profile_members (dp_definition_id);
+CREATE INDEX idx_dp_profiles_status ON dp_profiles (status, code);
+
 CREATE TABLE products (
     id uuid CONSTRAINT products_pkey PRIMARY KEY,
     pid varchar(64) NOT NULL CONSTRAINT products_pid_key UNIQUE,
+    dp_profile_code varchar(96)
+        CONSTRAINT products_dp_profile_code_fkey REFERENCES dp_profiles(code) ON UPDATE RESTRICT ON DELETE RESTRICT,
     name varchar(128) NOT NULL,
     status varchar(16) NOT NULL DEFAULT 'active'
         CONSTRAINT products_status_check CHECK (status IN ('active', 'disabled')),
@@ -32,6 +73,8 @@ CREATE TABLE products (
 
 CREATE TABLE device_registry (
     id uuid CONSTRAINT device_registry_pkey PRIMARY KEY,
+    dp_profile_id uuid NOT NULL
+        CONSTRAINT device_registry_dp_profile_id_fkey REFERENCES dp_profiles(id) ON DELETE RESTRICT,
     device_sn varchar(64) NOT NULL CONSTRAINT device_registry_device_sn_key UNIQUE,
     thing_name varchar(128) NOT NULL CONSTRAINT device_registry_thing_name_key UNIQUE,
     pid varchar(64) NOT NULL
@@ -53,6 +96,8 @@ CREATE TABLE device_registry (
 
 CREATE TABLE device_activations (
     id uuid CONSTRAINT device_activations_pkey PRIMARY KEY,
+    dp_profile_id uuid NOT NULL
+        CONSTRAINT device_activations_dp_profile_id_fkey REFERENCES dp_profiles(id) ON DELETE RESTRICT,
     internal_app_id varchar(64) NOT NULL,
     binding_external_user_id varchar(255) NOT NULL,
     method varchar(8) NOT NULL
@@ -233,7 +278,7 @@ CREATE TABLE ota_firmware_versions (
     CONSTRAINT ota_firmware_versions_pid_version_key UNIQUE (pid, version)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uniq_ota_firmware_versions_app_pid_build
+CREATE UNIQUE INDEX uniq_ota_firmware_versions_app_pid_build
     ON ota_firmware_versions (pid, firmware_build)
     WHERE target_environment_id IS NULL;
 
@@ -506,3 +551,233 @@ CREATE TRIGGER trg_webhook_outbox_updated_at
 CREATE TRIGGER trg_device_lifecycle_outbox_updated_at
     BEFORE UPDATE ON device_lifecycle_outbox
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE INDEX idx_products_dp_profile ON products (dp_profile_code);
+CREATE INDEX idx_device_registry_dp_profile ON device_registry (dp_profile_id);
+CREATE INDEX idx_device_activations_dp_profile ON device_activations (dp_profile_id);
+
+CREATE TRIGGER trg_dp_profiles_updated_at
+    BEFORE UPDATE ON dp_profiles FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+COMMENT ON TRIGGER trg_dp_profiles_updated_at ON dp_profiles IS
+    'Maintain DP contract catalog updated_at.';
+
+CREATE TRIGGER trg_dp_definitions_updated_at
+    BEFORE UPDATE ON dp_definitions FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+COMMENT ON TRIGGER trg_dp_definitions_updated_at ON dp_definitions IS
+    'Maintain DP contract catalog updated_at.';
+
+CREATE TRIGGER trg_dp_profile_members_updated_at
+    BEFORE UPDATE ON dp_profile_members FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+COMMENT ON TRIGGER trg_dp_profile_members_updated_at ON dp_profile_members IS
+    'Maintain DP contract catalog updated_at.';
+
+CREATE TABLE device_local_recordings (
+    id uuid CONSTRAINT device_local_recordings_pkey PRIMARY KEY,
+    device_registry_id uuid NOT NULL
+        CONSTRAINT device_local_recordings_device_registry_id_fkey
+        REFERENCES device_registry(id) ON DELETE RESTRICT,
+    source_event_id uuid
+        CONSTRAINT device_local_recordings_source_event_id_fkey
+        REFERENCES device_events(id) ON DELETE RESTRICT,
+    recording_id varchar(36) NOT NULL,
+    revision varchar(68) NOT NULL,
+    conflicting_revision varchar(68),
+    start_at timestamptz NOT NULL,
+    end_at timestamptz NOT NULL,
+    recording_date date NOT NULL,
+    duration_ms bigint NOT NULL
+        CONSTRAINT device_local_recordings_duration_ms_check CHECK (duration_ms >= 0),
+    size_bytes bigint NOT NULL
+        CONSTRAINT device_local_recordings_size_bytes_check CHECK (size_bytes >= 0),
+    recording_type varchar(16) NOT NULL
+        CONSTRAINT device_local_recordings_type_check
+        CHECK (recording_type IN ('event', 'manual', 'continuous')),
+    codec varchar(16) NOT NULL
+        CONSTRAINT device_local_recordings_codec_check CHECK (codec = 'h264'),
+    width integer NOT NULL CONSTRAINT device_local_recordings_width_check CHECK (width > 0),
+    height integer NOT NULL CONSTRAINT device_local_recordings_height_check CHECK (height > 0),
+    fps_num integer NOT NULL CONSTRAINT device_local_recordings_fps_num_check CHECK (fps_num > 0),
+    fps_den integer NOT NULL CONSTRAINT device_local_recordings_fps_den_check CHECK (fps_den > 0),
+    playable boolean NOT NULL DEFAULT true,
+    seekable boolean NOT NULL,
+    projection_status varchar(16) NOT NULL DEFAULT 'active'
+        CONSTRAINT device_local_recordings_projection_status_check
+        CHECK (projection_status IN ('active', 'conflict', 'deleted')),
+    thumbnail_status varchar(16) NOT NULL DEFAULT 'pending'
+        CONSTRAINT device_local_recordings_thumbnail_status_check
+        CHECK (thumbnail_status IN ('pending', 'uploading', 'ready', 'failed')),
+    thumbnail_etag varchar(71) NOT NULL,
+    thumbnail_size_bytes bigint NOT NULL
+        CONSTRAINT device_local_recordings_thumbnail_size_check CHECK (thumbnail_size_bytes > 0),
+    thumbnail_object_key text,
+    deleted_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT device_local_recordings_identity_key UNIQUE (device_registry_id, recording_id),
+    CONSTRAINT device_local_recordings_time_check CHECK (end_at >= start_at),
+    CONSTRAINT device_local_recordings_recording_id_check
+        CHECK (recording_id ~ '^rec_[0-9a-f]{32}$'),
+    CONSTRAINT device_local_recordings_revision_check
+        CHECK (revision ~ '^rev_[0-9a-f]{64}$'),
+    CONSTRAINT device_local_recordings_thumbnail_etag_check
+        CHECK (thumbnail_etag ~ '^sha256:[0-9a-f]{64}$'),
+    CONSTRAINT device_local_recordings_conflict_check
+        CHECK ((projection_status = 'conflict') = (conflicting_revision IS NOT NULL)),
+    CONSTRAINT device_local_recordings_deleted_check
+        CHECK ((projection_status = 'deleted') = (deleted_at IS NOT NULL))
+);
+
+CREATE INDEX idx_device_local_recordings_history
+    ON device_local_recordings (device_registry_id, recording_date, start_at DESC, recording_id DESC)
+    WHERE projection_status = 'active';
+CREATE INDEX idx_device_local_recordings_thumbnail_pending
+    ON device_local_recordings (updated_at, id)
+    WHERE projection_status = 'active' AND thumbnail_status IN ('pending', 'failed');
+
+CREATE TABLE device_local_recording_tombstones (
+    id uuid CONSTRAINT device_local_recording_tombstones_pkey PRIMARY KEY,
+    device_registry_id uuid NOT NULL
+        CONSTRAINT device_local_recording_tombstones_device_registry_id_fkey
+        REFERENCES device_registry(id) ON DELETE RESTRICT,
+    source_event_id uuid
+        CONSTRAINT device_local_recording_tombstones_source_event_id_fkey
+        REFERENCES device_events(id) ON DELETE RESTRICT,
+    recording_id varchar(36) NOT NULL,
+    revision varchar(68) NOT NULL,
+    deleted_at timestamptz NOT NULL,
+    CONSTRAINT device_local_recording_tombstones_identity_key
+        UNIQUE (device_registry_id, recording_id),
+    CONSTRAINT device_local_recording_tombstones_recording_id_check
+        CHECK (recording_id ~ '^rec_[0-9a-f]{32}$'),
+    CONSTRAINT device_local_recording_tombstones_revision_check
+        CHECK (revision ~ '^rev_[0-9a-f]{64}$')
+);
+
+CREATE TABLE local_recording_cursors (
+    token uuid CONSTRAINT local_recording_cursors_pkey PRIMARY KEY,
+    device_binding_id uuid NOT NULL
+        CONSTRAINT local_recording_cursors_device_binding_id_fkey
+        REFERENCES device_bindings(id) ON DELETE CASCADE,
+    device_registry_id uuid NOT NULL
+        CONSTRAINT local_recording_cursors_device_registry_id_fkey
+        REFERENCES device_registry(id) ON DELETE CASCADE,
+    after_start_at timestamptz NOT NULL,
+    after_recording_id varchar(36) NOT NULL,
+    date_filter date,
+    type_filter varchar(16)
+        CONSTRAINT local_recording_cursors_type_filter_check
+        CHECK (type_filter IS NULL OR type_filter IN ('event', 'manual', 'continuous')),
+    expires_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_local_recording_cursors_expiry
+    ON local_recording_cursors (expires_at);
+
+CREATE TABLE local_recording_reconciliations (
+    device_registry_id uuid
+        CONSTRAINT local_recording_reconciliations_pkey PRIMARY KEY
+        CONSTRAINT local_recording_reconciliations_device_registry_id_fkey
+        REFERENCES device_registry(id) ON DELETE CASCADE,
+    generation uuid NOT NULL,
+    started_at timestamptz NOT NULL DEFAULT now(),
+    cursor varchar(36),
+    status varchar(16) NOT NULL DEFAULT 'pending'
+        CONSTRAINT local_recording_reconciliations_status_check
+        CHECK (status IN ('pending', 'processing')),
+    next_attempt_at timestamptz NOT NULL DEFAULT now(),
+    last_error text,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT local_recording_reconciliations_cursor_check
+        CHECK (cursor IS NULL OR cursor ~ '^rec_[0-9a-f]{32}$')
+);
+CREATE INDEX idx_local_recording_reconciliations_ready
+    ON local_recording_reconciliations (next_attempt_at, device_registry_id);
+
+CREATE TABLE local_recording_reconciliation_sightings (
+    device_registry_id uuid NOT NULL
+        CONSTRAINT local_recording_reconciliation_sightings_device_id_fkey
+        REFERENCES device_registry(id) ON DELETE CASCADE,
+    generation uuid NOT NULL,
+    recording_id varchar(36) NOT NULL,
+    CONSTRAINT local_recording_reconciliation_sightings_pkey
+        PRIMARY KEY (device_registry_id, generation, recording_id),
+    CONSTRAINT local_recording_reconciliation_sightings_recording_id_check
+        CHECK (recording_id ~ '^rec_[0-9a-f]{32}$')
+);
+
+CREATE TABLE local_recording_thumbnail_outbox (
+    id uuid CONSTRAINT local_recording_thumbnail_outbox_pkey PRIMARY KEY,
+    local_recording_id uuid NOT NULL
+        CONSTRAINT local_recording_thumbnail_outbox_recording_id_fkey
+        REFERENCES device_local_recordings(id) ON DELETE CASCADE,
+    status text NOT NULL DEFAULT 'pending'
+        CONSTRAINT local_recording_thumbnail_outbox_status_check
+        CHECK (status IN ('pending', 'processing', 'ready', 'dead', 'delete_pending', 'delete_processing', 'deleted')),
+    attempts integer NOT NULL DEFAULT 0
+        CONSTRAINT local_recording_thumbnail_outbox_attempts_check CHECK (attempts >= 0),
+    next_attempt_at timestamptz NOT NULL DEFAULT now(),
+    last_error text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT local_recording_thumbnail_outbox_recording_key UNIQUE (local_recording_id)
+);
+CREATE INDEX idx_local_recording_thumbnail_outbox_ready
+    ON local_recording_thumbnail_outbox (next_attempt_at, id)
+    WHERE status IN ('pending', 'processing', 'delete_pending', 'delete_processing');
+
+CREATE TRIGGER trg_device_local_recordings_updated_at
+    BEFORE UPDATE ON device_local_recordings
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_local_recording_thumbnail_outbox_updated_at
+    BEFORE UPDATE ON local_recording_thumbnail_outbox
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_local_recording_reconciliations_updated_at
+    BEFORE UPDATE ON local_recording_reconciliations
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- Provider-neutral binding facts. A device has at most one active instance
+-- for each capability; the adapter-specific external reference stays opaque.
+CREATE TABLE device_component_bindings (
+    id uuid CONSTRAINT device_component_bindings_pkey PRIMARY KEY,
+    device_registry_id uuid NOT NULL
+        CONSTRAINT device_component_bindings_device_registry_id_fkey
+        REFERENCES device_registry(id) ON DELETE RESTRICT,
+    device_binding_id uuid NOT NULL
+        CONSTRAINT device_component_bindings_device_binding_id_fkey
+        REFERENCES device_bindings(id) ON DELETE RESTRICT,
+    capability varchar(64) NOT NULL
+        CONSTRAINT device_component_bindings_capability_check
+        CHECK (capability ~ '^[a-z][a-z0-9.-]{0,63}$'),
+    provider_instance varchar(64) NOT NULL
+        CONSTRAINT device_component_bindings_provider_instance_check
+        CHECK (provider_instance ~ '^[a-z0-9][a-z0-9._-]{0,63}$'),
+    external_ref text NOT NULL
+        CONSTRAINT device_component_bindings_external_ref_check
+        CHECK (btrim(external_ref) <> '' AND external_ref !~ '[\r\n]'),
+    contract_version varchar(64) NOT NULL
+        CONSTRAINT device_component_bindings_contract_version_check
+        CHECK (contract_version ~ '^[a-z0-9][a-z0-9._-]{0,63}$'),
+    status varchar(16) NOT NULL
+        CONSTRAINT device_component_bindings_status_check
+        CHECK (status IN ('active', 'revoked')),
+    revoked_reason varchar(128),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT device_component_bindings_revocation_check
+        CHECK ((status = 'active' AND revoked_reason IS NULL) OR
+               (status = 'revoked' AND revoked_reason IS NOT NULL AND btrim(revoked_reason) <> ''))
+);
+
+CREATE UNIQUE INDEX uniq_device_component_bindings_active
+    ON device_component_bindings (device_registry_id, capability)
+    WHERE status = 'active';
+CREATE INDEX idx_device_component_bindings_binding
+    ON device_component_bindings (device_binding_id, status);
+
+CREATE TRIGGER trg_device_component_bindings_updated_at
+    BEFORE UPDATE ON device_component_bindings
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+COMMENT ON TRIGGER trg_device_component_bindings_updated_at ON device_component_bindings IS
+    '统一维护 provider composition binding 的 updated_at；external_ref 仅由对应 adapter 解释。';

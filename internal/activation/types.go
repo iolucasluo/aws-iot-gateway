@@ -49,7 +49,6 @@ type CreateInput struct {
 	IdempotencyKey        string
 	Method                Method
 	PID                   string
-	DPProfile             string
 }
 
 type PrepareInput struct {
@@ -112,6 +111,7 @@ type Device struct {
 }
 
 type Product struct {
+	DPProfile    string   `json:"dp_profile"`
 	PID          string   `json:"pid"`
 	Name         string   `json:"name"`
 	Capabilities []string `json:"capabilities"`

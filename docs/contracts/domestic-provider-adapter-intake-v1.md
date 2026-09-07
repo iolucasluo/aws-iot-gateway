@@ -32,7 +32,7 @@
 | Composition | `internal/provider/composition.go` | `identity`、`messaging`、`signer` 是核心 binding；国内 region 禁止 AWS data-plane |
 | Runtime audit | `internal/runtime/runtime_plan.go`、`cmd/provider-composition-runtime-audit` | 当前只把 `messaging/mqtt_broker` 标记为 `SUPPORTED`；identity/signer 等仍是 `BLOCKED` |
 | API main | `cmd/aws-iot-gateway/main.go` | 当前无条件创建 AWS IoT/KMS/KVS/S3 client；不得在 intake 阶段添加国内条件分支 |
-| Persistence | `db/migrations/008_provider_composition.up.sql` 与现有 activation 表 | provider external ref 必须绑定 device/capability/instance；迁移不得破坏旧 AWS v1 |
+| Persistence | `db/migrations/001_initial.sql` 与现有 activation 表 | provider external ref 必须绑定 device/capability/instance；迁移不得破坏旧 AWS v1 |
 
 ## 3. Provider evidence package
 

@@ -109,10 +109,10 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 
 func TestSingleDeviceOTAMigrationHasExecutionRecordsWithoutCampaignPlatform(t *testing.T) {
 	t.Parallel()
-	migration := readMigration(t, "004_single_device_ota.up.sql")
+	migration := readMigration(t, "001_initial.sql")
 	for _, fragment := range []string{
-		"CREATE TABLE IF NOT EXISTS ota_firmware_versions",
-		"CREATE TABLE IF NOT EXISTS device_ota_deployments",
+		"CREATE TABLE ota_firmware_versions",
+		"CREATE TABLE device_ota_deployments",
 		"uniq_device_ota_deployments_active",
 		"firmware_version_id uuid NOT NULL",
 	} {
@@ -121,52 +121,6 @@ func TestSingleDeviceOTAMigrationHasExecutionRecordsWithoutCampaignPlatform(t *t
 	for _, forbidden := range []string{"ota_campaigns", "aws_iot_jobs", "tenant_id", "project_id"} {
 		if strings.Contains(strings.ToLower(migration), forbidden) {
 			t.Errorf("single-device OTA migration contains platform fragment %q", forbidden)
-		}
-	}
-}
-
-func TestProductCapabilitiesMigrationUpgradesExistingCatalogWithoutProductDomainExpansion(t *testing.T) {
-	t.Parallel()
-	migration := readMigration(t, "003_product_capabilities.up.sql")
-	for _, fragment := range []string{
-		"ALTER TABLE products",
-		"ADD COLUMN IF NOT EXISTS capabilities jsonb",
-		"products_capabilities_check",
-		"jsonb_typeof(capabilities) = 'array'",
-	} {
-		requireMigrationContains(t, migration, fragment)
-	}
-	for _, forbidden := range []string{"CREATE TABLE", "INSERT INTO products", "DROP TABLE", "TRUNCATE"} {
-		if strings.Contains(strings.ToUpper(migration), forbidden) {
-			t.Errorf("product capability migration contains forbidden fragment %q", forbidden)
-		}
-	}
-}
-
-func TestLegacyProductCatalogMigrationIsScopedAndNonDestructive(t *testing.T) {
-	t.Parallel()
-	migration := readMigration(t, "002_legacy_product_catalog.up.sql")
-
-	for _, fragment := range []string{
-		"legacy_activation_schema",
-		"CREATE TABLE IF NOT EXISTS products",
-		"ALTER COLUMN pid DROP DEFAULT",
-		"ADD COLUMN pid varchar(64)",
-		"WHERE activation.pid IS NULL",
-		"device_registry_pid_fkey",
-		"device_activations_pid_fkey",
-		"ON DELETE RESTRICT",
-	} {
-		requireMigrationContains(t, migration, fragment)
-	}
-	for _, forbidden := range []string{
-		"DROP TABLE",
-		"TRUNCATE",
-		"DELETE FROM",
-		"DROP COLUMN",
-	} {
-		if strings.Contains(strings.ToUpper(migration), forbidden) {
-			t.Errorf("compatibility migration contains destructive fragment %q", forbidden)
 		}
 	}
 }
@@ -197,7 +151,7 @@ func requireMigrationContains(t *testing.T, migration, fragment string) {
 
 func TestLocalRecordingProjectionMigrationIsNarrowAndFailClosed(t *testing.T) {
 	t.Parallel()
-	migration := readMigration(t, "005_local_recording_projection.up.sql")
+	migration := readMigration(t, "001_initial.sql")
 	for _, fragment := range []string{
 		"CREATE TABLE device_local_recordings (",
 		"device_local_recordings_identity_key",
@@ -225,21 +179,4 @@ func TestLocalRecordingProjectionMigrationIsNarrowAndFailClosed(t *testing.T) {
 			t.Errorf("local recording migration contains forbidden platform/upload field %q", forbidden)
 		}
 	}
-}
-
-func TestLocalThumbnailStatusTextMigrationKeepsTheCheckConstraintFailClosed(t *testing.T) {
-	t.Parallel()
-	up := readMigration(t, "006_local_thumbnail_status_text.up.sql")
-	requireMigrationContains(t, up, "ALTER TABLE local_recording_thumbnail_outbox")
-	requireMigrationContains(t, up, "ALTER COLUMN status TYPE text")
-	for _, forbidden := range []string{"DROP CONSTRAINT", "DROP TABLE", "TRUNCATE", "DELETE FROM"} {
-		if strings.Contains(strings.ToUpper(up), forbidden) {
-			t.Errorf("local thumbnail status migration contains destructive fragment %q", forbidden)
-		}
-	}
-
-	down := readMigration(t, "006_local_thumbnail_status_text.down.sql")
-	requireMigrationContains(t, down, "SET status='delete_pending'")
-	requireMigrationContains(t, down, "WHERE status='delete_processing'")
-	requireMigrationContains(t, down, "ALTER COLUMN status TYPE varchar(16)")
 }

@@ -26,7 +26,7 @@ func TestInternalAPICreatesAndPollsHMACActivation(t *testing.T) {
 
 	now := time.UnixMilli(1_718_000_000_000)
 	handler := newSignedTestHandler(t, activation.NewService(), now)
-	createBody := []byte(`{"method":"ble","pid":"feeder-x1","dp_profile":"feeder-v1","binding_external_user_id":"livpet-user-42","idempotency_key":"operation-1"}`)
+	createBody := []byte(`{"method":"ble","pid":"feeder-x1","binding_external_user_id":"livpet-user-42","idempotency_key":"operation-1"}`)
 	create := signedInternalRequest(t, now, "nonce-create-00001", http.MethodPost, "/api/v1/openapi/device-activations", createBody)
 	createResponse := httptest.NewRecorder()
 	handler.ServeHTTP(createResponse, create)
@@ -70,7 +70,7 @@ func TestInternalAPIPreservesSelectedMinionPIDAcrossActivationLifecycle(t *testi
 
 	now := time.UnixMilli(1_718_000_000_000)
 	handler := newSignedTestHandler(t, activation.NewService(), now)
-	createBody := []byte(`{"method":"ble","pid":"minion-cam-x1","dp_profile":"feeder-v1","binding_external_user_id":"livpet-user-42","idempotency_key":"minion-operation-1"}`)
+	createBody := []byte(`{"method":"ble","pid":"minion-cam-x1","binding_external_user_id":"livpet-user-42","idempotency_key":"minion-operation-1"}`)
 	create := signedInternalRequest(t, now, "nonce-minion-create", http.MethodPost, "/api/v1/openapi/device-activations", createBody)
 	createResponse := httptest.NewRecorder()
 	handler.ServeHTTP(createResponse, create)
@@ -240,7 +240,7 @@ func TestInternalAPIRejectsUnknownProductPID(t *testing.T) {
 
 	now := time.UnixMilli(1_718_000_000_000)
 	handler := newSignedTestHandler(t, activation.NewService(), now)
-	body := []byte(`{"method":"ble","pid":"unknown-x1","dp_profile":"feeder-v1","binding_external_user_id":"livpet-user-42","idempotency_key":"unknown-product-1"}`)
+	body := []byte(`{"method":"ble","pid":"unknown-x1","binding_external_user_id":"livpet-user-42","idempotency_key":"unknown-product-1"}`)
 	request := signedInternalRequest(t, now, "nonce-product-unknown", http.MethodPost, "/api/v1/openapi/device-activations", body)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -284,7 +284,7 @@ func TestInternalAPIReturnsStableIdempotencyConflictCode(t *testing.T) {
 
 	now := time.UnixMilli(1_718_000_000_000)
 	handler := newSignedTestHandler(t, activation.NewService(), now)
-	body := []byte(`{"method":"qr","pid":"feeder-x1","dp_profile":"feeder-v1","binding_external_user_id":"user-1","idempotency_key":"same-operation"}`)
+	body := []byte(`{"method":"qr","pid":"feeder-x1","binding_external_user_id":"user-1","idempotency_key":"same-operation"}`)
 	first := signedInternalRequest(t, now, "nonce-idem-first1", http.MethodPost, "/api/v1/openapi/device-activations", body)
 	firstResponse := httptest.NewRecorder()
 	handler.ServeHTTP(firstResponse, first)
@@ -873,7 +873,7 @@ func TestDevicePrepareUsesCompatibilityDeviceActivationPath(t *testing.T) {
 	service := activation.NewServiceWith(testProvisioner{})
 	created, err := service.Create(context.Background(), activation.CreateInput{
 		InternalAppID: "livpet-staging", BindingExternalUserID: "user-42",
-		IdempotencyKey: "operation-qr", Method: activation.MethodQR, PID: "lamp-x1", DPProfile: "feeder-v1",
+		IdempotencyKey: "operation-qr", Method: activation.MethodQR, PID: "lamp-x1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -917,7 +917,7 @@ func TestDevicePrepareUsesProviderNeutralDomesticRuntimeFields(t *testing.T) {
 	service := activation.NewServiceWith(domesticTestProvisioner{})
 	created, err := service.Create(context.Background(), activation.CreateInput{
 		InternalAppID: "livpet-staging", BindingExternalUserID: "user-cn",
-		IdempotencyKey: "operation-domestic", Method: activation.MethodQR, PID: "lamp-x1", DPProfile: "feeder-v1",
+		IdempotencyKey: "operation-domestic", Method: activation.MethodQR, PID: "lamp-x1",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -951,7 +951,7 @@ func TestLivPetActivationCreateAcceptsLegacyCommissioningEnvelope(t *testing.T) 
 	t.Parallel()
 	now := time.UnixMilli(1_718_000_000_000)
 	handler := newSignedTestHandler(t, activation.NewService(), now)
-	body := []byte(`{"method":"ble","pid":"feeder-x1","dp_profile":"feeder-v1","session_id":"session-1","client_hello_cbor":"client","device_hello_cbor":"device","binding_external_user_id":"user-1","idempotency_key":"idem-legacy-1"}`)
+	body := []byte(`{"method":"ble","pid":"feeder-x1","session_id":"session-1","client_hello_cbor":"client","device_hello_cbor":"device","binding_external_user_id":"user-1","idempotency_key":"idem-legacy-1"}`)
 	request := signedInternalRequest(t, now, "nonce-legacy-create", http.MethodPost, "/api/v1/openapi/device-activations", body)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -979,7 +979,7 @@ func TestQRActivationReturnsLegacyAuthorizationCodeAlias(t *testing.T) {
 	t.Parallel()
 	now := time.UnixMilli(1_718_000_000_000)
 	handler := newSignedTestHandler(t, activation.NewService(), now)
-	body := []byte(`{"method":"qr","pid":"feeder-x1","dp_profile":"feeder-v1","binding_external_user_id":"user-1","idempotency_key":"idem-qr-alias"}`)
+	body := []byte(`{"method":"qr","pid":"feeder-x1","binding_external_user_id":"user-1","idempotency_key":"idem-qr-alias"}`)
 	request := signedInternalRequest(t, now, "nonce-qr-alias-001", http.MethodPost, "/api/v1/openapi/device-activations", body)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)

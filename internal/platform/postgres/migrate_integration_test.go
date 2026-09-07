@@ -10,7 +10,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/db/migrations"
 )
 
 func TestMigrateCreatesRequiredTablesAndGlobalBindingConstraint(t *testing.T) {
@@ -78,7 +77,7 @@ func TestMigrateCreatesRequiredTablesAndGlobalBindingConstraint(t *testing.T) {
 	for index, definition := range definitions {
 		codes[index] = definition.Code
 	}
-	wantCodes := []string{"audio_playback", "audio_reset", "audio_update", "clear_jam", "device_info", "feed", "get_feed_log", "get_schedule", "motion_det", "night_mode", "ptz", "reboot", "record_clip", "record_mode", "record_start", "record_stop", "sd_files", "sdcard", "sdcard_status", "set_schedule", "snapshot", "speaker_vol", "stream", "two_way_audio", "video_res"}
+	wantCodes := []string{"audio_playback", "audio_reset", "audio_update", "clear_jam", "device_info", "factory_reset", "feed", "feed_done", "feed_error", "get_feed_log", "get_log", "get_schedule", "led", "local_media", "motion_det", "motion_track", "night_mode", "ota_install", "pet_det", "ptz", "query_status", "reboot", "recommission", "record_clip", "record_mode", "record_start", "record_stop", "sd_files", "sd_recordings_v1", "sd_thumbnail_v1", "sdcard", "sdcard_status", "set_schedule", "snapshot", "speaker_vol", "status", "stream", "two_way_audio", "video_res"}
 	if !slices.Equal(codes, wantCodes) {
 		t.Fatalf("feeder product DP codes = %v, want %v", codes, wantCodes)
 	}
@@ -109,150 +108,6 @@ func TestMigrateCreatesRequiredTablesAndGlobalBindingConstraint(t *testing.T) {
 		VALUES ($1, $2, 'demo-staging', 'user-2', 'active')
 	`, "018f0000-0000-7000-8000-000000000003", deviceID); err != nil {
 		t.Fatalf("bind after release: %v", err)
-	}
-}
-
-func TestMigrateUpgradesLegacySquashedInitialWithoutDroppingData(t *testing.T) {
-	ctx := context.Background()
-	pool := newIsolatedMigrationPool(t, ctx)
-	_, err := pool.Exec(ctx, `
-		CREATE OR REPLACE FUNCTION set_updated_at()
-		RETURNS trigger LANGUAGE plpgsql AS $$
-		BEGIN
-			NEW.updated_at = now();
-			RETURN NEW;
-		END;
-		$$;
-		CREATE TABLE gateway_schema_migrations (
-			name text PRIMARY KEY,
-			applied_at timestamptz NOT NULL DEFAULT now()
-		);
-		INSERT INTO gateway_schema_migrations (name) VALUES ('001_initial.sql');
-		CREATE TABLE device_registry (
-			id uuid PRIMARY KEY,
-			device_sn varchar(64) NOT NULL UNIQUE,
-			thing_name varchar(128) NOT NULL UNIQUE,
-			pid varchar(64) NOT NULL DEFAULT 'feeder-x1'
-				CONSTRAINT device_registry_pid_check CHECK (pid = 'feeder-x1'),
-			status varchar(24) NOT NULL,
-			created_at timestamptz NOT NULL DEFAULT now(),
-			updated_at timestamptz NOT NULL DEFAULT now()
-		);
-		CREATE TABLE device_activations (
-			id uuid PRIMARY KEY,
-			internal_app_id varchar(64) NOT NULL,
-			binding_external_user_id varchar(255) NOT NULL,
-			method varchar(8) NOT NULL,
-			status varchar(24) NOT NULL,
-			code_hash bytea NOT NULL,
-			idempotency_key varchar(128) NOT NULL,
-			request_hash bytea NOT NULL,
-			device_registry_id uuid REFERENCES device_registry(id),
-			expires_at timestamptz NOT NULL,
-			created_at timestamptz NOT NULL DEFAULT now(),
-			updated_at timestamptz NOT NULL DEFAULT now()
-		);
-		CREATE TABLE device_bindings (
-			id uuid PRIMARY KEY,
-			device_registry_id uuid NOT NULL REFERENCES device_registry(id),
-			internal_app_id varchar(64) NOT NULL,
-			binding_external_user_id varchar(255) NOT NULL,
-			status varchar(16) NOT NULL,
-			created_at timestamptz NOT NULL DEFAULT now(),
-			updated_at timestamptz NOT NULL DEFAULT now()
-		);
-		CREATE TABLE device_events (
-			id uuid PRIMARY KEY,
-			device_registry_id uuid NOT NULL REFERENCES device_registry(id),
-			event_type varchar(64) NOT NULL,
-			data jsonb NOT NULL DEFAULT '{}'::jsonb,
-			received_at timestamptz NOT NULL DEFAULT now()
-		);
-		INSERT INTO device_registry (id, device_sn, thing_name, status) VALUES
-			('018f0000-0000-7000-8000-000000000011',
-			 'fdr-00000000000000000000000000000011',
-			 'fdr-00000000000000000000000000000011', 'active');
-		INSERT INTO device_activations (
-			id, internal_app_id, binding_external_user_id, method, status,
-			code_hash, idempotency_key, request_hash, device_registry_id, expires_at
-		) VALUES
-			('018f0000-0000-7000-8000-000000000012', 'livpet-staging', 'legacy-user', 'ble', 'activated',
-			 decode(repeat('aa', 32), 'hex'), 'legacy-linked', decode(repeat('bb', 32), 'hex'),
-			 '018f0000-0000-7000-8000-000000000011', now() + interval '1 hour'),
-			('018f0000-0000-7000-8000-000000000013', 'livpet-staging', 'legacy-user', 'ble', 'pending',
-			 decode(repeat('cc', 32), 'hex'), 'legacy-unlinked', decode(repeat('dd', 32), 'hex'),
-			 NULL, now() + interval '1 hour');
-	`)
-	if err != nil {
-		t.Fatalf("install legacy schema: %v", err)
-	}
-
-	if err := ApplyMigrations(ctx, pool); err != nil {
-		t.Fatalf("ApplyMigrations() legacy upgrade error = %v", err)
-	}
-
-	var productName, productStatus string
-	var capabilities []byte
-	if err := pool.QueryRow(ctx, `SELECT name, status, capabilities FROM products WHERE pid='feeder-x1'`).Scan(
-		&productName, &productStatus, &capabilities,
-	); err != nil {
-		t.Fatalf("legacy feeder product was not preserved: %v", err)
-	}
-	if productName != "Feeder X1" || productStatus != "active" || string(capabilities) != "[]" {
-		t.Fatalf("legacy feeder product = %q/%q capabilities=%s", productName, productStatus, capabilities)
-	}
-
-	rows, err := pool.Query(ctx, `SELECT id::text, pid FROM device_activations ORDER BY id`)
-	if err != nil {
-		t.Fatalf("list upgraded activations: %v", err)
-	}
-	defer rows.Close()
-	count := 0
-	for rows.Next() {
-		var id, pid string
-		if err := rows.Scan(&id, &pid); err != nil {
-			t.Fatalf("scan upgraded activation: %v", err)
-		}
-		if pid != "feeder-x1" {
-			t.Errorf("activation %s pid = %q, want feeder-x1", id, pid)
-		}
-		count++
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate upgraded activations: %v", err)
-	}
-	if count != 2 {
-		t.Fatalf("upgraded activation count = %d, want 2", count)
-	}
-
-	var defaultValue *string
-	if err := pool.QueryRow(ctx, `
-		SELECT column_default FROM information_schema.columns
-		WHERE table_schema=current_schema() AND table_name='device_registry' AND column_name='pid'
-	`).Scan(&defaultValue); err != nil {
-		t.Fatalf("read device_registry.pid default: %v", err)
-	}
-	if defaultValue != nil {
-		t.Fatalf("device_registry.pid default = %q, want NULL", *defaultValue)
-	}
-	for _, constraint := range []string{"device_registry_pid_fkey", "device_activations_pid_fkey"} {
-		var exists bool
-		if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_constraint WHERE conname=$1)`, constraint).Scan(&exists); err != nil {
-			t.Fatalf("check %s: %v", constraint, err)
-		}
-		if !exists {
-			t.Errorf("constraint %s does not exist", constraint)
-		}
-	}
-
-	applyProductSeeds(t, ctx, pool)
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO device_registry (dp_profile_id, id, device_sn, thing_name, pid, status)
-		VALUES ('40000000-0000-0000-0000-000000000001', '018f0000-0000-7000-8000-000000000014',
-		        'fdr-00000000000000000000000000000014',
-		        'fdr-00000000000000000000000000000014', 'minion-cam-x1', 'active')
-	`); err != nil {
-		t.Fatalf("insert second product after legacy upgrade: %v", err)
 	}
 }
 
@@ -324,21 +179,21 @@ func TestProductSeedIsExplicitAndIdempotent(t *testing.T) {
 		t.Fatalf("count seeded product DPs: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
-		SELECT count(*) FROM dp_profile_members member JOIN dp_profiles profile ON profile.id=member.dp_profile_id WHERE profile.code='feeder-v1'
+		SELECT count(*) FROM dp_profile_members member JOIN dp_profiles profile ON profile.code=member.dp_profile_code WHERE profile.code='feeder-v1'
 	`).Scan(&feederDPCount); err != nil {
 		t.Fatalf("count feeder product DPs: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
-		SELECT count(*) FROM dp_profile_members member JOIN dp_profiles profile ON profile.id=member.dp_profile_id WHERE profile.code='camera-v1'
+		SELECT count(*) FROM dp_profile_members member JOIN dp_profiles profile ON profile.code=member.dp_profile_code WHERE profile.code='camera-v1'
 	`).Scan(&minionDPCount); err != nil {
 		t.Fatalf("count minion product DPs: %v", err)
 	}
-	if dpCount != 53 || feederDPCount != 25 || minionDPCount != 28 {
-		t.Fatalf("seeded product DP counts = total %d/feeder %d/minion %d, want 53/25/28", dpCount, feederDPCount, minionDPCount)
+	if dpCount != 95 || feederDPCount != 39 || minionDPCount != 28 {
+		t.Fatalf("seeded product DP counts = total %d/feeder %d/minion %d, want 95/39/28", dpCount, feederDPCount, minionDPCount)
 	}
 	var minionDetailedCount int
 	if err := pool.QueryRow(ctx, `
-		SELECT count(*) FROM dp_definitions dp JOIN dp_profile_members member ON member.dp_definition_id=dp.id JOIN dp_profiles profile ON profile.id=member.dp_profile_id
+		SELECT count(*) FROM dp_definitions dp JOIN dp_profile_members member ON member.dp_definition_id=dp.id JOIN dp_profiles profile ON profile.code=member.dp_profile_code
 		WHERE profile.code='camera-v1' AND jsonb_typeof(dp.spec->'properties')='object'
 	`).Scan(&minionDetailedCount); err != nil {
 		t.Fatalf("count detailed minion product DP specs: %v", err)
@@ -354,8 +209,8 @@ func TestProductSeedIsExplicitAndIdempotent(t *testing.T) {
 			files.spec->'ack'->>'files'
 		FROM dp_definitions volume
         JOIN dp_profile_members vm ON vm.dp_definition_id=volume.id
-        JOIN dp_profiles profile ON profile.id=vm.dp_profile_id AND profile.code='camera-v1'
-        JOIN dp_profile_members fm ON fm.dp_profile_id=profile.id AND fm.code='sd_files'
+        JOIN dp_profiles profile ON profile.code=vm.dp_profile_code AND profile.code='camera-v1'
+        JOIN dp_profile_members fm ON fm.dp_profile_code=profile.code AND fm.code='sd_files'
         JOIN dp_definitions files ON files.id=fm.dp_definition_id
 		WHERE volume.code='speaker_vol'
 	`).Scan(&volumeMin, &volumeMax, &sdFilesAck); err != nil {
@@ -403,42 +258,6 @@ func TestMigrateKeepsLocalThumbnailOutboxStatusesLengthSafe(t *testing.T) {
 		if !errors.As(err, &postgresError) || postgresError.Code != "23514" {
 			t.Fatalf("invalid local thumbnail status error = %v, want check violation 23514", err)
 		}
-	}
-}
-
-func TestLocalThumbnailStatusTextDownMigrationRestoresPreviousWidthSafely(t *testing.T) {
-	ctx := context.Background()
-	pool := newIsolatedMigrationPool(t, ctx)
-	if err := ApplyMigrations(ctx, pool); err != nil {
-		t.Fatalf("ApplyMigrations() error = %v", err)
-	}
-	outboxID := seedLocalThumbnailOutboxStatusFixture(t, ctx, pool, "delete_processing")
-	down, err := migrations.Files.ReadFile("006_local_thumbnail_status_text.down.sql")
-	if err != nil {
-		t.Fatalf("read local thumbnail status down migration: %v", err)
-	}
-	if _, err := pool.Exec(ctx, string(down)); err != nil {
-		t.Fatalf("apply local thumbnail status down migration: %v", err)
-	}
-
-	var status, dataType string
-	var maximumLength int
-	if err := pool.QueryRow(ctx, `
-		SELECT status FROM local_recording_thumbnail_outbox WHERE id=$1
-	`, outboxID).Scan(&status); err != nil {
-		t.Fatalf("read rolled back local thumbnail status: %v", err)
-	}
-	if err := pool.QueryRow(ctx, `
-		SELECT data_type, character_maximum_length
-		FROM information_schema.columns
-		WHERE table_schema=current_schema()
-		  AND table_name='local_recording_thumbnail_outbox'
-		  AND column_name='status'
-	`).Scan(&dataType, &maximumLength); err != nil {
-		t.Fatalf("read rolled back local thumbnail status type: %v", err)
-	}
-	if status != "delete_pending" || dataType != "character varying" || maximumLength != 16 {
-		t.Fatalf("rolled back local thumbnail status = %s type=%s length=%d", status, dataType, maximumLength)
 	}
 }
 

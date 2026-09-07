@@ -818,7 +818,6 @@ func (s server) createActivation(writer http.ResponseWriter, request *http.Reque
 		BindingExternalUserID string `json:"binding_external_user_id"`
 		IdempotencyKey        string `json:"idempotency_key"`
 		PID                   string `json:"pid"`
-		DPProfile             string `json:"dp_profile"`
 		SessionID             string `json:"session_id,omitempty"`
 		ClientHelloCBOR       string `json:"client_hello_cbor,omitempty"`
 		DeviceHelloCBOR       string `json:"device_hello_cbor,omitempty"`
@@ -828,7 +827,7 @@ func (s server) createActivation(writer http.ResponseWriter, request *http.Reque
 	}
 	created, err := s.activation.Create(request.Context(), activation.CreateInput{
 		InternalAppID: principal.InternalAppID, BindingExternalUserID: body.BindingExternalUserID,
-		IdempotencyKey: body.IdempotencyKey, Method: activation.Method(body.Method), PID: body.PID, DPProfile: body.DPProfile,
+		IdempotencyKey: body.IdempotencyKey, Method: activation.Method(body.Method), PID: body.PID,
 	})
 	if err != nil {
 		writeActivationError(writer, err)

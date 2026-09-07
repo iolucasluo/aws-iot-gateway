@@ -27,8 +27,8 @@ func (repository *ActivationRepository) FindActiveProduct(ctx context.Context, p
 	var product activation.Product
 	var capabilities []byte
 	if err := repository.pool.QueryRow(ctx, `
-		SELECT pid, name, capabilities FROM products WHERE pid=$1 AND status='active'
-	`, pid).Scan(&product.PID, &product.Name, &capabilities); err != nil {
+		SELECT pid, name, capabilities, COALESCE(dp_profile_code, '') FROM products WHERE pid=$1 AND status='active'
+	`, pid).Scan(&product.PID, &product.Name, &capabilities, &product.DPProfile); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return activation.Product{}, activation.ErrProductUnavailable
 		}
@@ -42,7 +42,7 @@ func (repository *ActivationRepository) FindActiveProduct(ctx context.Context, p
 
 func (repository *ActivationRepository) ListActiveProducts(ctx context.Context) ([]activation.Product, error) {
 	rows, err := repository.pool.Query(ctx, `
-		SELECT pid, name, capabilities FROM products WHERE status='active' ORDER BY pid
+		SELECT pid, name, capabilities, COALESCE(dp_profile_code, '') FROM products WHERE status='active' ORDER BY pid
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("list active products: %w", err)
@@ -52,7 +52,7 @@ func (repository *ActivationRepository) ListActiveProducts(ctx context.Context) 
 	for rows.Next() {
 		var product activation.Product
 		var capabilities []byte
-		if err := rows.Scan(&product.PID, &product.Name, &capabilities); err != nil {
+		if err := rows.Scan(&product.PID, &product.Name, &capabilities, &product.DPProfile); err != nil {
 			return nil, fmt.Errorf("scan active product: %w", err)
 		}
 		if err := json.Unmarshal(capabilities, &product.Capabilities); err != nil {
@@ -71,8 +71,10 @@ func (repository *ActivationRepository) Create(ctx context.Context, record activ
 		INSERT INTO device_activations (
 			id, internal_app_id, binding_external_user_id, method, pid, status,
 			code_hash, idempotency_key, request_hash, expires_at, dp_profile_id
-		) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10, profile.id
-		  FROM dp_profiles profile WHERE profile.code=$11 AND profile.status='active'
+		) SELECT $1,$2,$3,$4,product.pid,$6,$7,$8,$9,$10, profile.id
+		  FROM products product JOIN dp_profiles profile ON profile.code=product.dp_profile_code
+		  WHERE product.pid=$5 AND product.status='active' AND profile.code=$11 AND profile.status='active'
+		  FOR SHARE OF product, profile
 	`, record.Activation.ID, record.Activation.InternalAppID, record.Activation.BindingExternalUserID,
 		string(record.Activation.Method), record.Activation.PID, string(record.Activation.Status), record.CodeHash[:],
 		record.Activation.IdempotencyKey, record.Activation.RequestHash[:], record.Activation.ExpiresAt, record.Activation.DPProfile)

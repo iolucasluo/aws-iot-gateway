@@ -17,21 +17,21 @@ func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
 		records: make(map[string]Record),
 		profiles: map[string]DPProfile{
-			"feeder-v1":      {Code: "feeder-v1", Name: "Feeder v1"},
-			"camera-v1":      {Code: "camera-v1", Name: "Camera v1"},
-			"no-commands-v1": {Code: "no-commands-v1", Name: "No commands v1"},
+			"feeder-v1": {Code: "feeder-v1", Name: "Anyka Feeder X1 v1"},
+			"camera-v1": {Code: "camera-v1", Name: "Taixin Minion Cam X1 v1"},
+			"lamp-v1":   {Code: "lamp-v1", Name: "Anyka Lamp X1 v1"},
 		},
 		products: map[string]Product{
 			"feeder-x1": {
-				PID: "feeder-x1", Name: "Feeder X1",
+				PID: "feeder-x1", DPProfile: "feeder-v1", Name: "Feeder X1",
 				Capabilities: []string{"webrtc.v1", "local-media.v1", "ptz.v1"},
 			},
 			"lamp-x1": {
-				PID: "lamp-x1", Name: "Lamp X1",
+				PID: "lamp-x1", DPProfile: "lamp-v1", Name: "Lamp X1",
 				Capabilities: []string{},
 			},
 			"minion-cam-x1": {
-				PID: "minion-cam-x1", Name: "Minion Cam X1",
+				PID: "minion-cam-x1", DPProfile: "camera-v1", Name: "Minion Cam X1",
 				Capabilities: []string{"webrtc.v1"},
 			},
 		},
@@ -70,6 +70,13 @@ func (repository *MemoryRepository) Create(_ context.Context, record Record) err
 			}
 			return ErrActivationInProgress
 		}
+	}
+	product, ok := repository.products[record.Activation.PID]
+	if !ok {
+		return ErrProductUnavailable
+	}
+	if _, ok := repository.profiles[record.Activation.DPProfile]; !ok || product.DPProfile != record.Activation.DPProfile {
+		return ErrDPProfileUnavailable
 	}
 	repository.records[record.Activation.ID] = record
 	return nil

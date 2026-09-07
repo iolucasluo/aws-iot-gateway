@@ -13,6 +13,6 @@
 - `rules/测试与验证.md`：Go 测试、静态检查和交付证据。
 
 规则只描述本仓当前实现与已批准 Internal AWS API 边界。设备 DP profile 的 Gateway 权威目录位于
-`db/migrations/010_dp_profiles.up.sql` 与 `db/seeds/002_dp_profiles.sql`；TXW82x 固件实现位于
+`db/migrations/001_initial.sql` 与 `db/seeds/002_dp_profiles.sql`；TXW82x 固件实现位于
 `taixin-82x-workspace`，App 消费方位于 `aws-iot-demo-app/lib/aws_demo/`。设备 bootstrap 公共契约仍按部署文档管理，
 不依赖 Anyka ExploreX 上线节奏。

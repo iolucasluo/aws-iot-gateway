@@ -74,9 +74,10 @@ pending -> activating -> installing -> finalizing -> activated
 
 ## 设备 DP profile 合同
 
-- 产品目录与 DP 合同独立；设备/activation 直接引用一个版本化 profile，不以 PID 推断。
-- HMAC `GET /api/v1/openapi/dp-profiles` 返回 active code/name；创建 activation 必须显式传 `dp_profile`，
-  与 PID 一同绑定幂等摘要。缺失/畸形返回 invalid_request，不可用返回 dp_profile_unavailable；响应回显选择。
+- 产品目录用 dp_profile_code 指定新 activation 的协议；设备/activation 保留版本快照，多产品可共享 profile。
+- HMAC `GET /api/v1/openapi/dp-profiles` 返回只读 active code/name；创建 activation 只传 PID，服务端解析 profile。
+  请求携带 dp_profile 返回 invalid_request；映射未配置或协议不可用返回 dp_profile_unavailable。
+  幂等绑定 PID/method/user，产品默认值改变不影响旧 activation；响应返回确定的 profile。
 - 通用 commands/schedules 在落库和 MQTT 发布前按设备 profile 加载成员，拒绝未知、disabled、只读 DP 或不合法参数。
 - retired profile 仅供已登记设备和已创建 activation；新 activation 只能选 active。固件/commands 请求不能覆盖登记。
 - 正式合同通过所有环境通用的 reviewed contract seed 发布；修改协议新增版本，不原地覆盖。无运行时 CRUD。

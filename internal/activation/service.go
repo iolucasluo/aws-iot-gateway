@@ -47,31 +47,38 @@ func NewServiceWithRepository(provisioner Provisioner, repository Repository) *S
 func (service *Service) Create(ctx context.Context, input CreateInput) (Activation, error) {
 	if service.repository == nil || strings.TrimSpace(input.InternalAppID) == "" ||
 		strings.TrimSpace(input.BindingExternalUserID) == "" || strings.TrimSpace(input.IdempotencyKey) == "" ||
-		len(input.IdempotencyKey) > 128 || !input.Method.valid() || strings.TrimSpace(input.PID) == "" ||
-		len(input.DPProfile) > 96 || !dpProfilePattern.MatchString(input.DPProfile) {
+		len(input.IdempotencyKey) > 128 || !input.Method.valid() || strings.TrimSpace(input.PID) == "" {
 		return Activation{}, ErrInvalidInput
 	}
-	product, err := service.findActiveProduct(ctx, input.PID)
-	if err != nil {
-		return Activation{}, err
-	}
-	profile, err := service.repository.FindActiveDPProfile(ctx, input.DPProfile)
-	if err != nil {
-		return Activation{}, err
-	}
-	if profile.Code != input.DPProfile {
-		return Activation{}, ErrDPProfileUnavailable
-	}
+	input.PID = strings.TrimSpace(input.PID)
+	// The request fingerprint contains caller-controlled fields only. Changing a
+	// product default must not change an existing activation or its retry result.
 	requestHash := sha256.Sum256([]byte(strings.Join([]string{
-		input.InternalAppID, input.BindingExternalUserID, string(input.Method), product.PID, profile.Code,
+		input.InternalAppID, input.BindingExternalUserID, string(input.Method), input.PID,
 	}, "\n")))
 	if existing, err := service.repository.FindByIdempotency(ctx, input.InternalAppID, input.IdempotencyKey); err == nil {
-		if existing.Activation.RequestHash != requestHash {
+		// Compare caller fields; a product default change is not a new request.
+		value := existing.Activation
+		if value.PID != input.PID || value.Method != input.Method || value.BindingExternalUserID != input.BindingExternalUserID {
 			return Activation{}, ErrIdempotencyConflict
 		}
 		return Activation{}, ErrActivationInProgress
 	} else if !errors.Is(err, ErrActivationNotFound) {
 		return Activation{}, fmt.Errorf("find activation idempotency key: %w", err)
+	}
+	product, err := service.findActiveProduct(ctx, input.PID)
+	if err != nil {
+		return Activation{}, err
+	}
+	if !dpProfilePattern.MatchString(product.DPProfile) || len(product.DPProfile) > 96 {
+		return Activation{}, ErrDPProfileUnavailable
+	}
+	profile, err := service.repository.FindActiveDPProfile(ctx, product.DPProfile)
+	if err != nil {
+		return Activation{}, err
+	}
+	if profile.Code != product.DPProfile {
+		return Activation{}, ErrDPProfileUnavailable
 	}
 	id, err := randomUUID()
 	if err != nil {

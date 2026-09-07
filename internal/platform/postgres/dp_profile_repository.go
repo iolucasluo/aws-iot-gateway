@@ -23,14 +23,14 @@ func NewDPProfileRepository(pool *pgxpool.Pool) (*DPProfileRepository, error) {
 }
 
 func (repository *DPProfileRepository) LoadDPDefinitions(ctx context.Context, deviceSN string) ([]devicemodule.DPDefinition, error) {
-	var profileID string
+	var profileCode string
 	if err := repository.pool.QueryRow(ctx, `
-		SELECT profile.id::text
+		SELECT profile.code
 		FROM device_registry device
 		JOIN dp_profiles profile ON profile.id=device.dp_profile_id
 		WHERE device.device_sn=$1 AND device.status='active'
 		  AND profile.status IN ('active', 'retired')
-	`, deviceSN).Scan(&profileID); err != nil {
+	`, deviceSN).Scan(&profileCode); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("%w: device %s", devicemodule.ErrDPUnavailable, deviceSN)
 		}
@@ -41,9 +41,9 @@ func (repository *DPProfileRepository) LoadDPDefinitions(ctx context.Context, de
 		SELECT definition.code, definition.type, definition.direction, definition.spec, member.status
 		FROM dp_profile_members member
 		JOIN dp_definitions definition ON definition.id=member.dp_definition_id
-		WHERE member.dp_profile_id=$1
+		WHERE member.dp_profile_code=$1
 		ORDER BY definition.code
-	`, profileID)
+	`, profileCode)
 	if err != nil {
 		return nil, fmt.Errorf("list DP profile definitions: %w", err)
 	}

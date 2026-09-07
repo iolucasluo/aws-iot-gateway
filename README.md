@@ -2,9 +2,10 @@
 
 `aws-iot-gateway` 是 LivPet 和内部 Demo App 共用的 **Internal AWS API**。它拥有用户激活、全局唯一绑定、设备运行身份和受限设备操作；`products` 与独立的 `dp_profiles`/`dp_definitions`/`dp_profile_members` 作为受控的只读激活/设备合同目录，不实现 Developer、Project、Product/DP CRUD/owner、Factory、tenant、IDevID、RMA 或 OTA campaign 平台。OTA 只保留签名版本和单设备 deployment。
 
-`/api/v1/openapi/*` 中的 `openapi` 只是 LivPet wire compatibility，产品和代码语义均使用 internal app。App 必须读取受控产品目录和独立 DP profile 目录，在创建 activation 时显式提交 active `pid` 和 `dp_profile`。
-设备直接绑定一个版本化 profile，不通过产品关联。正式 DP 合同通过所有环境通用的显式 contract seed 发布；
-模型、旧设备迁移和协调发布要求见 [DP profiles v1](docs/contracts/dp-profiles-v1.md)。
+`/api/v1/openapi/*` 中的 `openapi` 只是 LivPet wire compatibility，产品和代码语义均使用 internal app。App 读取受控产品目录，创建 activation 时只提交 active `pid`。
+Gateway 根据 `products.dp_profile_code` 确定协议；多个产品可共享 profile，activation/设备保存当时的协议快照。
+成员表使用 `dp_profile_code` 外键。正式 DP 合同及产品默认映射通过显式 seed 发布；
+模型、迁移和协调发布要求见 [DP profiles v1](docs/contracts/dp-profiles-v1.md)。
 
 ## 认证与隔离
 
@@ -148,6 +149,9 @@ ACK 字段仍须逐项精确匹配，避免把冲突或过期指令误判为成�
 Gateway 不转发 ONVIF SOAP/RTSP 媒体，DP/PTZ 继续走 OpenAPI → MQTT。
 
 ## 本地运行与验证
+
+当前未上线基线已收敛为 `db/migrations/001_initial.sql`，旧开发库需重建或改用新空库后执行 seeds。
+不会兼容升级或自动覆盖旧库，见 [数据库初始化说明](db/migrations/README.md)。
 
 首次本地联调把 `.env.local.example` 复制为开发者自己的 `.env.dev`、`.env.cwj` 等
 `.env.<name>` 文件；这些文件全部被 Git 忽略。它们只保存该开发环境的 Gateway/AWS 资源参数和
