@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -135,7 +136,7 @@ func runDomesticGateway(
 	if err != nil {
 		return err
 	}
-	streamService := media.NewRealtimeStreamService(realtimeClient, realtimeInstance, deviceService, streamRepository, nil)
+	streamService := media.NewRealtimeStreamService(realtimeClient, realtimeInstance, deviceService, streamRepository, nil, log.Default())
 	timeSigner, err := localsigner.Load(config.TimeBootstrapLocalPrivateKeyPath)
 	if err != nil {
 		return err

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -125,6 +126,7 @@ type StreamService struct {
 	channelPrefix    string
 	newID            func() (string, error)
 	now              func() time.Time
+	logger           *log.Logger
 }
 
 func NewStreamService(kvs KVS, commander DPCommander, repository StreamRepository, channelPrefix string, newID func() (string, error)) *StreamService {
@@ -134,11 +136,11 @@ func NewStreamService(kvs KVS, commander DPCommander, repository StreamRepositor
 	return &StreamService{kvs: kvs, commander: commander, repository: repository, channelPrefix: channelPrefix, newID: newID, now: time.Now}
 }
 
-func NewRealtimeStreamService(realtime provider.RealtimeProvider, providerInstance string, commander DPCommander, repository StreamRepository, newID func() (string, error)) *StreamService {
+func NewRealtimeStreamService(realtime provider.RealtimeProvider, providerInstance string, commander DPCommander, repository StreamRepository, newID func() (string, error), logger *log.Logger) *StreamService {
 	if newID == nil {
 		newID = randomUUID
 	}
-	return &StreamService{realtime: realtime, realtimeInstance: strings.TrimSpace(providerInstance), commander: commander, repository: repository, newID: newID, now: time.Now}
+	return &StreamService{realtime: realtime, realtimeInstance: strings.TrimSpace(providerInstance), commander: commander, repository: repository, newID: newID, now: time.Now, logger: logger}
 }
 
 func (service *StreamService) Create(
@@ -306,15 +308,20 @@ func (service *StreamService) Renew(ctx context.Context, bindingID, deviceSN, st
 	}
 	found, err := service.repository.Find(ctx, bindingID, deviceSN, streamID)
 	if err != nil {
+		service.logf("renew_failed stream=%s binding=%s device=%s reason=%v provider_session=kept", streamID, bindingID, deviceSN, err)
 		return StreamLease{}, err
 	}
 	if !found {
+		service.logf("renew_failed stream=%s binding=%s device=%s reason=%v provider_session=kept", streamID, bindingID, deviceSN, ErrStreamNotFound)
 		return StreamLease{}, ErrStreamNotFound
 	}
 	ref := provider.RealtimeSessionRef{ID: streamID, ProviderInstance: service.realtimeInstance}
 	deadline := service.now().UTC().Add(streamTTL)
 	expiresAt, err := renewer.RenewSession(ctx, ref, deadline)
 	if err != nil {
+		// The provider lease is left intact for an upstream renewal failure: the
+		// session may still be alive and a retry could succeed before its expiry.
+		service.logf("renew_failed stream=%s binding=%s device=%s reason=%v provider_session=kept", streamID, bindingID, deviceSN, err)
 		return StreamLease{}, err
 	}
 	if !expiresAt.After(service.now().UTC()) || expiresAt.After(deadline) {
@@ -327,9 +334,18 @@ func (service *StreamService) Renew(ctx context.Context, bindingID, deviceSN, st
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		_ = service.realtime.CloseSession(cleanup, ref)
+		service.logf("renew_failed stream=%s binding=%s device=%s reason=%v provider_session=closed", streamID, bindingID, deviceSN, err)
 		return StreamLease{}, err
 	}
+	service.logf("renew_ok stream=%s binding=%s device=%s expires_at=%s", streamID, bindingID, deviceSN, expiresAt.UTC().Format(time.RFC3339Nano))
 	return StreamLease{ExpiresAt: expiresAt}, nil
+}
+
+func (service *StreamService) logf(format string, args ...any) {
+	if service == nil || service.logger == nil {
+		return
+	}
+	service.logger.Printf(format, args...)
 }
 
 func viewerClientConfig(config map[string]any) map[string]any {
