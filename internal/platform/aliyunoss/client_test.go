@@ -10,6 +10,7 @@ import (
 
 	"github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/media"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/ota"
 )
 
 type fakeAPI struct {
@@ -56,6 +57,11 @@ func (fake *fakeAPI) Presign(_ context.Context, request any, _ ...func(*oss.Pres
 		fake.presignResult = &oss.PresignResult{URL: "https://signed.example/object"}
 	}
 	return fake.presignResult, fake.err
+}
+
+func TestClientImplementsOTAArtifactStore(t *testing.T) {
+	t.Parallel()
+	var _ ota.ArtifactStore = (*Client)(nil)
 }
 
 func TestClientImplementsMediaObjectStore(t *testing.T) {

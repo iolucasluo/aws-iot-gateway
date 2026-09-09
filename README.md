@@ -227,3 +227,17 @@ OTA 发布记录可选携带成对的 `target_environment_id` 与两位 `target_
 限制；普通软件 OTA 仍通过无目标环境的唯一 build、App 过滤和设备端校验保持严格递增。Gateway 仍只以
 签名 release/manifest、目标 version/build 和设备重启事件判定
 升级结果，不把环境标签或 MQTT ACK 当作安装成功证据。
+
+
+### 国内 staging 单设备 OTA
+
+国内 `domestic-dev` 仅在显式设置 `OTA_DEVICE_DOWNLOAD_BASE_URL`（本服务 HTTPS origin）时装配 OTA。
+复用已配置的私有 OSS object adapter，OTA 对象限定 `ota/` 命名空间；本测试接入不声称独立 bucket/IAM 隔离。
+发布者需要 `ota:publish`，上传必须完整携带 API 返回的 `upload.headers`（包括禁止覆盖的签名 header）。
+`complete` 从 OSS 读取最多 3 MiB 的对象，核对实际长度和 SHA-256 后才发布 available。
+设备下载走 Redis 15 分钟、最多四次的短期 capability，Gateway 流式转发 OSS 内容；签名私钥不上云。
+普通媒体调用不使用新增 OTA 上传方法，未配置 OTA 的国内实例保持原有启动行为。
+
+网络 OTA 测试前应取出含其他版本 OTA 包的 SD 卡：设备的 SD OTA 是“版本/build 不同即安装”，
+否则网络升级后的重启可能再次装回 SD 卡上的旧版本。成功以设备 boot 事件的 version/build 匹配为准，
+不能把发布成功或 MQTT accepted 当作安装成功。

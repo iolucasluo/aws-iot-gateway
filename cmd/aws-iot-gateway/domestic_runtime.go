@@ -16,6 +16,7 @@ import (
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/binding"
 	devicemodule "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/device"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/media"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/ota"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/timebootstrap"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/domesticca"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/explorexsignal"
@@ -114,6 +115,33 @@ func runDomesticGateway(
 	deviceService := devicemodule.NewService(
 		devicePublisher, ackStore, commandRepository, config.DomesticMQTTTopicPrefix, nil,
 	)
+
+	// OTA is opt-in so existing domestic media-only compositions keep starting unchanged.
+	var otaService *ota.Service
+	if config.OTADeviceDownloadBaseURL != "" {
+		otaRepository, err := gatewaypostgres.NewOTARepository(database)
+		if err != nil {
+			return err
+		}
+		otaArtifacts, ok := objectStore.(ota.ArtifactStore)
+		if !ok {
+			return fmt.Errorf("domestic OTA artifact store is unavailable")
+		}
+		reader, ok := objectStore.(ota.ArtifactReader)
+		if !ok {
+			return fmt.Errorf("domestic OTA artifact reader is unavailable")
+		}
+		grants, err := redisstore.NewOTADownloadGrantStore(redis, config.Environment)
+		if err != nil {
+			return err
+		}
+		proxy, err := ota.NewDownloadProxy(config.OTADeviceDownloadBaseURL, grants, reader, nil)
+		if err != nil {
+			return fmt.Errorf("configure domestic OTA download proxy: %w", err)
+		}
+		otaService = ota.NewService(otaRepository, otaArtifacts, deviceService, config.Environment,
+			nil, nil, time.Now, ota.WithDownloadProxy(proxy))
+	}
 	var assetService *media.AssetService
 	if objectStore != nil {
 		mediaRepository, err := gatewaypostgres.NewMediaRepository(database)
@@ -155,7 +183,7 @@ func runDomesticGateway(
 		Addr: config.ListenAddress,
 		Handler: httpapi.NewInternalAPI(activationService, verifier, httpapi.Dependencies{
 			Binding: bindingService, Media: streamService, Assets: assetService,
-			Device:        deviceService,
+			Device: deviceService, OTA: otaService,
 			TimeBootstrap: timeService, TimeBootstrapLimiter: rateLimiter,
 			DeviceRuntime: httpapi.DeviceRuntimeConfig{
 				ProviderMode: "domestic-dev", Endpoint: config.DomesticMQTTEndpoint,
