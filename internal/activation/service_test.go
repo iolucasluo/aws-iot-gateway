@@ -32,6 +32,55 @@ func TestCreateBindsShortLivedCodeToUserAndMethod(t *testing.T) {
 	}
 }
 
+func TestProductSupportsUsesTheActiveCatalogCapabilities(t *testing.T) {
+	t.Parallel()
+
+	service := NewService()
+	supported, err := service.ProductSupports(context.Background(), "feeder-x1", "local-media.v1")
+	if err != nil || !supported {
+		t.Fatalf("feeder local-media support = %t, %v", supported, err)
+	}
+	supported, err = service.ProductSupports(context.Background(), "minion-cam-x1", "local-media.v1")
+	if err != nil || supported {
+		t.Fatalf("minion local-media support = %t, %v", supported, err)
+	}
+	if _, err := service.ProductSupports(context.Background(), "unknown", "local-media.v1"); !errors.Is(err, ErrProductUnavailable) {
+		t.Fatalf("unknown product error = %v, want ErrProductUnavailable", err)
+	}
+	if _, err := service.ProductSupports(context.Background(), "feeder-x1", ""); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("empty capability error = %v, want ErrInvalidInput", err)
+	}
+}
+
+func TestProductCatalogFailsClosedForMalformedOrDuplicateCapabilities(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name         string
+		capabilities []string
+	}{
+		{name: "malformed", capabilities: []string{"local media"}},
+		{name: "duplicate", capabilities: []string{"webrtc.v1", "webrtc.v1"}},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			repository := NewMemoryRepository()
+			product := repository.products["feeder-x1"]
+			product.Capabilities = testCase.capabilities
+			repository.products["feeder-x1"] = product
+			service := NewServiceWithRepository(nil, repository)
+
+			if _, err := service.ListActiveProducts(context.Background()); err == nil {
+				t.Fatal("ListActiveProducts() accepted an unsafe capability catalog")
+			}
+			if _, err := service.ProductSupports(
+				context.Background(), "feeder-x1", "webrtc.v1",
+			); err == nil {
+				t.Fatal("ProductSupports() accepted an unsafe capability catalog")
+			}
+		})
+	}
+}
+
 func TestPrepareRequiresTheIssuedCodeAndReturnsOnlyADeviceInstallPayload(t *testing.T) {
 	t.Parallel()
 
@@ -57,6 +106,28 @@ func TestPrepareRequiresTheIssuedCodeAndReturnsOnlyADeviceInstallPayload(t *test
 	}
 	if installation.Certificate == created.Code {
 		t.Fatal("Prepare() must never echo the activation code as certificate material")
+	}
+}
+
+func TestLampActivationPreservesProductPIDThroughInstallation(t *testing.T) {
+	t.Parallel()
+
+	service := NewServiceWith(fakeProvisioner{})
+	input := testCreateInput(MethodBLE)
+	input.PID = "lamp-x1"
+	input.IdempotencyKey = "lamp-product-identity"
+	created, err := service.Create(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	installation, err := service.Prepare(context.Background(), PrepareInput{
+		ActivationID: created.ID, Code: created.Code, CSRPEM: "lamp-csr", ExpectedMethod: MethodBLE,
+	})
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if created.PID != "lamp-x1" || installation.PID != "lamp-x1" {
+		t.Fatalf("lamp PID lost across activation: created=%q installation=%q", created.PID, installation.PID)
 	}
 }
 
@@ -175,6 +246,57 @@ func TestConfirmRequiresProofFromTheOperationalPrivateKey(t *testing.T) {
 	}
 }
 
+func TestConfirmRetriesAnActivatedInstallationAfterActivationExpiry(t *testing.T) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, privateKey)
+	if err != nil {
+		t.Fatalf("CreateCertificateRequest() error = %v", err)
+	}
+	csrPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}))
+
+	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	service := NewServiceWith(fakeProvisioner{})
+	service.now = func() time.Time { return now }
+	created, err := service.Create(context.Background(), testCreateInput(MethodQR))
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	installation, err := service.Prepare(context.Background(), PrepareInput{
+		ActivationID:   created.ID,
+		Code:           created.Code,
+		CSRPEM:         csrPEM,
+		ExpectedMethod: MethodQR,
+	})
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	digest := sha256.Sum256([]byte(installationProofMessage(created.ID, installation.ProofNonce)))
+	proof, err := ecdsa.SignASN1(rand.Reader, privateKey, digest[:])
+	if err != nil {
+		t.Fatalf("SignASN1() error = %v", err)
+	}
+	input := ConfirmInput{
+		ActivationID: created.ID,
+		Code:         created.Code,
+		Proof:        base64.RawURLEncoding.EncodeToString(proof),
+	}
+	if _, err := service.Confirm(context.Background(), input); err != nil {
+		t.Fatalf("initial Confirm() error = %v", err)
+	}
+
+	now = created.ExpiresAt.Add(time.Second)
+	retried, err := service.Confirm(context.Background(), input)
+	if err != nil {
+		t.Fatalf("expired retry Confirm() error = %v, want activated idempotent result", err)
+	}
+	if retried.Status != StatusActivated || retried.Code != "" {
+		t.Fatalf("expired retry Confirm() = %#v, want activated metadata without code", retried)
+	}
+}
+
 func TestListDevicesForUserShowsOnlyActivatedInstallations(t *testing.T) {
 	service := NewServiceWith(fakeProvisioner{})
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -277,6 +399,7 @@ func testCreateInput(method Method) CreateInput {
 	return CreateInput{
 		InternalAppID: "livpet-staging", BindingExternalUserID: "user-42",
 		IdempotencyKey: "operation-1-" + string(method), Method: method,
+		PID: "feeder-x1",
 	}
 }
 

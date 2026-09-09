@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+test "${GATEWAY_FAKE_HEALTHY:-0}" = 1

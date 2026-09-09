@@ -19,6 +19,8 @@ var (
 	ErrIdempotencyConflict       = errors.New("idempotency key conflicts with another request")
 	ErrActivationInProgress      = errors.New("activation already exists for idempotency key")
 	ErrDeviceBindingConflict     = errors.New("device already has an active binding")
+	ErrDPProfileUnavailable      = errors.New("DP profile is unavailable for activation")
+	ErrProductUnavailable        = errors.New("product is unavailable for activation")
 )
 
 type Method string
@@ -46,6 +48,7 @@ type CreateInput struct {
 	BindingExternalUserID string
 	IdempotencyKey        string
 	Method                Method
+	PID                   string
 }
 
 type PrepareInput struct {
@@ -65,6 +68,8 @@ type Activation struct {
 	ID                    string
 	Code                  string
 	Method                Method
+	PID                   string
+	DPProfile             string
 	InternalAppID         string
 	BindingExternalUserID string
 	IdempotencyKey        string
@@ -78,12 +83,16 @@ type PreparedIdentity struct {
 	DeviceID       string
 	CertificateID  string
 	CertificatePEM string
+	Endpoint       string
+	// AWSIoTEndpoint is retained for legacy AWS callers. New providers must
+	// populate Endpoint instead.
 	AWSIoTEndpoint string
 }
 
 type Installation struct {
 	ActivationID  string
 	DeviceID      string
+	PID           string
 	CertificateID string
 	Certificate   string
 	Endpoint      string
@@ -93,11 +102,25 @@ type Installation struct {
 type Device struct {
 	ID                    string
 	ActivationID          string
+	PID                   string
 	Endpoint              string
 	BindingExternalUserID string
 	Status                string
 	Online                bool
 	LastSeenAt            *time.Time
+}
+
+type Product struct {
+	DPProfile    string   `json:"dp_profile"`
+	PID          string   `json:"pid"`
+	Name         string   `json:"name"`
+	Capabilities []string `json:"capabilities"`
+}
+
+// DPProfile identifies an explicitly published, versioned command contract.
+type DPProfile struct {
+	Code string `json:"code"`
+	Name string `json:"name"`
 }
 
 type Record struct {
@@ -109,7 +132,15 @@ type Record struct {
 	FailureCode      string
 }
 
+type ProductCatalog interface {
+	FindActiveProduct(context.Context, string) (Product, error)
+	ListActiveProducts(context.Context) ([]Product, error)
+}
+
 type Repository interface {
+	ProductCatalog
+	FindActiveDPProfile(context.Context, string) (DPProfile, error)
+	ListActiveDPProfiles(context.Context) ([]DPProfile, error)
 	Create(context.Context, Record) error
 	FindByID(context.Context, string) (Record, error)
 	FindByIdempotency(context.Context, string, string) (Record, error)

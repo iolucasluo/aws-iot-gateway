@@ -7,12 +7,56 @@ import (
 )
 
 type MemoryRepository struct {
-	mu      sync.Mutex
-	records map[string]Record
+	mu       sync.Mutex
+	records  map[string]Record
+	products map[string]Product
+	profiles map[string]DPProfile
 }
 
 func NewMemoryRepository() *MemoryRepository {
-	return &MemoryRepository{records: make(map[string]Record)}
+	return &MemoryRepository{
+		records: make(map[string]Record),
+		profiles: map[string]DPProfile{
+			"feeder-v1": {Code: "feeder-v1", Name: "Anyka Feeder X1 v1"},
+			"camera-v1": {Code: "camera-v1", Name: "Taixin Minion Cam X1 v1"},
+			"lamp-v1":   {Code: "lamp-v1", Name: "Anyka Lamp X1 v1"},
+		},
+		products: map[string]Product{
+			"feeder-x1": {
+				PID: "feeder-x1", DPProfile: "feeder-v1", Name: "Feeder X1",
+				Capabilities: []string{"webrtc.v1", "local-media.v1", "ptz.v1"},
+			},
+			"lamp-x1": {
+				PID: "lamp-x1", DPProfile: "lamp-v1", Name: "Lamp X1",
+				Capabilities: []string{},
+			},
+			"minion-cam-x1": {
+				PID: "minion-cam-x1", DPProfile: "camera-v1", Name: "Minion Cam X1",
+				Capabilities: []string{"webrtc.v1"},
+			},
+		},
+	}
+}
+
+func (repository *MemoryRepository) FindActiveProduct(_ context.Context, pid string) (Product, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	product, found := repository.products[pid]
+	if !found {
+		return Product{}, ErrProductUnavailable
+	}
+	return product, nil
+}
+
+func (repository *MemoryRepository) ListActiveProducts(_ context.Context) ([]Product, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	products := make([]Product, 0, len(repository.products))
+	for _, product := range repository.products {
+		products = append(products, product)
+	}
+	sort.Slice(products, func(left, right int) bool { return products[left].PID < products[right].PID })
+	return products, nil
 }
 
 func (repository *MemoryRepository) Create(_ context.Context, record Record) error {
@@ -26,6 +70,13 @@ func (repository *MemoryRepository) Create(_ context.Context, record Record) err
 			}
 			return ErrActivationInProgress
 		}
+	}
+	product, ok := repository.products[record.Activation.PID]
+	if !ok {
+		return ErrProductUnavailable
+	}
+	if _, ok := repository.profiles[record.Activation.DPProfile]; !ok || product.DPProfile != record.Activation.DPProfile {
+		return ErrDPProfileUnavailable
 	}
 	repository.records[record.Activation.ID] = record
 	return nil
@@ -134,10 +185,31 @@ func (repository *MemoryRepository) ListDevices(_ context.Context, internalAppID
 			continue
 		}
 		devices = append(devices, Device{
-			ID: record.Installation.DeviceID, ActivationID: record.Activation.ID, Endpoint: record.Installation.Endpoint,
+			ID: record.Installation.DeviceID, ActivationID: record.Activation.ID, PID: record.Activation.PID, Endpoint: record.Installation.Endpoint,
 			BindingExternalUserID: record.Activation.BindingExternalUserID, Status: "provisioned",
 		})
 	}
 	sort.Slice(devices, func(left, right int) bool { return devices[left].ID < devices[right].ID })
 	return devices, nil
+}
+
+func (repository *MemoryRepository) FindActiveDPProfile(_ context.Context, code string) (DPProfile, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	profile, ok := repository.profiles[code]
+	if !ok {
+		return DPProfile{}, ErrDPProfileUnavailable
+	}
+	return profile, nil
+}
+
+func (repository *MemoryRepository) ListActiveDPProfiles(_ context.Context) ([]DPProfile, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	profiles := make([]DPProfile, 0, len(repository.profiles))
+	for _, profile := range repository.profiles {
+		profiles = append(profiles, profile)
+	}
+	sort.Slice(profiles, func(i, j int) bool { return profiles[i].Code < profiles[j].Code })
+	return profiles, nil
 }

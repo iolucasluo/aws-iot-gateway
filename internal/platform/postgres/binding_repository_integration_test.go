@@ -15,6 +15,7 @@ func TestBindingRepositoryRevokesAccessAndQueuesCertificateCleanup(t *testing.T)
 	if err := ApplyMigrations(ctx, pool); err != nil {
 		t.Fatalf("ApplyMigrations() error = %v", err)
 	}
+	applyProductSeeds(t, ctx, pool)
 
 	const (
 		deviceID  = "028f0000-0000-7000-8000-000000000001"
@@ -22,8 +23,8 @@ func TestBindingRepositoryRevokesAccessAndQueuesCertificateCleanup(t *testing.T)
 		deviceSN  = "fdr-10000000000000000000000000000001"
 	)
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO device_registry (id, device_sn, thing_name, pid, certificate_id, status)
-		VALUES ($1,$2,$2,'feeder-x1','certificate-binding-test','active')
+		INSERT INTO device_registry (dp_profile_id, id, device_sn, thing_name, pid, certificate_id, status)
+		VALUES ('40000000-0000-0000-0000-000000000001', $1,$2,$2,'feeder-x1','certificate-binding-test','active')
 	`, deviceID, deviceSN); err != nil {
 		t.Fatalf("insert device: %v", err)
 	}

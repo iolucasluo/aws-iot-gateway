@@ -1,7 +1,9 @@
 package media
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -10,10 +12,15 @@ import (
 )
 
 type objectStoreStub struct {
-	putKey    string
-	uploadKey string
-	payload   []byte
-	exists    bool
+	putKey      string
+	uploadKey   string
+	uploadType  string
+	downloadKey string
+	payload     []byte
+	exists      bool
+	existsErr   error
+	getURLErr   error
+	objects     map[string][]byte
 }
 
 func (store *objectStoreStub) PutURL(_ context.Context, key, _ string, _ time.Duration) (string, error) {
@@ -21,13 +28,83 @@ func (store *objectStoreStub) PutURL(_ context.Context, key, _ string, _ time.Du
 	return "https://uploads.example/object?signed=true", nil
 }
 func (store *objectStoreStub) GetURL(_ context.Context, key string, _ time.Duration) (string, error) {
+	if store.getURLErr != nil {
+		return "", store.getURLErr
+	}
 	return "https://downloads.example/" + key + "?signed=true", nil
 }
-func (store *objectStoreStub) Upload(_ context.Context, key, _ string, payload []byte) error {
-	store.uploadKey, store.payload = key, append([]byte(nil), payload...)
+func (store *objectStoreStub) Upload(_ context.Context, key, contentType string, payload []byte) error {
+	store.uploadKey, store.uploadType, store.payload = key, contentType, append([]byte(nil), payload...)
+	if store.objects != nil {
+		store.objects[key] = append([]byte(nil), payload...)
+	}
 	return nil
 }
-func (store *objectStoreStub) Exists(context.Context, string) (bool, error) { return store.exists, nil }
+func (store *objectStoreStub) Download(_ context.Context, key string, _ int64) ([]byte, error) {
+	store.downloadKey = key
+	return append([]byte(nil), store.objects[key]...), nil
+}
+func (store *objectStoreStub) Exists(_ context.Context, key string) (bool, error) {
+	if store.existsErr != nil {
+		return false, store.existsErr
+	}
+	if store.objects != nil {
+		_, ok := store.objects[key]
+		return ok, nil
+	}
+	return store.exists, nil
+}
+
+func TestGetSnapshotKeepsUploadingAfterTransientObjectStoreFailure(t *testing.T) {
+	t.Parallel()
+	const sourceKey = "staging/snapshots/device-uuid/018f0000-0000-7000-8000-000000000097.h264"
+	repository := &assetRepositoryStub{snapshot: Snapshot{
+		ID: "018f0000-0000-7000-8000-000000000097", DeviceID: "device-uuid", DeviceSN: "fdr-0001",
+		BindingID: "binding-id", ObjectKey: sourceKey, Status: "uploading",
+	}}
+	service := NewAssetService(
+		&objectStoreStub{existsErr: errors.New("temporary S3 failure")},
+		&commanderStub{}, repository, "staging", &snapshotConverterStub{}, nil,
+	)
+
+	if _, err := service.GetSnapshot(context.Background(), "binding-id", "fdr-0001", repository.snapshot.ID); !errors.Is(err, ErrSnapshotProcessing) {
+		t.Fatalf("GetSnapshot() error = %v", err)
+	}
+	if repository.snapshot.Status != "uploading" {
+		t.Fatalf("transient failure changed snapshot status to %q", repository.snapshot.Status)
+	}
+}
+
+func TestGetSnapshotNeverDowngradesReadyAfterPresignFailure(t *testing.T) {
+	t.Parallel()
+	const sourceKey = "staging/snapshots/device-uuid/018f0000-0000-7000-8000-000000000096.h264"
+	jpegKey := strings.TrimSuffix(sourceKey, ".h264") + ".jpg"
+	repository := &assetRepositoryStub{snapshot: Snapshot{
+		ID: "018f0000-0000-7000-8000-000000000096", DeviceID: "device-uuid", DeviceSN: "fdr-0001",
+		BindingID: "binding-id", ObjectKey: sourceKey, Status: "ready",
+	}}
+	service := NewAssetService(
+		&objectStoreStub{objects: map[string][]byte{jpegKey: []byte("jpeg")}, getURLErr: errors.New("temporary signing failure")},
+		&commanderStub{}, repository, "staging", &snapshotConverterStub{}, nil,
+	)
+
+	if _, err := service.GetSnapshot(context.Background(), "binding-id", "fdr-0001", repository.snapshot.ID); !errors.Is(err, ErrSnapshotProcessing) {
+		t.Fatalf("GetSnapshot() error = %v", err)
+	}
+	if repository.snapshot.Status != "ready" {
+		t.Fatalf("ready snapshot was downgraded to %q", repository.snapshot.Status)
+	}
+}
+
+type snapshotConverterStub struct {
+	input  []byte
+	output []byte
+}
+
+func (converter *snapshotConverterStub) H264ToJPEG(_ context.Context, payload []byte) ([]byte, error) {
+	converter.input = append([]byte(nil), payload...)
+	return append([]byte(nil), converter.output...), nil
+}
 
 type assetRepositoryStub struct {
 	snapshot  Snapshot
@@ -41,6 +118,13 @@ func (repository *assetRepositoryStub) CreateSnapshot(_ context.Context, snapsho
 func (repository *assetRepositoryStub) SetSnapshotStatus(_ context.Context, _, status string) error {
 	repository.snapshot.Status = status
 	return nil
+}
+func (repository *assetRepositoryStub) TransitionSnapshotStatus(_ context.Context, _, from, to string) (bool, error) {
+	if repository.snapshot.Status != from {
+		return false, nil
+	}
+	repository.snapshot.Status = to
+	return true, nil
 }
 func (repository *assetRepositoryStub) GetSnapshot(_ context.Context, bindingID, deviceSN, id string) (Snapshot, error) {
 	if repository.snapshot.BindingID != bindingID || repository.snapshot.DeviceSN != deviceSN || repository.snapshot.ID != id {
@@ -63,11 +147,40 @@ func (repository *assetRepositoryStub) ListRecordings(context.Context, string, s
 	return []Recording{repository.recording}, "", nil
 }
 
+func TestGetSnapshotConvertsUploadedH264ToJPEG(t *testing.T) {
+	t.Parallel()
+	const sourceKey = "staging/snapshots/device-uuid/018f0000-0000-7000-8000-000000000099.h264"
+	store := &objectStoreStub{objects: map[string][]byte{sourceKey: []byte("h264-idr")}}
+	converter := &snapshotConverterStub{output: []byte("jpeg-frame")}
+	repository := &assetRepositoryStub{snapshot: Snapshot{
+		ID: "018f0000-0000-7000-8000-000000000099", DeviceID: "device-uuid", DeviceSN: "fdr-0001",
+		BindingID: "binding-id", ObjectKey: sourceKey, Status: "uploading",
+	}}
+	service := NewAssetService(store, &commanderStub{}, repository, "staging", converter, nil)
+
+	result, err := service.GetSnapshot(context.Background(), "binding-id", "fdr-0001", repository.snapshot.ID)
+	if err != nil {
+		t.Fatalf("GetSnapshot() error = %v", err)
+	}
+	if result.Status != "ready" || !strings.Contains(result.URL, ".jpg?") {
+		t.Fatalf("GetSnapshot() result = %#v", result)
+	}
+	if store.downloadKey != sourceKey || store.uploadKey != strings.TrimSuffix(sourceKey, ".h264")+".jpg" || store.uploadType != "image/jpeg" {
+		t.Fatalf("downloadKey=%q uploadKey=%q uploadType=%q", store.downloadKey, store.uploadKey, store.uploadType)
+	}
+	if !bytes.Equal(converter.input, []byte("h264-idr")) || !bytes.Equal(store.payload, []byte("jpeg-frame")) {
+		t.Fatalf("converter input=%q uploaded payload=%q", converter.input, store.payload)
+	}
+	if repository.snapshot.Status != "ready" {
+		t.Fatalf("snapshot status = %q", repository.snapshot.Status)
+	}
+}
+
 func TestCreateSnapshotUsesEnvironmentAndDeviceScopedPresignedUpload(t *testing.T) {
 	t.Parallel()
 	store := &objectStoreStub{exists: true}
 	repository := &assetRepositoryStub{}
-	service := NewAssetService(store, &commanderStub{}, repository, "staging", func() (string, error) { return "018f0000-0000-7000-8000-000000000099", nil })
+	service := NewAssetService(store, &commanderStub{}, repository, "staging", &snapshotConverterStub{output: []byte("jpeg-frame")}, func() (string, error) { return "018f0000-0000-7000-8000-000000000099", nil })
 	result, err := service.CreateSnapshot(context.Background(), "livpet-staging", "device-uuid", "binding-id", "fdr-0001", true)
 	if err != nil {
 		t.Fatalf("CreateSnapshot() error = %v", err)
@@ -83,7 +196,7 @@ func TestUploadFeedAudioHashesStoredBytesAndCommandsDevice(t *testing.T) {
 		t.Run(contentType, func(t *testing.T) {
 			store := &objectStoreStub{}
 			commander := &commanderStub{}
-			service := NewAssetService(store, commander, &assetRepositoryStub{}, "staging", func() (string, error) { return "018f0000-0000-7000-8000-000000000098", nil })
+			service := NewAssetService(store, commander, &assetRepositoryStub{}, "staging", nil, func() (string, error) { return "018f0000-0000-7000-8000-000000000098", nil })
 			result, err := service.UploadFeedAudio(context.Background(), "livpet-staging", "device-uuid", "fdr-0001", contentType, []byte("pcm-bytes"))
 			if err != nil {
 				t.Fatalf("UploadFeedAudio() error = %v", err)
@@ -98,7 +211,7 @@ func TestUploadFeedAudioHashesStoredBytesAndCommandsDevice(t *testing.T) {
 func TestCreateRecordingWaitsForInitialDeviceACK(t *testing.T) {
 	t.Parallel()
 	commander := &commanderStub{}
-	service := NewAssetService(&objectStoreStub{}, commander, &assetRepositoryStub{}, "staging", func() (string, error) {
+	service := NewAssetService(&objectStoreStub{}, commander, &assetRepositoryStub{}, "staging", nil, func() (string, error) {
 		return "018f0000-0000-7000-8000-000000000097", nil
 	})
 	if _, err := service.CreateRecording(context.Background(), "livpet-staging", "device-uuid", "binding-id", "fdr-0001", 5); err != nil {
@@ -115,7 +228,7 @@ func TestCreateRecordingRejectsFailedInitialDeviceACK(t *testing.T) {
 		Code: "record_clip", Status: "error", Reason: "device rejected command with code 2",
 	}}}}
 	repository := &assetRepositoryStub{}
-	service := NewAssetService(&objectStoreStub{}, commander, repository, "staging", func() (string, error) {
+	service := NewAssetService(&objectStoreStub{}, commander, repository, "staging", nil, func() (string, error) {
 		return "018f0000-0000-7000-8000-000000000096", nil
 	})
 	if _, err := service.CreateRecording(context.Background(), "livpet-staging", "device-uuid", "binding-id", "fdr-0001", 5); err == nil {

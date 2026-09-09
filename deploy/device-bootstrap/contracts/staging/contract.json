@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "kind": "device-service-bootstrap",
+  "environment": "staging",
+  "service": {
+    "base_url": "https://c0hwf2qbj9.execute-api.ap-east-1.amazonaws.com",
+    "ca_pem_file": "service-ca.pem",
+    "ca_pem_sha256": "2c43952ee9e000ff2acc4e2ed0897c0a72ad5fa72c3d934e81741cbd54f05bd1"
+  },
+  "time_bootstrap": {
+    "url": "http://aws-io-Publi-CbZTozBpxeJP-1672547848.ap-east-1.elb.amazonaws.com/api/v1/device-time/bootstrap",
+    "keys": [
+      {
+        "kid": "time-staging-g1",
+        "spki_der_file": "time-bootstrap/time-staging-g1.der",
+        "sha256": "dd7609d27d18b07d96082cd6426f9d09d8c33f03e8e146d2f2919ceb3337bd01"
+      }
+    ]
+  }
+}

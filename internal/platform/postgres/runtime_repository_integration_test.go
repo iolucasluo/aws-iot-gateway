@@ -18,14 +18,15 @@ func TestRuntimeRepositoriesPersistCommandMediaEventAndWebhookOutbox(t *testing.
 	if err := ApplyMigrations(ctx, pool); err != nil {
 		t.Fatalf("ApplyMigrations() error = %v", err)
 	}
+	applyProductSeeds(t, ctx, pool)
 	const (
 		deviceID  = "038f0000-0000-7000-8000-000000000001"
 		bindingID = "038f0000-0000-7000-8000-000000000002"
 		deviceSN  = "fdr-20000000000000000000000000000001"
 	)
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO device_registry (id, device_sn, thing_name, pid, certificate_id, status)
-		VALUES ($1,$2,$2,'feeder-x1','certificate-runtime-test','active')
+		INSERT INTO device_registry (dp_profile_id, id, device_sn, thing_name, pid, certificate_id, status)
+		VALUES ('40000000-0000-0000-0000-000000000001', $1,$2,$2,'feeder-x1','certificate-runtime-test','active')
 	`, deviceID, deviceSN); err != nil {
 		t.Fatalf("insert device: %v", err)
 	}
@@ -68,6 +69,14 @@ func TestRuntimeRepositoriesPersistCommandMediaEventAndWebhookOutbox(t *testing.
 	}
 	if _, err := mediaRepository.GetSnapshot(ctx, bindingID, deviceSN, snapshotID); err != nil {
 		t.Fatalf("GetSnapshot(): %v", err)
+	}
+	transitioned, err := mediaRepository.TransitionSnapshotStatus(ctx, snapshotID, "uploading", "ready")
+	if err != nil || !transitioned {
+		t.Fatalf("TransitionSnapshotStatus(uploading -> ready) = %v, %v", transitioned, err)
+	}
+	transitioned, err = mediaRepository.TransitionSnapshotStatus(ctx, snapshotID, "uploading", "failed")
+	if err != nil || transitioned {
+		t.Fatalf("TransitionSnapshotStatus must not overwrite ready: %v, %v", transitioned, err)
 	}
 
 	eventRepository, _ := NewEventRepository(pool)

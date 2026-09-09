@@ -1,8 +1,11 @@
 /var/
 /bin/
 /.runtime/
+/.local/
+/deploy/environments/
 __pycache__/
 /.env
 /.env.*
 !/.env.example
 !/.env.*.example
+.ace-tool/

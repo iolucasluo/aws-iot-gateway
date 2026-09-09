@@ -1,8 +1,11 @@
 .git
 .gitignore
+.local
+.runtime
 .env
 .env.*
 !.env.example
 deploy
+deploy/environments
 docs
 **/*_test.go

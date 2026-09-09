@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -22,16 +23,65 @@ func NewActivationRepository(pool *pgxpool.Pool) (*ActivationRepository, error) 
 	return &ActivationRepository{pool: pool}, nil
 }
 
+func (repository *ActivationRepository) FindActiveProduct(ctx context.Context, pid string) (activation.Product, error) {
+	var product activation.Product
+	var capabilities []byte
+	if err := repository.pool.QueryRow(ctx, `
+		SELECT pid, name, capabilities, COALESCE(dp_profile_code, '') FROM products WHERE pid=$1 AND status='active'
+	`, pid).Scan(&product.PID, &product.Name, &capabilities, &product.DPProfile); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return activation.Product{}, activation.ErrProductUnavailable
+		}
+		return activation.Product{}, fmt.Errorf("find active product: %w", err)
+	}
+	if err := json.Unmarshal(capabilities, &product.Capabilities); err != nil {
+		return activation.Product{}, fmt.Errorf("decode active product capabilities: %w", err)
+	}
+	return product, nil
+}
+
+func (repository *ActivationRepository) ListActiveProducts(ctx context.Context) ([]activation.Product, error) {
+	rows, err := repository.pool.Query(ctx, `
+		SELECT pid, name, capabilities, COALESCE(dp_profile_code, '') FROM products WHERE status='active' ORDER BY pid
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list active products: %w", err)
+	}
+	defer rows.Close()
+	products := make([]activation.Product, 0)
+	for rows.Next() {
+		var product activation.Product
+		var capabilities []byte
+		if err := rows.Scan(&product.PID, &product.Name, &capabilities, &product.DPProfile); err != nil {
+			return nil, fmt.Errorf("scan active product: %w", err)
+		}
+		if err := json.Unmarshal(capabilities, &product.Capabilities); err != nil {
+			return nil, fmt.Errorf("decode active product capabilities: %w", err)
+		}
+		products = append(products, product)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active products: %w", err)
+	}
+	return products, nil
+}
+
 func (repository *ActivationRepository) Create(ctx context.Context, record activation.Record) error {
-	_, err := repository.pool.Exec(ctx, `
+	result, err := repository.pool.Exec(ctx, `
 		INSERT INTO device_activations (
-			id, internal_app_id, binding_external_user_id, method, status,
-			code_hash, idempotency_key, request_hash, expires_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+			id, internal_app_id, binding_external_user_id, method, pid, status,
+			code_hash, idempotency_key, request_hash, expires_at, dp_profile_id
+		) SELECT $1,$2,$3,$4,product.pid,$6,$7,$8,$9,$10, profile.id
+		  FROM products product JOIN dp_profiles profile ON profile.code=product.dp_profile_code
+		  WHERE product.pid=$5 AND product.status='active' AND profile.code=$11 AND profile.status='active'
+		  FOR SHARE OF product, profile
 	`, record.Activation.ID, record.Activation.InternalAppID, record.Activation.BindingExternalUserID,
-		string(record.Activation.Method), string(record.Activation.Status), record.CodeHash[:],
-		record.Activation.IdempotencyKey, record.Activation.RequestHash[:], record.Activation.ExpiresAt)
+		string(record.Activation.Method), record.Activation.PID, string(record.Activation.Status), record.CodeHash[:],
+		record.Activation.IdempotencyKey, record.Activation.RequestHash[:], record.Activation.ExpiresAt, record.Activation.DPProfile)
 	if err == nil {
+		if result.RowsAffected() != 1 {
+			return activation.ErrDPProfileUnavailable
+		}
 		return nil
 	}
 	var postgresError *pgconn.PgError
@@ -74,15 +124,17 @@ func (repository *ActivationRepository) ReservePreparation(
 		return activation.Record{}, fmt.Errorf("begin preparation reservation: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
-	var status, method, existingCSR string
+	var status, method, pid, existingCSR, profileID string
+	var productActive bool
 	var expiresAt time.Time
 	if err := transaction.QueryRow(ctx, `
-		SELECT a.status, a.method, a.expires_at, COALESCE(s.csr_pem, '')
+		SELECT a.status, a.method, a.pid, a.expires_at, COALESCE(s.csr_pem, ''), p.status='active', COALESCE(a.dp_profile_id::text, '')
 		FROM device_activations a
+		JOIN products p ON p.pid=a.pid
 		LEFT JOIN device_activation_sessions s ON s.device_activation_id=a.id
 		WHERE a.id=$1
-		FOR UPDATE OF a
-	`, activationID).Scan(&status, &method, &expiresAt, &existingCSR); err != nil {
+		FOR UPDATE OF a, p
+	`, activationID).Scan(&status, &method, &pid, &expiresAt, &existingCSR, &productActive, &profileID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return activation.Record{}, activation.ErrActivationNotFound
 		}
@@ -90,10 +142,23 @@ func (repository *ActivationRepository) ReservePreparation(
 	}
 	switch activation.Status(status) {
 	case activation.StatusPending:
+		if !productActive {
+			return activation.Record{}, activation.ErrProductUnavailable
+		}
+		if profileID == "" {
+			return activation.Record{}, activation.ErrDPProfileUnavailable
+		}
+		var profileStatus string
+		if err := transaction.QueryRow(ctx, `SELECT status FROM dp_profiles WHERE id=$1 FOR SHARE`, profileID).Scan(&profileStatus); err != nil {
+			return activation.Record{}, fmt.Errorf("lock activation DP profile: %w", err)
+		}
+		if profileStatus != "active" && profileStatus != "retired" {
+			return activation.Record{}, activation.ErrDPProfileUnavailable
+		}
 		if _, err := transaction.Exec(ctx, `
-			INSERT INTO device_registry (id, device_sn, thing_name, pid, status)
-			VALUES ($1,$2,$2,'feeder-x1','provisioning')
-		`, deviceInternalID, deviceSN); err != nil {
+			INSERT INTO device_registry (id, device_sn, thing_name, pid, dp_profile_id, status)
+			VALUES ($1,$2,$2,$3,$4,'provisioning')
+		`, deviceInternalID, deviceSN, pid, profileID); err != nil {
 			return activation.Record{}, fmt.Errorf("reserve device identity: %w", err)
 		}
 		csrHash := sha256.Sum256([]byte(csrPEM))
@@ -237,7 +302,7 @@ func (repository *ActivationRepository) CompleteActivation(ctx context.Context, 
 
 func (repository *ActivationRepository) ListDevices(ctx context.Context, internalAppID, externalUserID string) ([]activation.Device, error) {
 	rows, err := repository.pool.Query(ctx, `
-		SELECT d.device_sn, a.id::text, d.aws_iot_endpoint, b.binding_external_user_id, 'provisioned',
+		SELECT d.device_sn, a.id::text, d.pid, d.aws_iot_endpoint, b.binding_external_user_id, 'provisioned',
 		       d.presence_online, d.last_seen_at
 		FROM device_bindings b
 		JOIN device_registry d ON d.id=b.device_registry_id
@@ -253,7 +318,7 @@ func (repository *ActivationRepository) ListDevices(ctx context.Context, interna
 	for rows.Next() {
 		var device activation.Device
 		if err := rows.Scan(
-			&device.ID, &device.ActivationID, &device.Endpoint, &device.BindingExternalUserID,
+			&device.ID, &device.ActivationID, &device.PID, &device.Endpoint, &device.BindingExternalUserID,
 			&device.Status, &device.Online, &device.LastSeenAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan bound device: %w", err)
@@ -272,13 +337,14 @@ type rowQuerier interface {
 
 func loadActivationRecord(ctx context.Context, querier rowQuerier, id string, forUpdate bool) (activation.Record, error) {
 	query := `
-		SELECT a.id::text, a.internal_app_id, a.binding_external_user_id, a.method, a.status,
+		SELECT a.id::text, a.internal_app_id, a.binding_external_user_id, a.method, a.pid, a.status,
 		       a.code_hash, a.idempotency_key, a.request_hash, a.expires_at,
 		       COALESCE(a.device_registry_id::text, ''), COALESCE(d.device_sn, ''),
 		       COALESCE(s.csr_pem, ''), COALESCE(d.certificate_id, ''),
 		       COALESCE(s.certificate_pem, ''), COALESCE(d.aws_iot_endpoint, ''),
-		       COALESCE(s.installation_nonce, ''), COALESCE(a.failure_code, '')
+		       COALESCE(s.installation_nonce, ''), COALESCE(a.failure_code, ''), COALESCE(profile.code, '')
 		FROM device_activations a
+		LEFT JOIN dp_profiles profile ON profile.id=a.dp_profile_id
 		LEFT JOIN device_registry d ON d.id=a.device_registry_id
 		LEFT JOIN device_activation_sessions s ON s.device_activation_id=a.id
 		WHERE a.id=$1
@@ -293,9 +359,9 @@ func loadActivationRecord(ctx context.Context, querier rowQuerier, id string, fo
 	var certificateID, certificatePEM, endpoint, nonce string
 	if err := querier.QueryRow(ctx, query, id).Scan(
 		&record.Activation.ID, &record.Activation.InternalAppID, &record.Activation.BindingExternalUserID,
-		&method, &status, &codeHash, &record.Activation.IdempotencyKey, &requestHash,
+		&method, &record.Activation.PID, &status, &codeHash, &record.Activation.IdempotencyKey, &requestHash,
 		&record.Activation.ExpiresAt, &record.DeviceInternalID, &record.Activation.DeviceSN,
-		&record.CSRPEM, &certificateID, &certificatePEM, &endpoint, &nonce, &record.FailureCode,
+		&record.CSRPEM, &certificateID, &certificatePEM, &endpoint, &nonce, &record.FailureCode, &record.Activation.DPProfile,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return activation.Record{}, activation.ErrActivationNotFound
@@ -312,8 +378,36 @@ func loadActivationRecord(ctx context.Context, querier rowQuerier, id string, fo
 	if certificateID != "" && certificatePEM != "" && endpoint != "" && nonce != "" {
 		record.Installation = activation.Installation{
 			ActivationID: record.Activation.ID, DeviceID: record.Activation.DeviceSN,
-			CertificateID: certificateID, Certificate: certificatePEM, Endpoint: endpoint, ProofNonce: nonce,
+			PID: record.Activation.PID, CertificateID: certificateID, Certificate: certificatePEM, Endpoint: endpoint, ProofNonce: nonce,
 		}
 	}
 	return record, nil
+}
+
+func (repository *ActivationRepository) FindActiveDPProfile(ctx context.Context, code string) (activation.DPProfile, error) {
+	var profile activation.DPProfile
+	if err := repository.pool.QueryRow(ctx, `SELECT code,name FROM dp_profiles WHERE code=$1 AND status='active'`, code).Scan(&profile.Code, &profile.Name); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return activation.DPProfile{}, activation.ErrDPProfileUnavailable
+		}
+		return activation.DPProfile{}, fmt.Errorf("find active DP profile: %w", err)
+	}
+	return profile, nil
+}
+
+func (repository *ActivationRepository) ListActiveDPProfiles(ctx context.Context) ([]activation.DPProfile, error) {
+	rows, err := repository.pool.Query(ctx, `SELECT code,name FROM dp_profiles WHERE status='active' ORDER BY code`)
+	if err != nil {
+		return nil, fmt.Errorf("list DP profiles: %w", err)
+	}
+	defer rows.Close()
+	profiles := make([]activation.DPProfile, 0)
+	for rows.Next() {
+		var profile activation.DPProfile
+		if err := rows.Scan(&profile.Code, &profile.Name); err != nil {
+			return nil, fmt.Errorf("scan DP profile: %w", err)
+		}
+		profiles = append(profiles, profile)
+	}
+	return profiles, rows.Err()
 }

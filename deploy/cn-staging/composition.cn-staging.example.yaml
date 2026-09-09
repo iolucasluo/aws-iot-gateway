@@ -1,0 +1,49 @@
+api_version: explorex.io/v1
+kind: ProviderComposition
+metadata:
+  id: cn-staging
+  environment: staging
+  region: cn
+
+# This file contains only non-secret service names and protocol shapes.
+# Credentials, certificates and bucket names come from an ignored operator file.
+instances:
+  identity.cn_staging:
+    capability: identity
+    driver: ca_mqtt_identity
+    credential_ref: secret://cn-staging/identity
+  messaging.cn_staging:
+    capability: messaging
+    driver: mqtt_broker
+    endpoint: mqtts://mqtt.example.invalid:8883
+    trust_anchor_ref: config://cn-staging/mqtt-ca
+  realtime.cn_staging:
+    capability: realtime
+    driver: explorex_signal
+    endpoint: https://rtc.example.invalid
+  object.media_cn:
+    capability: object
+    driver: aliyun_oss
+    bucket_ref: secret://cn-staging/media-bucket
+  object.ota_cn:
+    capability: artifact
+    driver: tencent_cos
+    bucket_ref: secret://cn-staging/ota-bucket
+  signer.cn_staging:
+    capability: signer
+    driver: domestic_kms
+    key_ref: secret://cn-staging/time-key
+
+bindings:
+  identity: identity.cn_staging
+  messaging: messaging.cn_staging
+  realtime: realtime.cn_staging
+  media_object: object.media_cn
+  ota_artifact: object.ota_cn
+  signer: signer.cn_staging
+
+policy:
+  forbid_regions: [aws]
+  # 国内 staging 可以组合自建 MQTT、ExploreX signaling、OSS/COS 和国内 KMS；
+  # forbid_regions 仍保证 AWS 不进入该 composition 的数据面。
+  allow_mixed_provider: true

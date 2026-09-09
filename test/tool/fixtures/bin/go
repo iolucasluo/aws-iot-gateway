@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf 'go %s\n' "$*" >>"${GATEWAY_FAKE_CAPTURE:?}"
+test "${1:-}" = build
+shift
+
+output=
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o)
+      output=${2:?missing go build output}
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+test -n "$output"
+mkdir -p "$(dirname -- "$output")"
+cp "$(dirname -- "$0")/fake-service" "$output"
+chmod +x "$output"

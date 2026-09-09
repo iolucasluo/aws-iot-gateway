@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "kind": "device-service-bootstrap",
+  "environment": "development",
+  "service": {
+    "base_url": "http://192.168.11.146:14080"
+  },
+  "time_bootstrap": {
+    "url": "http://192.168.11.146:14080/api/v1/device-time/bootstrap",
+    "keys": [
+      {
+        "kid": "time-cwj-g1",
+        "spki_der_file": "time-bootstrap/time-cwj-g1.der",
+        "sha256": "9b3ba0556b2f3b70ba44e16f3a51ea35bacbf52a34d21f5a28e2ab1aee6e1d0c"
+      }
+    ]
+  }
+}

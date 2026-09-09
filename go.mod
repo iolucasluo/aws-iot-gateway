@@ -4,6 +4,7 @@ go 1.24
 
 require (
 	github.com/alicebob/miniredis/v2 v2.37.0
+	github.com/aliyun/alibabacloud-oss-go-sdk-v2 v1.6.0
 	github.com/aws/aws-sdk-go-v2 v1.43.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.36
 	github.com/aws/aws-sdk-go-v2/service/iot v1.77.5
@@ -13,10 +14,13 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/kms v1.49.3
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.107.1
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.46.5
+	github.com/eclipse/paho.mqtt.golang v1.4.3
 	github.com/fxamacker/cbor/v2 v2.9.2
+	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/redis/go-redis/v9 v9.17.3
 	github.com/veraison/go-cose v1.3.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -26,6 +30,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.36 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.36 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.37 // indirect
+	github.com/aws/aws-sdk-go-v2/service/cloudformation v1.71.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.16 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.29 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.36 // indirect
@@ -43,6 +48,8 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 	golang.org/x/crypto v0.37.0 // indirect
+	golang.org/x/net v0.39.0 // indirect
 	golang.org/x/sync v0.13.0 // indirect
 	golang.org/x/text v0.24.0 // indirect
+	golang.org/x/time v0.4.0 // indirect
 )

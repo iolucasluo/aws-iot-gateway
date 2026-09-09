@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -34,9 +36,11 @@ func (store *ACKStore) Store(ctx context.Context, deviceSN, sessionID string, ac
 	if err != nil {
 		return fmt.Errorf("marshal device ack: %w", err)
 	}
-	if err := store.client.SetNX(ctx, store.key(deviceSN, sessionID), payload, ttl).Err(); err != nil {
+	key := store.key(deviceSN, sessionID)
+	if err := store.client.SetNX(ctx, key, payload, ttl).Err(); err != nil {
 		return fmt.Errorf("store device ack: %w", err)
 	}
+	tracef("store sn=%s session=%s", deviceSN, sessionID)
 	return nil
 }
 
@@ -46,6 +50,7 @@ func (store *ACKStore) Wait(ctx context.Context, deviceSN, sessionID string, tim
 	}
 	waitContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	tracef("wait sn=%s session=%s timeout=%s", deviceSN, sessionID, timeout)
 	ticker := time.NewTicker(ackPollInterval)
 	defer ticker.Stop()
 	for {
@@ -55,6 +60,7 @@ func (store *ACKStore) Wait(ctx context.Context, deviceSN, sessionID string, tim
 			if err := json.Unmarshal(value, &ack); err != nil {
 				return nil, fmt.Errorf("decode device ack: %w", err)
 			}
+			tracef("found sn=%s session=%s", deviceSN, sessionID)
 			return ack, nil
 		}
 		if !errors.Is(err, redisclient.Nil) {
@@ -65,9 +71,16 @@ func (store *ACKStore) Wait(ctx context.Context, deviceSN, sessionID string, tim
 		}
 		select {
 		case <-waitContext.Done():
+			tracef("timeout sn=%s session=%s", deviceSN, sessionID)
 			return nil, device.ErrACKTimeout
 		case <-ticker.C:
 		}
+	}
+}
+
+func tracef(format string, args ...any) {
+	if os.Getenv("EXPLOREX_MQTT_TRACE") == "1" {
+		log.Printf("redis-ack: "+format, args...)
 	}
 }
 

@@ -33,6 +33,7 @@ func TestVerifierAuthenticatesInternalAppAndConsumesNonce(t *testing.T) {
 		InternalAppID: "livpet-staging",
 		APIKey:        "ak_livpet_staging",
 		APISecret:     "livpet-api-secret",
+		Permissions:   []string{"ota:deploy"},
 	}}, store, func() time.Time { return now })
 	if err != nil {
 		t.Fatalf("NewVerifier() error = %v", err)
@@ -56,6 +57,9 @@ func TestVerifierAuthenticatesInternalAppAndConsumesNonce(t *testing.T) {
 	}
 	if principal.InternalAppID != "livpet-staging" || principal.APIKey != "ak_livpet_staging" {
 		t.Fatalf("principal = %#v", principal)
+	}
+	if !principal.HasPermission("ota:deploy") || principal.HasPermission("ota:publish") {
+		t.Fatalf("principal permissions = %#v", principal.Permissions)
 	}
 	if _, err := verifier.Authenticate(context.Background(), request); !errors.Is(err, ErrNonceReplayed) {
 		t.Fatalf("replayed Authenticate() error = %v, want ErrNonceReplayed", err)

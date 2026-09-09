@@ -13,6 +13,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -26,6 +27,10 @@ type Service struct {
 // The device publishes status every 60 seconds. Three missed heartbeats fail closed to offline
 // even if an MQTT LWT or its SQS delivery is lost.
 const deviceOnlineFreshness = 3 * time.Minute
+
+var dpProfilePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]*-v[1-9][0-9]*$`)
+
+var productCapabilityPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,63}$`)
 
 func NewService() *Service {
 	return NewServiceWithRepository(nil, NewMemoryRepository())
@@ -42,19 +47,38 @@ func NewServiceWithRepository(provisioner Provisioner, repository Repository) *S
 func (service *Service) Create(ctx context.Context, input CreateInput) (Activation, error) {
 	if service.repository == nil || strings.TrimSpace(input.InternalAppID) == "" ||
 		strings.TrimSpace(input.BindingExternalUserID) == "" || strings.TrimSpace(input.IdempotencyKey) == "" ||
-		len(input.IdempotencyKey) > 128 || !input.Method.valid() {
+		len(input.IdempotencyKey) > 128 || !input.Method.valid() || strings.TrimSpace(input.PID) == "" {
 		return Activation{}, ErrInvalidInput
 	}
+	input.PID = strings.TrimSpace(input.PID)
+	// The request fingerprint contains caller-controlled fields only. Changing a
+	// product default must not change an existing activation or its retry result.
 	requestHash := sha256.Sum256([]byte(strings.Join([]string{
-		input.InternalAppID, input.BindingExternalUserID, string(input.Method),
+		input.InternalAppID, input.BindingExternalUserID, string(input.Method), input.PID,
 	}, "\n")))
 	if existing, err := service.repository.FindByIdempotency(ctx, input.InternalAppID, input.IdempotencyKey); err == nil {
-		if existing.Activation.RequestHash != requestHash {
+		// Compare caller fields; a product default change is not a new request.
+		value := existing.Activation
+		if value.PID != input.PID || value.Method != input.Method || value.BindingExternalUserID != input.BindingExternalUserID {
 			return Activation{}, ErrIdempotencyConflict
 		}
 		return Activation{}, ErrActivationInProgress
 	} else if !errors.Is(err, ErrActivationNotFound) {
 		return Activation{}, fmt.Errorf("find activation idempotency key: %w", err)
+	}
+	product, err := service.findActiveProduct(ctx, input.PID)
+	if err != nil {
+		return Activation{}, err
+	}
+	if !dpProfilePattern.MatchString(product.DPProfile) || len(product.DPProfile) > 96 {
+		return Activation{}, ErrDPProfileUnavailable
+	}
+	profile, err := service.repository.FindActiveDPProfile(ctx, product.DPProfile)
+	if err != nil {
+		return Activation{}, err
+	}
+	if profile.Code != product.DPProfile {
+		return Activation{}, ErrDPProfileUnavailable
 	}
 	id, err := randomUUID()
 	if err != nil {
@@ -65,7 +89,7 @@ func (service *Service) Create(ctx context.Context, input CreateInput) (Activati
 		return Activation{}, fmt.Errorf("generate activation code: %w", err)
 	}
 	value := Activation{
-		ID: id, Code: code, Method: input.Method, InternalAppID: input.InternalAppID,
+		ID: id, Code: code, Method: input.Method, PID: product.PID, DPProfile: profile.Code, InternalAppID: input.InternalAppID,
 		BindingExternalUserID: input.BindingExternalUserID, IdempotencyKey: input.IdempotencyKey,
 		RequestHash: requestHash, Status: StatusPending, ExpiresAt: service.now().Add(5 * time.Minute),
 	}
@@ -95,6 +119,9 @@ func (service *Service) Prepare(ctx context.Context, input PrepareInput) (Instal
 		}
 		return record.Installation, nil
 	}
+	if _, err := service.findActiveProduct(ctx, record.Activation.PID); err != nil {
+		return Installation{}, err
+	}
 	deviceInternalID, err := randomUUID()
 	if err != nil {
 		return Installation{}, fmt.Errorf("generate internal device id: %w", err)
@@ -112,12 +139,16 @@ func (service *Service) Prepare(ctx context.Context, input PrepareInput) (Instal
 	}
 	identity, err := service.provisioner.Provision(ctx, record.Activation.DeviceSN, input.CSRPEM)
 	if err != nil {
-		_ = service.repository.FailPreparation(ctx, input.ActivationID, "aws_iot_provision_failed")
+		_ = service.repository.FailPreparation(ctx, input.ActivationID, "operational_identity_provision_failed")
 		return Installation{}, fmt.Errorf("provision operational identity: %w", err)
 	}
+	endpoint := strings.TrimSpace(identity.Endpoint)
+	if endpoint == "" {
+		endpoint = strings.TrimSpace(identity.AWSIoTEndpoint)
+	}
 	if identity.DeviceID != record.Activation.DeviceSN || identity.CertificateID == "" ||
-		identity.CertificatePEM == "" || identity.AWSIoTEndpoint == "" {
-		_ = service.repository.FailPreparation(ctx, input.ActivationID, "aws_iot_incomplete_result")
+		identity.CertificatePEM == "" || endpoint == "" {
+		_ = service.repository.FailPreparation(ctx, input.ActivationID, "operational_identity_incomplete_result")
 		return Installation{}, fmt.Errorf("provision operational identity: incomplete result")
 	}
 	nonce, err := randomToken(32)
@@ -127,7 +158,7 @@ func (service *Service) Prepare(ctx context.Context, input PrepareInput) (Instal
 	}
 	installation := Installation{
 		ActivationID: input.ActivationID, DeviceID: identity.DeviceID, CertificateID: identity.CertificateID,
-		Certificate: identity.CertificatePEM, Endpoint: identity.AWSIoTEndpoint, ProofNonce: nonce,
+		PID: record.Activation.PID, Certificate: identity.CertificatePEM, Endpoint: endpoint, ProofNonce: nonce,
 	}
 	completed, err := service.repository.CompletePreparation(ctx, input.ActivationID, installation)
 	if err != nil {
@@ -144,7 +175,7 @@ func (service *Service) Confirm(ctx context.Context, input ConfirmInput) (Activa
 	if err != nil {
 		return Activation{}, err
 	}
-	if err := service.authorize(record, input.Code, record.Activation.Method); err != nil {
+	if err := service.authorizeConfirmation(record, input.Code); err != nil {
 		return Activation{}, err
 	}
 	if record.Installation.ActivationID == "" || record.CSRPEM == "" {
@@ -209,12 +240,95 @@ func (service *Service) ListDevicesForBinding(ctx context.Context, internalAppID
 	return devices, nil
 }
 
+func (service *Service) ListActiveProducts(ctx context.Context) ([]Product, error) {
+	if service.repository == nil {
+		return nil, ErrProductUnavailable
+	}
+	products, err := service.repository.ListActiveProducts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seenPIDs := make(map[string]struct{}, len(products))
+	for _, product := range products {
+		if strings.TrimSpace(product.PID) == "" || strings.TrimSpace(product.Name) == "" ||
+			validateProductCapabilities(product.Capabilities) != nil {
+			return nil, fmt.Errorf("active product catalog contains an invalid product")
+		}
+		if _, duplicate := seenPIDs[product.PID]; duplicate {
+			return nil, fmt.Errorf("active product catalog contains a duplicate pid")
+		}
+		seenPIDs[product.PID] = struct{}{}
+	}
+	return products, nil
+}
+
+func (service *Service) ProductSupports(ctx context.Context, pid, capability string) (bool, error) {
+	pid = strings.TrimSpace(pid)
+	capability = strings.TrimSpace(capability)
+	if pid == "" || capability == "" {
+		return false, ErrInvalidInput
+	}
+	product, err := service.findActiveProduct(ctx, pid)
+	if err != nil {
+		return false, err
+	}
+	for _, candidate := range product.Capabilities {
+		if candidate == capability {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (service *Service) findActiveProduct(ctx context.Context, pid string) (Product, error) {
+	if service.repository == nil {
+		return Product{}, ErrProductUnavailable
+	}
+	pid = strings.TrimSpace(pid)
+	product, err := service.repository.FindActiveProduct(ctx, pid)
+	if err != nil {
+		return Product{}, err
+	}
+	if product.PID != pid || strings.TrimSpace(product.Name) == "" ||
+		validateProductCapabilities(product.Capabilities) != nil {
+		return Product{}, fmt.Errorf("active product catalog returned an invalid product")
+	}
+	return product, nil
+}
+
+func validateProductCapabilities(capabilities []string) error {
+	if len(capabilities) > 32 {
+		return fmt.Errorf("too many product capabilities")
+	}
+	seen := make(map[string]struct{}, len(capabilities))
+	for _, capability := range capabilities {
+		if !productCapabilityPattern.MatchString(capability) {
+			return fmt.Errorf("invalid product capability")
+		}
+		if _, duplicate := seen[capability]; duplicate {
+			return fmt.Errorf("duplicate product capability")
+		}
+		seen[capability] = struct{}{}
+	}
+	return nil
+}
+
 func (service *Service) authorize(record Record, code string, expectedMethod Method) error {
+	if record.Activation.Method != expectedMethod || sha256.Sum256([]byte(code)) != record.CodeHash {
+		return ErrActivationUnauthorized
+	}
 	if !service.now().Before(record.Activation.ExpiresAt) {
 		return ErrActivationExpired
 	}
-	if record.Activation.Method != expectedMethod || sha256.Sum256([]byte(code)) != record.CodeHash {
+	return nil
+}
+
+func (service *Service) authorizeConfirmation(record Record, code string) error {
+	if record.Activation.Method == "" || sha256.Sum256([]byte(code)) != record.CodeHash {
 		return ErrActivationUnauthorized
+	}
+	if record.Activation.Status != StatusActivated && !service.now().Before(record.Activation.ExpiresAt) {
+		return ErrActivationExpired
 	}
 	return nil
 }
@@ -277,4 +391,24 @@ func randomUUID() (string, error) {
 	value[8] = (value[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		value[0:4], value[4:6], value[6:8], value[8:10], value[10:16]), nil
+}
+
+// ListActiveDPProfiles is independent of the product directory. Retired profiles
+// remain available to registered devices but cannot be selected for new activations.
+func (service *Service) ListActiveDPProfiles(ctx context.Context) ([]DPProfile, error) {
+	if service.repository == nil {
+		return nil, ErrDPProfileUnavailable
+	}
+	profiles, err := service.repository.ListActiveDPProfiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(profiles))
+	for _, profile := range profiles {
+		if len(profile.Code) > 96 || !dpProfilePattern.MatchString(profile.Code) || strings.TrimSpace(profile.Name) == "" || seen[profile.Code] {
+			return nil, fmt.Errorf("invalid DP profile catalog")
+		}
+		seen[profile.Code] = true
+	}
+	return profiles, nil
 }
