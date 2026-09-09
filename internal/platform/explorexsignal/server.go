@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -30,6 +31,7 @@ const (
 type ServerConfig struct {
 	AuthorizationToken string
 	PublicBaseURL      string
+	Logger             *log.Logger
 	ICEServers         []provider.ICEServer
 	Now                func() time.Time
 	NewID              func() (string, error)
@@ -45,6 +47,7 @@ type Server struct {
 	newID              func() (string, error)
 	newTicket          func() (string, error)
 	maxSessions        int
+	logger             *log.Logger
 
 	mu       sync.Mutex
 	sessions map[string]*signalSession
@@ -125,9 +128,16 @@ func NewServer(config ServerConfig) (*Server, error) {
 		newID:              newID,
 		newTicket:          newTicket,
 		maxSessions:        maxSessions,
+		logger:             config.Logger,
 		sessions:           make(map[string]*signalSession),
 		idem:               make(map[string]string),
 	}, nil
+}
+
+func (server *Server) logf(format string, args ...any) {
+	if server.logger != nil {
+		server.logger.Printf(format, args...)
+	}
 }
 
 func (server *Server) Handler() http.Handler {
@@ -370,15 +380,18 @@ func (server *Server) readPeer(sessionID string, session *signalSession, peer *s
 			delete(server.sessions, sessionID)
 		}
 		server.mu.Unlock()
+		server.logf("explorexsignal: session=%s role=%s disconnected; session torn down", sessionID, peer.role)
 		closePeer(counterpart)
 	}()
 	peer.conn.SetReadLimit(maxWebSocketBytes)
 	for {
 		messageType, payload, err := peer.conn.ReadMessage()
 		if err != nil {
+			server.logf("explorexsignal: session=%s role=%s read error: %v", sessionID, peer.role, err)
 			return
 		}
 		if messageType != websocket.TextMessage || !validWireMessage(peer.role, payload) {
+			server.logf("explorexsignal: session=%s role=%s rejected message type=%v len=%d", sessionID, peer.role, messageType, len(payload))
 			return
 		}
 		server.relay(sessionID, session, peer.role, payload)

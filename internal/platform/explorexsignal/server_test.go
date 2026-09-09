@@ -1,11 +1,14 @@
 package explorexsignal
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -224,5 +227,74 @@ func TestWebSocketURLHasOnlyOpaqueTicketQuery(t *testing.T) {
 	parsed, err := url.Parse(config)
 	if err != nil || parsed.Scheme != "wss" || parsed.Query().Get("role") != "viewer" || parsed.Query().Get("ticket") != "ticket-value" {
 		t.Fatalf("url = %q, err=%v", config, err)
+	}
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
+}
+
+func TestServerLogsRejectedMessageAndTeardown(t *testing.T) {
+	var buf lockedBuffer
+	server, err := NewServer(ServerConfig{
+		AuthorizationToken: "gateway-secret",
+		PublicBaseURL:      "http://signal.test",
+		Logger:             log.New(&buf, "", 0),
+		Now:                func() time.Time { return time.Unix(1_800_000_000, 0).UTC() },
+		NewID:              func() (string, error) { return "session-1", nil },
+		NewTicket:          func() (string, error) { return "ticket-1", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	expiresAt := time.Unix(1_800_000_300, 0).UTC().Format(time.RFC3339)
+	reqBody := `{"device_id":"device-1","binding_id":"binding-1","request_id":"request-1","requested_protocol":"explorex-signal-v1","capabilities":{"video_receive":true},"expires_at":"` + expiresAt + `"}`
+	request, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/sessions", strings.NewReader(reqBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer gateway-secret")
+	request.Header.Set("Idempotency-Key", "request-1")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var created sessionResponse
+	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	viewerURL := strings.Replace(created.ClientConfig["wss_url"].(string), "ws://signal.test", "ws"+strings.TrimPrefix(ts.URL, "http"), 1)
+	viewer, _, err := websocket.DefaultDialer.Dial(viewerURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer viewer.Close()
+
+	if err := viewer.WriteMessage(websocket.TextMessage, []byte(`{"type":"banana"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := viewer.ReadMessage(); err == nil {
+		t.Fatal("server kept the connection after an invalid message")
+	}
+	logged := buf.String()
+	if !strings.Contains(logged, "rejected message") || !strings.Contains(logged, "torn down") {
+		t.Fatalf("missing teardown logs: %q", logged)
 	}
 }
