@@ -198,6 +198,41 @@ func (client *Client) PutURL(ctx context.Context, key, contentType string, ttl t
 	return result.URL, nil
 }
 
+// PutURLWithSize mirrors the S3 media adapter: the byte count documents the intended
+// upload, but the presigned PUT itself cannot bound the body.
+func (client *Client) PutURLWithSize(
+	ctx context.Context, key, contentType string, size int64, ttl time.Duration,
+) (string, error) {
+	if size < 0 {
+		return "", fmt.Errorf("presign OSS upload: invalid input")
+	}
+	return client.PutURL(ctx, key, contentType, ttl)
+}
+
+// Stat reports the stored object size and content type, matching the S3 media adapter.
+// The local recording thumbnail worker uses the content type to confirm that the
+// uploaded poster frame really is a JPEG.
+func (client *Client) Stat(ctx context.Context, key string) (int64, string, error) {
+	if client == nil || client.api == nil || key == "" {
+		return 0, "", fmt.Errorf("stat OSS object: invalid input")
+	}
+	result, err := client.api.HeadObject(ctx, &oss.HeadObjectRequest{
+		Bucket: oss.Ptr(client.bucket), Key: oss.Ptr(key),
+	})
+	if err != nil {
+		return 0, "", fmt.Errorf("stat OSS object: %w", err)
+	}
+	var size int64
+	contentType := ""
+	if result != nil {
+		size = result.ContentLength
+		if result.ContentType != nil {
+			contentType = *result.ContentType
+		}
+	}
+	return size, contentType, nil
+}
+
 func (client *Client) GetURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
 	if err := client.validRequest(key, ttl); err != nil {
 		return "", fmt.Errorf("presign OSS download: invalid input")

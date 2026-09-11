@@ -246,8 +246,13 @@ func (server *Server) createSession(writer http.ResponseWriter, request *http.Re
 		writeJSONResponse(writer, http.StatusServiceUnavailable, map[string]string{"error": "unavailable"})
 		return
 	}
-	viewerURL, _ := server.publicWebSocketURL(sessionID, string(viewerRole), viewerTicket)
-	deviceURL, _ := server.publicWebSocketURL(sessionID, string(deviceRole), deviceTicket)
+	viewerURL, viewerOK := server.publicWebSocketURL(sessionID, string(viewerRole), viewerTicket)
+	deviceURL, deviceOK := server.publicWebSocketURL(sessionID, string(deviceRole), deviceTicket)
+	if !viewerOK || !deviceOK {
+		server.mu.Unlock()
+		writeJSONResponse(writer, http.StatusServiceUnavailable, map[string]string{"error": "unavailable"})
+		return
+	}
 	descriptor := provider.RealtimeSessionDescriptor{
 		SessionID:        sessionID,
 		ProviderInstance: "realtime.cn_staging",
@@ -455,14 +460,24 @@ func (server *Server) expireLocked(now time.Time) {
 
 func (server *Server) publicWebSocketURL(sessionID, requestedRole, ticket string) (string, bool) {
 	base, err := url.Parse(server.publicBaseURL)
-	if err != nil {
+	if err != nil || base.Host == "" {
 		return "", false
 	}
-	if base.Scheme == "http" {
+	switch base.Scheme {
+	case "http":
 		base.Scheme = "ws"
-	}
-	if base.Scheme == "https" {
+	case "https":
 		base.Scheme = "wss"
+	case "ws", "wss":
+	default:
+		// A scheme-less base such as "rtc.example.test:80" parses the host as the
+		// scheme, and any other scheme cannot carry a websocket upgrade at all.
+		return "", false
+	}
+	// A viewer can never open a socket on port 0. A misconfigured base URL has to
+	// fail session creation instead of silently handing the app an unusable address.
+	if base.Port() == "0" {
+		return "", false
 	}
 	base.Path = strings.TrimRight(base.Path, "/") + "/v1/sessions/" + url.PathEscape(sessionID) + "/ws"
 	query := base.Query()

@@ -298,3 +298,22 @@ func TestServerLogsRejectedMessageAndTeardown(t *testing.T) {
 		t.Fatalf("missing teardown logs: %q", logged)
 	}
 }
+
+func TestPublicWebSocketURLRejectsUnusableBase(t *testing.T) {
+	for _, baseURL := range []string{
+		"http://rtc.example.test:0",
+		"https://rtc.example.test:0",
+		"rtc.example.test:80",
+		"ws://",
+	} {
+		server, err := NewServer(ServerConfig{AuthorizationToken: "gateway-secret", PublicBaseURL: baseURL})
+		if err != nil {
+			continue
+		}
+		// A viewer cannot open a socket on a zero port or a non-websocket scheme, so
+		// the builder must fail closed instead of handing the app an unusable address.
+		if config, ok := server.publicWebSocketURL("session-1", "viewer", "ticket-value"); ok {
+			t.Fatalf("base %q produced viewer url %q", baseURL, config)
+		}
+	}
+}

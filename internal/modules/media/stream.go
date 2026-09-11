@@ -467,28 +467,55 @@ func parsePlaybackControl(value any, accepted StreamCapabilities) (*PlaybackCont
 		return nil, nil
 	}
 	fields, ok := value.(map[string]any)
-	if !ok || len(fields) != 5 || !accepted.VideoReceive ||
-		!containsString(accepted.DataChannels, ControlDataChannelProtocol) {
-		return nil, ErrStreamRejected
+	if !ok {
+		return nil, fmt.Errorf("%w: playback_control must be an object", ErrStreamRejected)
+	}
+	if len(fields) != 5 {
+		return nil, fmt.Errorf("%w: playback_control must carry exactly 5 fields (got %d)",
+			ErrStreamRejected, len(fields))
+	}
+	if !accepted.VideoReceive {
+		return nil, fmt.Errorf("%w: playback_control requires accepted video_receive",
+			ErrStreamRejected)
+	}
+	if !containsString(accepted.DataChannels, ControlDataChannelProtocol) {
+		return nil, fmt.Errorf("%w: playback_control requires the %s data_channel",
+			ErrStreamRejected, ControlDataChannelProtocol)
 	}
 	contract, contractOK := fields["contract"].(string)
+	if !contractOK || contract != "sd-playback.v1" {
+		return nil, fmt.Errorf("%w: playback_control contract must be %q", ErrStreamRejected,
+			"sd-playback.v1")
+	}
 	rawOps, opsOK := fields["ops"].([]any)
+	if !opsOK {
+		return nil, fmt.Errorf("%w: playback_control ops must be a list", ErrStreamRejected)
+	}
 	progress, progressOK := exactInt(fields["progress_interval_ms"])
+	if !progressOK || progress != 500 {
+		return nil, fmt.Errorf("%w: playback_control progress_interval_ms must be 500",
+			ErrStreamRejected)
+	}
 	maximum, maximumOK := exactInt(fields["max_concurrent_sessions"])
+	if !maximumOK || maximum != 1 {
+		return nil, fmt.Errorf("%w: playback_control max_concurrent_sessions must be 1",
+			ErrStreamRejected)
+	}
 	supportsRate, rateOK := fields["supports_rate"].(bool)
-	if !contractOK || contract != "sd-playback.v1" || !opsOK || !progressOK || progress != 500 ||
-		!maximumOK || maximum != 1 || !rateOK || supportsRate {
-		return nil, ErrStreamRejected
+	if !rateOK || supportsRate {
+		return nil, fmt.Errorf("%w: playback_control supports_rate must be false", ErrStreamRejected)
 	}
 	expected := []string{"load", "play", "pause", "resume", "seek", "skip", "stop", "get_state"}
 	if len(rawOps) != len(expected) {
-		return nil, ErrStreamRejected
+		return nil, fmt.Errorf("%w: playback_control ops must list %d operations (got %d)",
+			ErrStreamRejected, len(expected), len(rawOps))
 	}
 	ops := make([]string, len(expected))
 	for index := range expected {
 		operation, ok := rawOps[index].(string)
 		if !ok || operation != expected[index] {
-			return nil, ErrStreamRejected
+			return nil, fmt.Errorf("%w: playback_control ops[%d] must be %q", ErrStreamRejected,
+				index, expected[index])
 		}
 		ops[index] = operation
 	}
