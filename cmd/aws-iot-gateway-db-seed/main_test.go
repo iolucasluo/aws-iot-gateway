@@ -14,37 +14,37 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestValidateEnvironmentAllowsOnlyNonProduction(t *testing.T) {
+func TestValidateEnvironmentAllowsExplicitKnownEnvironments(t *testing.T) {
 	t.Parallel()
 
-	for _, environment := range []string{"development", "staging"} {
+	for _, environment := range []string{"development", "staging", "production"} {
 		if err := validateEnvironment(environment); err != nil {
 			t.Errorf("validateEnvironment(%q) error = %v", environment, err)
 		}
 	}
-	for _, environment := range []string{"", "production", "test"} {
+	for _, environment := range []string{"", "test"} {
 		if err := validateEnvironment(environment); err == nil {
 			t.Errorf("validateEnvironment(%q) error = nil, want rejection", environment)
 		}
 	}
 }
 
-func TestRunRejectsProductionBeforeReadingDatabaseConfiguration(t *testing.T) {
+func TestRunRejectsUnknownEnvironmentBeforeReadingDatabaseConfiguration(t *testing.T) {
 	t.Parallel()
 
 	var requested []string
 	err := run(context.Background(), func(key string) string {
 		requested = append(requested, key)
 		if key == "GATEWAY_ENVIRONMENT" {
-			return "production"
+			return "unknown"
 		}
 		return "must-not-be-read"
 	})
-	if err == nil || !strings.Contains(err.Error(), "must be development or staging") {
-		t.Fatalf("run(production) error = %v, want environment rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "must be development, staging or production") {
+		t.Fatalf("run(unknown) error = %v, want environment rejection", err)
 	}
 	if want := []string{"GATEWAY_ENVIRONMENT"}; !reflect.DeepEqual(requested, want) {
-		t.Fatalf("run(production) requested environment keys = %v, want %v", requested, want)
+		t.Fatalf("run(unknown) requested environment keys = %v, want %v", requested, want)
 	}
 }
 
@@ -130,4 +130,34 @@ func newIsolatedSeedRunnerDatabase(t *testing.T, ctx context.Context) (string, *
 		base.Close()
 	})
 	return isolatedDatabaseURL, pool
+}
+
+func TestProductionSeedsOnlyRuntimeContractsIdempotently(t *testing.T) {
+	ctx := context.Background()
+	databaseURL, pool := newIsolatedSeedRunnerDatabase(t, ctx)
+	getenv := func(key string) string {
+		switch key {
+		case "GATEWAY_ENVIRONMENT":
+			return "production"
+		case "DATABASE_URL":
+			return databaseURL
+		default:
+			return ""
+		}
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := run(ctx, getenv); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var profiles, products int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM dp_profiles`).Scan(&profiles); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM products`).Scan(&products); err != nil {
+		t.Fatal(err)
+	}
+	if profiles != 3 || products != 0 {
+		t.Fatalf("production profiles=%d products=%d, want 3/0", profiles, products)
+	}
 }

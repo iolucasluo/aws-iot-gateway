@@ -60,7 +60,7 @@ func TestStreamRenewSuccessAndRejections(t *testing.T) {
 		t.Fatal(err)
 	}
 	realtime := &httpRenewProvider{}
-	stream := media.NewRealtimeStreamService(realtime, "realtime.test", httpStreamCommander{}, &httpRenewRepository{}, nil)
+	stream := media.NewRealtimeStreamService(realtime, "realtime.test", httpStreamCommander{}, &httpRenewRepository{}, nil, nil)
 	handler := newSignedTestHandler(t, activation.NewService(), now, Dependencies{Binding: authorization, Media: stream})
 	for i, tc := range []struct {
 		body, token, id string

@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"os"
+	"strings"
 	"testing"
 
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/binding"
@@ -69,3 +71,16 @@ func (stub *domesticBindingRepositoryStub) ReleaseBinding(context.Context, strin
 
 var _ binding.Repository = (*domesticBindingRepositoryStub)(nil)
 var _ binding.DeviceCommander = (*domesticCommanderStub)(nil)
+
+func TestDomesticRuntimeSourceWiresOTAService(t *testing.T) {
+	source, err := os.ReadFile("domestic_runtime.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	for _, fragment := range []string{"otaRepository", "ota.NewService", "OTA: otaService"} {
+		if !strings.Contains(text, fragment) {
+			t.Fatalf("missing domestic OTA wiring %q", fragment)
+		}
+	}
+}

@@ -1,32 +1,35 @@
 # aws-iot-gateway PostgreSQL migrations
 
 本目录是 Gateway schema 的唯一权威源。这里只保留用户 activation、全局设备绑定、运行身份、设备控制、
-事件、媒体和 outbox。`products` 与 `product_dps` 是 Gateway schema 自有的只读激活/设备合同目录，不是旧 IoT 平台的 Product 域；没有
+事件、媒体和 outbox。`products` 与独立的 DP profile/definition/member 是 Gateway schema 自有的只读激活/设备合同目录，不是旧 IoT 平台的 Product 域；没有
 Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或 OTA campaign/platform 表。Gateway
 只保留签名固件版本与单设备 deployment 执行事实。
 
 ## 文件与执行约定
 
-- 当前尚未上线、没有量产数据，原 `001-004` 已压成唯一的 `001_initial.sql`；它直接描述最终 schema，
-  不包含旧宽泛表名、`ALTER TABLE` 过渡步骤或兼容债务。
-- 后续变更使用连续的 `NNN_<name>.up.sql` / `NNN_<name>.down.sql`，不得再修改已发布 migration。
-- 服务启动执行 `.sql` 与 `.up.sql`，按文件名排序并在同一 advisory-lock transaction 中登记到
-  `gateway_schema_migrations`；`.down.sql` 永不自动执行。
-- `001_initial.sql` 必须保持 Gateway 窄域业务边界，同时继承 explorex-api 的精确表/FK/索引命名、
-  `updated_at` trigger、数据库硬约束与 schema contract test 规范。
-- migration 通常只定义 schema，不写产品数据；development/staging 的 active PID 由
-  `aws-iot-gateway-db-seed` 显式执行 `../seeds/001_products.sql` 和 `../seeds/002_product_dps.sql` 初始化。唯一例外是 `002` 在识别到旧版
-  pre-production `001_initial.sql` 时回填其历史上唯一合法的 `feeder-x1`，以便在不删除旧 activation/registry
-  数据的前提下建立 PID 外键；fresh schema 不执行该数据回填。
+- 当前未上线、未量产，按确认的开发阶段重新建立基线：唯一 schema 文件为 `001_initial.sql`。
+- 文件直接声明最终表、外键、索引、函数和触发器；没有历史升级、回填、down 或示例数据。
+- PostgreSQL runner 保留事务、advisory lock 和 migration ledger，重复启动不会重复建表。
+- 产品与 DP 数据单独由 `../seeds/001_products.sql`、`../seeds/002_dp_profiles.sql` 显式初始化。
+- 后续真正需要增量升级时再添加顺序 migration；不提前保留当前已删除的兼容路径。
 
-## 当前 schema 快照（27 张业务表）
+## 本地数据库重建
+
+本次 schema 收敛只支持空库。旧开发库可能已登记同名 `001_initial.sql`，启动不会自动覆盖或补齐旧结构。
+停止对应 API/worker，明确确认目标开发数据库后重建空库，再执行 owning child 的 seed 入口并启动服务。
+也可以为该环境配置全新的空数据库。不得仅删除 migration ledger 后在旧业务表上重跑。
+本仓不自动 DROP 现有数据库，不操作其他开发者的共享 PostgreSQL/Redis；现有设备测试记录不做兼容搬迁。
+
+## 当前 schema 快照
 
 | 表 | 用途 | PK | 主要 FK / 删除语义 |
 |---|---|---|---|
-| `products` | 只读激活产品目录（PID、名称、状态、App 可消费的能力 ID） | `id` | 被 registry/activation 以 PID RESTRICT 引用 |
-| `product_dps` | Gateway-owned 产品 DP 合同（code、类型、方向、JSON spec、状态） | `id` | `product_id → products`（RESTRICT）；按 `(product_id, code)` 唯一 |
-| `device_registry` | 设备运行权威记录、ThingName、证书与 presence | `id` | — |
-| `device_activations` | internal app 用户激活 saga | `id` | `device_registry_id → device_registry`（nullable, RESTRICT） |
+| `products` | 只读激活产品目录（PID、名称、状态、App 可消费的能力 ID） | `id` | dp_profile_code → dp_profiles(code) RESTRICT；被 registry/activation 以 PID RESTRICT 引用 |
+| `dp_profiles` | 版本化命令组合，active/retired/disabled | `id` | `code` 唯一，无产品 FK |
+| `dp_definitions` | 共享 code/type/direction/spec | `id` | `(id, code)` 唯一供成员复合 FK 使用 |
+| `dp_profile_members` | profile 成员及单组启停状态 | `id` | profile code/definition ID RESTRICT；`(dp_profile_code, code)` 唯一 |
+| `device_registry` | 设备运行权威记录、ThingName、证书与 presence | `id` | `dp_profile_id → dp_profiles`（NOT NULL, RESTRICT）；PID → products |
+| `device_activations` | internal app 用户激活 saga | `id` | `device_registry_id → device_registry`（nullable, RESTRICT）；`dp_profile_id → dp_profiles`（NOT NULL, RESTRICT） |
 | `device_activation_sessions` | activation 安装 session | `id` | `device_activation_id → device_activations`（CASCADE） |
 | `device_bindings` | 全局唯一设备归属；用户字段含不可变 trigger | `id` | `device_registry_id → device_registry`（RESTRICT） |
 | `device_component_bindings` | 设备 capability 到 provider instance 的当前绑定事实 | `id` | registry + binding（RESTRICT）；每 capability 一个 active |
@@ -55,19 +58,12 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或 O
 只会产生无消费方的第二身份。`device_events`、`webhook_deliveries`、`idempotency_records` 和
 `audit_logs` 是 append-only 事实，不需要 `updated_at`。
 
-## 版本记录
+## 当前基线
 
-- `001_initial`：原 `001-004` 的 pre-production squash。包含窄域 Internal AWS API、设备 MQTT
-  heartbeat/LWT presence、运行证书撤销补偿 outbox、精确表/FK/索引命名、统一 `set_updated_at()`
-  trigger，以及 `device_bindings.binding_external_user_id` 的 23514 不可变 trigger。
-- `002_legacy_product_catalog`：只对已登记旧版 `001_initial.sql` 且缺少 `device_activations.pid` 的 schema
-  生效；创建最小产品目录、回填旧 activation PID、移除 registry 的隐式默认 PID，并建立 registry/activation
-  到 `products(pid)` 的 RESTRICT 外键。fresh schema 为 no-op；为避免丢失历史数据，不提供自动 down。
-- `003_product_capabilities`：为已经应用旧 001/002 的产品目录补充只读 JSON capability ID 数组；fresh schema
-  已由 001 直接包含同一字段与约束。
-- `004_single_device_ota`：增加签名固件版本和单设备 deployment；不增加 campaign、调度器或 AWS IoT Jobs。
-- `005_local_recording_projection`：新增 SD v1 metadata projection、binding-scoped opaque cursor 和 private thumbnail outbox；不上传录像主体。
-- `006_local_thumbnail_status_text`：将 thumbnail outbox 的 `status` 从定长 `varchar(16)` 改为 `text`，继续由 CHECK 约束限定合法状态，避免状态名长度与字段宽度漂移。
-- `007_product_dps`：增加 Gateway-owned `product_dps` 合同目录和按产品/code 唯一约束；通用 commands 在发布前按设备 PID
-  加载 active DP 并校验存在性、状态、方向和 JSON 形状。产品/DP 仍只通过 reviewed seed/migration 维护。
-- `008_provider_composition`：增加 provider-neutral `device_component_bindings` 绑定事实；每台设备每项 capability 只允许一个 active provider instance，external ref 保持 opaque，不引入 tenant/Project/Factory 域。
+`001_initial.sql` 完整包含 activation/binding、产品与 DP profiles、OTA 环境切换、provider bindings、
+本地录像投影和 thumbnail outbox。所有状态约束、唯一索引、RESTRICT/CASCADE 外键与更新时间触发器保留。
+`local_recording_thumbnail_outbox.status` 直接使用 text，无历史 varchar 扩列步骤。
+
+profile code 外键是明确命名例外：稳定版本 code 唯一，直接引用使 seeds 可读；表主键仍保留 UUID。
+设备/activation 保存 profile 引用，后续修改产品默认值不切换已有设备。
+初始化流程见 [seeds](../seeds/README.md)，DP 合同见 [DP profiles v1](../../docs/contracts/dp-profiles-v1.md)。

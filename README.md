@@ -1,8 +1,11 @@
 # aws-iot-gateway
 
-`aws-iot-gateway` 是 LivPet 和内部 Demo App 共用的 **Internal AWS API**。它拥有用户激活、全局唯一绑定、设备运行身份和受限设备操作；`products` 与 `product_dps` 作为受控的只读激活/设备合同目录，不实现 Developer、Project、Product/DP CRUD/owner、Factory、tenant、IDevID、RMA 或 OTA campaign 平台。OTA 只保留签名版本和单设备 deployment。
+`aws-iot-gateway` 是 LivPet 和内部 Demo App 共用的 **Internal AWS API**。它拥有用户激活、全局唯一绑定、设备运行身份和受限设备操作；`products` 与独立的 `dp_profiles`/`dp_definitions`/`dp_profile_members` 作为受控的只读激活/设备合同目录，不实现 Developer、Project、Product/DP CRUD/owner、Factory、tenant、IDevID、RMA 或 OTA campaign 平台。OTA 只保留签名版本和单设备 deployment。
 
-`/api/v1/openapi/*` 中的 `openapi` 只是 LivPet wire compatibility，产品和代码语义均使用 internal app。App 必须先读取受控产品目录并在创建 activation 时显式提交 active PID；Gateway 不再默认 `feeder-x1`。
+`/api/v1/openapi/*` 中的 `openapi` 只是 LivPet wire compatibility，产品和代码语义均使用 internal app。App 读取受控产品目录，创建 activation 时只提交 active `pid`。
+Gateway 根据 `products.dp_profile_code` 确定协议；多个产品可共享 profile，activation/设备保存当时的协议快照。
+成员表使用 `dp_profile_code` 外键。正式 DP 合同及产品默认映射通过显式 seed 发布；
+模型、迁移和协调发布要求见 [DP profiles v1](docs/contracts/dp-profiles-v1.md)。
 
 ## 认证与隔离
 
@@ -30,7 +33,7 @@
 - 局域网媒体：Gateway 只授权并经 MQTT 开关设备的 ONVIF/RTSP 短租约；不代理、
   不拨号 RFC 1918 设备地址，App 在同一 LAN 直连设备。
 
-隔离的 dev/staging IaC 位于 `deploy/cloudformation/`。内部 API 仍走 API Gateway → VPC Link → private NLB；另一个公开 ALB 的 HTTP listener 只转发精确的 `/api/v1/device-time/bootstrap`，默认拒绝其他 path。两者共用双 API ECS，后台为双 worker ECS、RDS PostgreSQL、ElastiCache Redis、SQS/DLQ、IoT Rule、KVS、S3 和独立 KMS time signer。它不是生产部署基线。
+隔离的 dev/staging IaC 位于 `deploy/aws-staging/cloudformation/`。内部 API 仍走 API Gateway → VPC Link → private NLB；另一个公开 ALB 的 HTTP listener 只转发精确的 `/api/v1/device-time/bootstrap`，默认拒绝其他 path。两者共用双 API ECS，后台为双 worker ECS、RDS PostgreSQL、ElastiCache Redis、SQS/DLQ、IoT Rule、KVS、S3 和独立 KMS time signer。它不是生产部署基线。
 
 更新 CloudFormation 时，不得把 `describe-stacks` 返回的 NoEcho 参数值 `****` 当成原值重新提交。
 需要保持现有 secret ARN 时使用 `UsePreviousValue`；确需显式传值时，只能从获批准的安全输入或当前
@@ -43,6 +46,7 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 | `GET /healthz` | 运行检查 | 无 |
 | `POST /api/v1/device-time/bootstrap` | 无可信 RTC 的设备 | 公共窄路由；COSE 验签后可信 |
 | `GET /api/v1/openapi/device-products` | 内部 App backend | HMAC v1；只读 active PID/name/capabilities 目录 |
+| `GET /api/v1/openapi/dp-profiles` | 内部 App backend | HMAC v1；只读 active profile code/name |
 | `POST /api/v1/openapi/device-activations` | 内部 App backend | HMAC v1 |
 | `GET /api/v1/openapi/device-activations/{id}` | 内部 App backend | HMAC v1 |
 | `POST /api/v1/openapi/device-activations/{id}/sessions` | LivPet commissioning 兼容路径 | HMAC v1 |
@@ -146,6 +150,9 @@ Gateway 不转发 ONVIF SOAP/RTSP 媒体，DP/PTZ 继续走 OpenAPI → MQTT。
 
 ## 本地运行与验证
 
+当前未上线基线已收敛为 `db/migrations/001_initial.sql`，旧开发库需重建或改用新空库后执行 seeds。
+不会兼容升级或自动覆盖旧库，见 [数据库初始化说明](db/migrations/README.md)。
+
 首次本地联调把 `.env.local.example` 复制为开发者自己的 `.env.dev`、`.env.cwj` 等
 `.env.<name>` 文件；这些文件全部被 Git 忽略。它们只保存该开发环境的 Gateway/AWS 资源参数和
 Internal App 配置，AWS access key 仍走 standard credential chain，不写入环境文件。
@@ -182,9 +189,10 @@ go run ./cmd/aws-iot-gateway
 
 `aws-iot-gateway-db-seed` 是 development/staging 的显式一次性初始化命令：它先幂等执行 migration，再事务执行
 `db/seeds/`，当前写入 `feeder-x1`、`lamp-x1` 和 `minion-cam-x1`。API/worker 启动不会自动 seed；漏掉该步骤时产品目录为空、
-activation 必然返回 `product_unavailable`。该命令拒绝空环境和 `production`。详细边界见
+activation 必然返回 `product_unavailable`。该命令拒绝空环境和未知环境；`production` 只执行 `seeds/002_dp_profiles.sql` 正式合同，
+不执行演示产品 seed。详细边界见
 [db/seeds/README.md](db/seeds/README.md)，staging 一次性 ECS 执行方式见
-[deploy/staging/README.md](deploy/staging/README.md)。
+[deploy/aws-staging/README.md](deploy/aws-staging/README.md)。
 
 需要让真实 Taixin/Anyka 硬件访问 Gateway 时，不要在各硬件仓手写 endpoint、CA 或 time SPKI。共享
 `development`（local/LAN）与 `staging` 环境的公开 `Gateway Device Bootstrap Contract` 发布位置分别是
@@ -219,3 +227,17 @@ OTA 发布记录可选携带成对的 `target_environment_id` 与两位 `target_
 限制；普通软件 OTA 仍通过无目标环境的唯一 build、App 过滤和设备端校验保持严格递增。Gateway 仍只以
 签名 release/manifest、目标 version/build 和设备重启事件判定
 升级结果，不把环境标签或 MQTT ACK 当作安装成功证据。
+
+
+### 国内 staging 单设备 OTA
+
+国内 `domestic-dev` 仅在显式设置 `OTA_DEVICE_DOWNLOAD_BASE_URL`（本服务 HTTPS origin）时装配 OTA。
+复用已配置的私有 OSS object adapter，OTA 对象限定 `ota/` 命名空间；本测试接入不声称独立 bucket/IAM 隔离。
+发布者需要 `ota:publish`，上传必须完整携带 API 返回的 `upload.headers`（包括禁止覆盖的签名 header）。
+`complete` 从 OSS 读取最多 3 MiB 的对象，核对实际长度和 SHA-256 后才发布 available。
+设备下载走 Redis 15 分钟、最多四次的短期 capability，Gateway 流式转发 OSS 内容；签名私钥不上云。
+普通媒体调用不使用新增 OTA 上传方法，未配置 OTA 的国内实例保持原有启动行为。
+
+网络 OTA 测试前应取出含其他版本 OTA 包的 SD 卡：设备的 SD OTA 是“版本/build 不同即安装”，
+否则网络升级后的重启可能再次装回 SD 卡上的旧版本。成功以设备 boot 事件的 version/build 匹配为准，
+不能把发布成功或 MQTT accepted 当作安装成功。

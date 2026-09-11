@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-func TestValidateCommandsAgainstProductDPDefinitions(t *testing.T) {
+func TestValidateCommandsAgainstDPDefinitions(t *testing.T) {
 	t.Parallel()
-	definitions := []ProductDPDefinition{
+	definitions := []DPDefinition{
 		{Code: "video_res", Type: "object", Direction: "wo", Status: "active"},
 		{Code: "privacy_mode", Type: "object", Direction: "wo", Status: "disabled"},
 		{Code: "device_info", Type: "object", Direction: "ro", Status: "active"},
@@ -39,7 +39,7 @@ func TestValidateCommandsAgainstProductDPDefinitions(t *testing.T) {
 
 func TestValidateCommandsChecksObjectPayloadShape(t *testing.T) {
 	t.Parallel()
-	definitions := []ProductDPDefinition{{Code: "privacy_mode", Type: "object", Direction: "wo", Status: "active"}}
+	definitions := []DPDefinition{{Code: "privacy_mode", Type: "object", Direction: "wo", Status: "active"}}
 	err := ValidateCommands(definitions, []CommandInput{{Code: "privacy_mode", Value: json.RawMessage(`true`)}})
 	if !errors.Is(err, ErrDPInvalidValue) {
 		t.Fatalf("ValidateCommands() error = %v, want ErrDPInvalidValue", err)
@@ -48,7 +48,7 @@ func TestValidateCommandsChecksObjectPayloadShape(t *testing.T) {
 
 func TestValidateCommandsChecksRequiredObjectFieldsWhenValueIsOmitted(t *testing.T) {
 	t.Parallel()
-	definitions := []ProductDPDefinition{{
+	definitions := []DPDefinition{{
 		Code: "feed", Type: "object", Direction: "wo", Status: "active",
 		Spec: json.RawMessage(`{"required":["portions"]}`),
 	}}
@@ -60,7 +60,7 @@ func TestValidateCommandsChecksRequiredObjectFieldsWhenValueIsOmitted(t *testing
 
 func TestValidateCommandsChecksNumericPropertyBounds(t *testing.T) {
 	t.Parallel()
-	definitions := []ProductDPDefinition{{
+	definitions := []DPDefinition{{
 		Code: "speaker_vol", Type: "object", Direction: "wo", Status: "active",
 		Spec: json.RawMessage(`{"required":["volume"],"properties":{"volume":{"type":"integer","minimum":0,"maximum":100}}}`),
 	}}
@@ -82,7 +82,7 @@ func TestValidateCommandsChecksNumericPropertyBounds(t *testing.T) {
 
 func TestValidateCommandsRejectsLifecycleDPsFromGenericPath(t *testing.T) {
 	t.Parallel()
-	definitions := []ProductDPDefinition{
+	definitions := []DPDefinition{
 		{Code: "factory_reset", Type: "object", Direction: "downlink_request_ack", Status: "active"},
 		{Code: "recommission", Type: "object", Direction: "downlink_request_ack", Status: "active"},
 		{Code: "reset_wifi", Type: "object", Direction: "downlink_request_ack", Status: "active"},
@@ -97,7 +97,7 @@ func TestValidateCommandsRejectsLifecycleDPsFromGenericPath(t *testing.T) {
 
 func TestValidateCommandsEnforcesConditionalVariants(t *testing.T) {
 	t.Parallel()
-	definitions := []ProductDPDefinition{{
+	definitions := []DPDefinition{{
 		Code: "ptz", Type: "object", Direction: "downlink_request_ack", Status: "active",
 		Spec: json.RawMessage(`{
 			"required":["op"],
@@ -141,7 +141,7 @@ func TestValidateCommandsEnforcesConditionalVariants(t *testing.T) {
 
 func TestValidateCommandsEnforcesNestedAndCrossFieldConstraints(t *testing.T) {
 	t.Parallel()
-	definitions := []ProductDPDefinition{{
+	definitions := []DPDefinition{{
 		Code: "stream", Type: "object", Direction: "downlink_request_ack", Status: "active",
 		Spec: json.RawMessage(`{
 			"required":["start"],
@@ -185,7 +185,7 @@ func TestValidateCommandsEnforcesNestedAndCrossFieldConstraints(t *testing.T) {
 
 func TestValidateCommandsEnforcesContinuousRecordingPresets(t *testing.T) {
 	t.Parallel()
-	definitions := []ProductDPDefinition{{
+	definitions := []DPDefinition{{
 		Code: "record_mode", Type: "object", Direction: "downlink_request_ack", Status: "active",
 		Spec: json.RawMessage(`{
 			"properties":{
@@ -214,7 +214,7 @@ func TestValidateCommandsEnforcesContinuousRecordingPresets(t *testing.T) {
 
 func TestValidateCommandsEnforcesRecordStartVariant(t *testing.T) {
 	t.Parallel()
-	definitions := []ProductDPDefinition{{
+	definitions := []DPDefinition{{
 		Code: "record_start", Type: "object", Direction: "downlink_request_ack", Status: "active",
 		Spec: json.RawMessage(`{
 			"properties":{
@@ -241,7 +241,7 @@ func TestValidateCommandsEnforcesRecordStartVariant(t *testing.T) {
 
 func TestValidateCommandsEnforcesNestedRectangleBounds(t *testing.T) {
 	t.Parallel()
-	definitions := []ProductDPDefinition{{
+	definitions := []DPDefinition{{
 		Code: "alarm_config", Type: "object", Direction: "downlink_request_ack", Status: "active",
 		Spec: json.RawMessage(`{
 			"properties":{"roi":{
@@ -272,7 +272,7 @@ func TestValidateCommandsEnforcesNestedRectangleBounds(t *testing.T) {
 
 func TestValidateCommandsEnforcesEnumPropertyType(t *testing.T) {
 	t.Parallel()
-	definitions := []ProductDPDefinition{{
+	definitions := []DPDefinition{{
 		Code: "video_res", Type: "object", Direction: "downlink_request_ack", Status: "active",
 		Spec: json.RawMessage(`{
 			"required":["resolution"],

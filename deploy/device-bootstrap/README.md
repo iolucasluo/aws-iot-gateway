@@ -132,7 +132,7 @@ sh deploy/device-bootstrap/tests/test_contract_publishers.sh
 ```
 
 `deploy/local/test_local_compose_contract.sh` 仍只验证 local PostgreSQL/Redis compose；
-`deploy/staging/test_*.sh` 仍只验证 staging stack、policy 与 smoke 行为，它们不是 Contract
+`deploy/aws-staging/test_*.sh` 仍只验证 staging stack、policy 与 smoke 行为，它们不是 Contract
 publisher 的重复测试。
 
 消费者的校验必须拒绝：未知/secret 字段、文件 SHA 不匹配、目录逃逸、非 P-256 SPKI、重复 `kid`、release 环境 HTTP，以及 development Contract 被用于 release build。

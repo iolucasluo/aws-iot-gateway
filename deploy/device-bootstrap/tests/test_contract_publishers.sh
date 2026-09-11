@@ -21,7 +21,7 @@ test -f "$CWJ_CONTRACT/contract.json"
 test -d "$CWJ_CONTRACT/time-bootstrap"
 test ! -e "$CWJ_CONTRACT/service-ca.pem"
 test ! -e "$ROOT/deploy/local/device-bootstrap-contract"
-test ! -e "$ROOT/deploy/staging/device-bootstrap-contract"
+test ! -e "$ROOT/deploy/aws-staging/device-bootstrap-contract"
 grep -Fx '/.local/' "$ROOT/.gitignore" >/dev/null
 
 python3 - "$DEVELOPMENT_CONTRACT/contract.json" "$DEVELOPMENT_CONTRACT" <<'PY'

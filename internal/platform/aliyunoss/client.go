@@ -3,6 +3,8 @@ package aliyunoss
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss"
 	"github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss/credentials"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/ota"
 )
 
 var (
@@ -105,6 +108,78 @@ func validateEndpoint(raw string, public bool) error {
 
 func newClient(api API, presigner Presigner, bucket string) *Client {
 	return &Client{api: api, presigner: presigner, bucket: bucket}
+}
+
+func (client *Client) PrepareUpload(ctx context.Context, key string, size int64, checksum string, ttl time.Duration) (ota.UploadTarget, error) {
+	if client == nil || client.presigner == nil || !validOTAKey(key) || size <= 0 || size > 3<<20 || ttl <= 0 || ttl > 15*time.Minute || !validSHA256(checksum) {
+		return ota.UploadTarget{}, fmt.Errorf("presign OTA upload: invalid input")
+	}
+	result, err := client.presigner.Presign(ctx, &oss.PutObjectRequest{
+		Bucket: oss.Ptr(client.bucket), Key: oss.Ptr(key), ContentType: oss.Ptr("application/gzip"),
+		ContentLength: oss.Ptr(size), ForbidOverwrite: oss.Ptr("true"),
+	}, oss.PresignExpires(ttl))
+	if err != nil {
+		return ota.UploadTarget{}, fmt.Errorf("presign OTA upload: %w", err)
+	}
+	if result == nil || result.URL == "" {
+		return ota.UploadTarget{}, fmt.Errorf("presign OTA upload: empty result")
+	}
+	headers := map[string]string{"Content-Type": "application/gzip", "Content-Length": fmt.Sprintf("%d", size), "x-oss-forbid-overwrite": "true"}
+	for name, value := range result.SignedHeaders {
+		headers[name] = value
+	}
+	return ota.UploadTarget{URL: result.URL, Method: "PUT", Headers: headers, ExpiresAt: time.Now().UTC().Add(ttl)}, nil
+}
+
+func (client *Client) Verify(ctx context.Context, key string, size int64, checksum string) error {
+	if client == nil || !validOTAKey(key) || size <= 0 || size > 3<<20 || !validSHA256(checksum) {
+		return fmt.Errorf("verify OTA object: invalid input")
+	}
+	payload, err := client.Download(ctx, key, size)
+	if err != nil {
+		return fmt.Errorf("verify OTA object: %w", err)
+	}
+	digest := sha256.Sum256(payload)
+	if int64(len(payload)) != size || hex.EncodeToString(digest[:]) != checksum {
+		return fmt.Errorf("verify OTA object: size or SHA-256 mismatch")
+	}
+	return nil
+}
+
+func (client *Client) DownloadURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	if !validOTAKey(key) {
+		return "", fmt.Errorf("OTA key is invalid")
+	}
+	return client.GetURL(ctx, key, ttl)
+}
+
+func validOTAKey(key string) bool {
+	return strings.HasPrefix(key, "ota/") && len(key) > 4 && len(key) <= 512 && !strings.Contains(key, "..") && !strings.ContainsAny(key, "\r\n")
+}
+
+func (client *Client) Open(ctx context.Context, key string) (io.ReadCloser, int64, error) {
+	if client == nil || client.api == nil || !validOTAKey(key) {
+		return nil, 0, fmt.Errorf("open OTA object: invalid input")
+	}
+	result, err := client.api.GetObject(ctx, &oss.GetObjectRequest{Bucket: oss.Ptr(client.bucket), Key: oss.Ptr(key)})
+	if err != nil {
+		return nil, 0, fmt.Errorf("open OTA object: %w", err)
+	}
+	if result == nil || result.Body == nil || result.ContentLength <= 0 || result.ContentLength > 3<<20 {
+		if result != nil && result.Body != nil {
+			_ = result.Body.Close()
+		}
+		return nil, 0, fmt.Errorf("open OTA object: invalid length")
+	}
+	return result.Body, result.ContentLength, nil
+}
+
+func validSHA256(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func (client *Client) PutURL(ctx context.Context, key, contentType string, ttl time.Duration) (string, error) {

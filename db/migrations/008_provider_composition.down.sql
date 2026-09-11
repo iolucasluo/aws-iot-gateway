@@ -1,4 +1,0 @@
-DROP TRIGGER trg_device_component_bindings_updated_at ON device_component_bindings;
-DROP INDEX uniq_device_component_bindings_active;
-DROP INDEX idx_device_component_bindings_binding;
-DROP TABLE device_component_bindings;

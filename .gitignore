@@ -2,6 +2,7 @@
 /bin/
 /.runtime/
 /.local/
+/deploy/environments/
 __pycache__/
 /.env
 /.env.*

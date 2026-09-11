@@ -28,6 +28,8 @@ type Service struct {
 // even if an MQTT LWT or its SQS delivery is lost.
 const deviceOnlineFreshness = 3 * time.Minute
 
+var dpProfilePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]*-v[1-9][0-9]*$`)
+
 var productCapabilityPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,63}$`)
 
 func NewService() *Service {
@@ -48,20 +50,35 @@ func (service *Service) Create(ctx context.Context, input CreateInput) (Activati
 		len(input.IdempotencyKey) > 128 || !input.Method.valid() || strings.TrimSpace(input.PID) == "" {
 		return Activation{}, ErrInvalidInput
 	}
-	product, err := service.findActiveProduct(ctx, input.PID)
-	if err != nil {
-		return Activation{}, err
-	}
+	input.PID = strings.TrimSpace(input.PID)
+	// The request fingerprint contains caller-controlled fields only. Changing a
+	// product default must not change an existing activation or its retry result.
 	requestHash := sha256.Sum256([]byte(strings.Join([]string{
-		input.InternalAppID, input.BindingExternalUserID, string(input.Method), product.PID,
+		input.InternalAppID, input.BindingExternalUserID, string(input.Method), input.PID,
 	}, "\n")))
 	if existing, err := service.repository.FindByIdempotency(ctx, input.InternalAppID, input.IdempotencyKey); err == nil {
-		if existing.Activation.RequestHash != requestHash {
+		// Compare caller fields; a product default change is not a new request.
+		value := existing.Activation
+		if value.PID != input.PID || value.Method != input.Method || value.BindingExternalUserID != input.BindingExternalUserID {
 			return Activation{}, ErrIdempotencyConflict
 		}
 		return Activation{}, ErrActivationInProgress
 	} else if !errors.Is(err, ErrActivationNotFound) {
 		return Activation{}, fmt.Errorf("find activation idempotency key: %w", err)
+	}
+	product, err := service.findActiveProduct(ctx, input.PID)
+	if err != nil {
+		return Activation{}, err
+	}
+	if !dpProfilePattern.MatchString(product.DPProfile) || len(product.DPProfile) > 96 {
+		return Activation{}, ErrDPProfileUnavailable
+	}
+	profile, err := service.repository.FindActiveDPProfile(ctx, product.DPProfile)
+	if err != nil {
+		return Activation{}, err
+	}
+	if profile.Code != product.DPProfile {
+		return Activation{}, ErrDPProfileUnavailable
 	}
 	id, err := randomUUID()
 	if err != nil {
@@ -72,7 +89,7 @@ func (service *Service) Create(ctx context.Context, input CreateInput) (Activati
 		return Activation{}, fmt.Errorf("generate activation code: %w", err)
 	}
 	value := Activation{
-		ID: id, Code: code, Method: input.Method, PID: product.PID, InternalAppID: input.InternalAppID,
+		ID: id, Code: code, Method: input.Method, PID: product.PID, DPProfile: profile.Code, InternalAppID: input.InternalAppID,
 		BindingExternalUserID: input.BindingExternalUserID, IdempotencyKey: input.IdempotencyKey,
 		RequestHash: requestHash, Status: StatusPending, ExpiresAt: service.now().Add(5 * time.Minute),
 	}
@@ -374,4 +391,24 @@ func randomUUID() (string, error) {
 	value[8] = (value[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		value[0:4], value[4:6], value[6:8], value[8:10], value[10:16]), nil
+}
+
+// ListActiveDPProfiles is independent of the product directory. Retired profiles
+// remain available to registered devices but cannot be selected for new activations.
+func (service *Service) ListActiveDPProfiles(ctx context.Context) ([]DPProfile, error) {
+	if service.repository == nil {
+		return nil, ErrDPProfileUnavailable
+	}
+	profiles, err := service.repository.ListActiveDPProfiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(profiles))
+	for _, profile := range profiles {
+		if len(profile.Code) > 96 || !dpProfilePattern.MatchString(profile.Code) || strings.TrimSpace(profile.Name) == "" || seen[profile.Code] {
+			return nil, fmt.Errorf("invalid DP profile catalog")
+		}
+		seen[profile.Code] = true
+	}
+	return profiles, nil
 }

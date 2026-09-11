@@ -40,9 +40,9 @@
 ## 本地验证入口
 
 ```text
-bash deploy/staging/test_aws_composition_regression_contract.sh
+bash deploy/aws-staging/test_aws_composition_regression_contract.sh
 go test -race -count=1 ./...
 go vet ./...
 ```
 
-真实 AWS 验证必须继续使用 `deploy/staging/deploy.sh` 的受控只读/验证模式，并由 owner 明确授权目标；本契约不授予云资源 mutation 权限。
+真实 AWS 验证必须继续使用 `deploy/aws-staging/deploy.sh` 的受控只读/验证模式，并由 owner 明确授权目标；本契约不授予云资源 mutation 权限。

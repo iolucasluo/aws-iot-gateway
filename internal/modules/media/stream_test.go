@@ -127,7 +127,7 @@ func TestCreateRealtimeStreamUsesProviderSessionAndRedactsViewerTicketFromDevice
 		"accepted":  map[string]any{"video_receive": true, "audio_receive": false, "audio_send": false, "data_channels": []any{}},
 	}}
 	repository := &streamRepositoryStub{}
-	service := NewRealtimeStreamService(realtime, "realtime.cn_staging", commander, repository, func() (string, error) { return "viewer-rt", nil })
+	service := NewRealtimeStreamService(realtime, "realtime.cn_staging", commander, repository, func() (string, error) { return "viewer-rt", nil }, nil)
 	result, err := service.Create(context.Background(), "demo-local", "device-1", "binding-1", "fdr-1", StreamCapabilities{VideoReceive: true, DataChannels: []string{}})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)

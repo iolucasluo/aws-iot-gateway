@@ -16,7 +16,7 @@
 | HTTP 路由、JSON、状态码、activation 或设备目录 | `HTTP与Activation契约.md`、`测试与验证.md` | `internal/httpapi/`、`internal/activation/` |
 | token、CSR、certificate、installation proof、用户隔离或 AWS IAM | `安全边界.md`、`HTTP与Activation契约.md` | `internal/activation/`、`internal/awsiot/` |
 | 既有 activation、binding、reset、MQTT、事件或媒体流程 | [`../../flows/目录说明.md`](../../flows/目录说明.md) 与对应单篇 flow；再读本表命中的契约规则 | `internal/`、`db/migrations/`、`cmd/event-worker/` |
-| App / TXW82x 固件跨仓协议变化 | 全部五份规则、[`../../contracts/device-service-bootstrap-v1.md`](../../contracts/device-service-bootstrap-v1.md) | `product_dps` Gateway 目录、TXW82x 固件、Demo App consumer、`deploy/device-bootstrap/README.md` |
+| App / TXW82x 固件跨仓协议变化 | 全部五份规则、[`../../contracts/device-service-bootstrap-v1.md`](../../contracts/device-service-bootstrap-v1.md) | DP profile Gateway 目录与 `../../contracts/dp-profiles-v1.md`、TXW82x 固件、Demo App consumer、`deploy/device-bootstrap/README.md` |
 
 ## 仓库边界
 
