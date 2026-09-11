@@ -24,6 +24,7 @@ import (
 	redisstore "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/redis"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/provider"
 	gatewayruntime "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/runtime"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/worker"
 )
 
 // runDomesticGateway owns the domestic development activation/device/MQTT
@@ -126,6 +127,30 @@ func runDomesticGateway(
 		assetService = media.NewAssetService(
 			objectStore, deviceService, mediaRepository, config.Environment, snapshotConverter, nil,
 		)
+		// The object store is what makes a device-local recording readable by the app, so
+		// the workers that use it belong to the same guard. The thumbnail worker fetches
+		// the poster frame from the device and uploads it; without it thumbnail_object_key
+		// stays empty, the asset service exposes no thumbnail URL, and the app shows no
+		// first-frame image. The reconciliation worker projects the device catalog that
+		// the outbox rows are keyed on.
+		thumbnailStore, ok := objectStore.(worker.LocalThumbnailStore)
+		if !ok {
+			return fmt.Errorf("media object store cannot serve local recording thumbnails")
+		}
+		localThumbnailWorker, err := worker.NewLocalThumbnailWorker(
+			mediaRepository, thumbnailStore, deviceService, config.Environment,
+		)
+		if err != nil {
+			return fmt.Errorf("configure local thumbnail worker: %w", err)
+		}
+		go runLocalThumbnailWorker(ctx, localThumbnailWorker)
+		localReconciliationWorker, err := worker.NewLocalReconciliationWorker(
+			mediaRepository, deviceService,
+		)
+		if err != nil {
+			return fmt.Errorf("configure local recording reconciliation worker: %w", err)
+		}
+		go runLocalReconciliationWorker(ctx, localReconciliationWorker)
 	}
 	bindingService, err := newDomesticBindingService(bindingRepository, deviceService)
 	if err != nil {
