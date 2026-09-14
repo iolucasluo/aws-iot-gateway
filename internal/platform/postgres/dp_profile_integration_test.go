@@ -137,7 +137,13 @@ func TestActivationPersistsProfileAndRechecksDisabledSelection(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE dp_profiles SET status='disabled' WHERE code='feeder-v1'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.ReservePreparation(ctx, created.ID, "30000000-0000-0000-0000-000000000001", "profile-device", "fixture-csr"); !errors.Is(err, activation.ErrDPProfileUnavailable) {
+	if _, err := repository.ReservePreparation(ctx, activation.Reservation{
+		ActivationID:     created.ID,
+		DeviceInternalID: "30000000-0000-0000-0000-000000000001",
+		DeviceSN:         "profile-device",
+		SNSource:         activation.SNSourceDevice,
+		CSRPEM:           "fixture-csr",
+	}); !errors.Is(err, activation.ErrDPProfileUnavailable) {
 		t.Fatalf("prepare disabled profile: %v", err)
 	}
 	var count int

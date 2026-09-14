@@ -67,17 +67,27 @@ func (repository *ActivationRepository) ListActiveProducts(ctx context.Context) 
 }
 
 func (repository *ActivationRepository) Create(ctx context.Context, record activation.Record) error {
+	var requestedDeviceSN any
+	if record.Activation.RequestedDeviceSN != "" {
+		requestedDeviceSN = record.Activation.RequestedDeviceSN
+	}
+	var requestedChipUID any
+	if len(record.Activation.RequestedChipUID) > 0 {
+		requestedChipUID = record.Activation.RequestedChipUID
+	}
 	result, err := repository.pool.Exec(ctx, `
 		INSERT INTO device_activations (
 			id, internal_app_id, binding_external_user_id, method, pid, status,
-			code_hash, idempotency_key, request_hash, expires_at, dp_profile_id
-		) SELECT $1,$2,$3,$4,product.pid,$6,$7,$8,$9,$10, profile.id
+			code_hash, idempotency_key, request_hash, expires_at, dp_profile_id,
+			requested_device_sn, requested_chip_uid
+		) SELECT $1,$2,$3,$4,product.pid,$6,$7,$8,$9,$10, profile.id, $12, $13
 		  FROM products product JOIN dp_profiles profile ON profile.code=product.dp_profile_code
 		  WHERE product.pid=$5 AND product.status='active' AND profile.code=$11 AND profile.status='active'
 		  FOR SHARE OF product, profile
 	`, record.Activation.ID, record.Activation.InternalAppID, record.Activation.BindingExternalUserID,
 		string(record.Activation.Method), record.Activation.PID, string(record.Activation.Status), record.CodeHash[:],
-		record.Activation.IdempotencyKey, record.Activation.RequestHash[:], record.Activation.ExpiresAt, record.Activation.DPProfile)
+		record.Activation.IdempotencyKey, record.Activation.RequestHash[:], record.Activation.ExpiresAt,
+		record.Activation.DPProfile, requestedDeviceSN, requestedChipUID)
 	if err == nil {
 		if result.RowsAffected() != 1 {
 			return activation.ErrDPProfileUnavailable
@@ -117,7 +127,7 @@ func (repository *ActivationRepository) FindByIdempotency(ctx context.Context, i
 
 func (repository *ActivationRepository) ReservePreparation(
 	ctx context.Context,
-	activationID, deviceInternalID, deviceSN, csrPEM string,
+	reservation activation.Reservation,
 ) (activation.Record, error) {
 	transaction, err := repository.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -134,7 +144,7 @@ func (repository *ActivationRepository) ReservePreparation(
 		LEFT JOIN device_activation_sessions s ON s.device_activation_id=a.id
 		WHERE a.id=$1
 		FOR UPDATE OF a, p
-	`, activationID).Scan(&status, &method, &pid, &expiresAt, &existingCSR, &productActive, &profileID); err != nil {
+	`, reservation.ActivationID).Scan(&status, &method, &pid, &expiresAt, &existingCSR, &productActive, &profileID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return activation.Record{}, activation.ErrActivationNotFound
 		}
@@ -155,45 +165,110 @@ func (repository *ActivationRepository) ReservePreparation(
 		if profileStatus != "active" && profileStatus != "retired" {
 			return activation.Record{}, activation.ErrDPProfileUnavailable
 		}
-		if _, err := transaction.Exec(ctx, `
-			INSERT INTO device_registry (id, device_sn, thing_name, pid, dp_profile_id, status)
-			VALUES ($1,$2,$2,$3,$4,'provisioning')
-		`, deviceInternalID, deviceSN, pid, profileID); err != nil {
-			return activation.Record{}, fmt.Errorf("reserve device identity: %w", err)
+		deviceRowID, err := repository.reserveDeviceRow(ctx, transaction, reservation, pid, profileID)
+		if err != nil {
+			return activation.Record{}, err
 		}
-		csrHash := sha256.Sum256([]byte(csrPEM))
+		csrHash := sha256.Sum256([]byte(reservation.CSRPEM))
 		if _, err := transaction.Exec(ctx, `
 			INSERT INTO device_activation_sessions (
 				id, device_activation_id, session_external_id, method, status, csr_pem, csr_sha256, expires_at
 			) VALUES ($1::uuid,$1::uuid,$1::text,$2,'pending',$3,$4,$5)
-		`, activationID, method, csrPEM, csrHash[:], expiresAt); err != nil {
+		`, reservation.ActivationID, method, reservation.CSRPEM, csrHash[:], expiresAt); err != nil {
 			return activation.Record{}, fmt.Errorf("reserve activation session: %w", err)
 		}
 		if _, err := transaction.Exec(ctx, `
 			UPDATE device_activations SET status='activating', device_registry_id=$2, updated_at=now() WHERE id=$1
-		`, activationID, deviceInternalID); err != nil {
+		`, reservation.ActivationID, deviceRowID); err != nil {
 			return activation.Record{}, fmt.Errorf("mark activation provisioning: %w", err)
 		}
 	case activation.StatusActivating:
-		if existingCSR == csrPEM {
+		if existingCSR == reservation.CSRPEM {
 			return activation.Record{}, activation.ErrPreparationInProgress
 		}
 		return activation.Record{}, activation.ErrActivationAlreadyPrepared
 	case activation.StatusInstalling, activation.StatusActivated:
-		if existingCSR != csrPEM {
+		if existingCSR != reservation.CSRPEM {
 			return activation.Record{}, activation.ErrActivationAlreadyPrepared
 		}
 		if err := transaction.Commit(ctx); err != nil {
 			return activation.Record{}, fmt.Errorf("finish preparation lookup: %w", err)
 		}
-		return repository.FindByID(ctx, activationID)
+		return repository.FindByID(ctx, reservation.ActivationID)
 	default:
 		return activation.Record{}, activation.ErrActivationAlreadyPrepared
 	}
 	if err := transaction.Commit(ctx); err != nil {
 		return activation.Record{}, fmt.Errorf("commit preparation reservation: %w", err)
 	}
-	return repository.FindByID(ctx, activationID)
+	return repository.FindByID(ctx, reservation.ActivationID)
+}
+
+// reserveDeviceRow 按 chip UID 归并 device_registry：命中且产品一致时复用既有行与 device_sn；
+// 跨产品或身份交叉不一致时拒绝；未命中时按传入身份新建。
+func (repository *ActivationRepository) reserveDeviceRow(
+	ctx context.Context,
+	transaction pgx.Tx,
+	reservation activation.Reservation,
+	pid, profileID string,
+) (string, error) {
+	if len(reservation.ChipUID) > 0 {
+		var rowID, rowSN, rowPID string
+		err := transaction.QueryRow(ctx, `
+			SELECT id::text, device_sn, pid FROM device_registry WHERE chip_uid=$1 FOR UPDATE
+		`, reservation.ChipUID).Scan(&rowID, &rowSN, &rowPID)
+		switch {
+		case err == nil:
+			if rowPID != pid {
+				return "", activation.ErrDeviceIdentityConflict
+			}
+			if reservation.SNSource != activation.SNSourceGenerated && reservation.DeviceSN != "" &&
+				rowSN != reservation.DeviceSN {
+				return "", activation.ErrDeviceIdentityConflict
+			}
+			return rowID, nil
+		case !errors.Is(err, pgx.ErrNoRows):
+			return "", fmt.Errorf("find device identity by chip uid: %w", err)
+		}
+	}
+	if reservation.DeviceSN != "" {
+		var rowID, rowSN, rowPID string
+		var hasChipUID, chipUIDMatches bool
+		err := transaction.QueryRow(ctx, `
+			SELECT id::text, device_sn, pid, chip_uid IS NOT NULL, COALESCE(chip_uid=$2, false)
+			FROM device_registry WHERE device_sn=$1 FOR UPDATE
+		`, reservation.DeviceSN, reservation.ChipUID).Scan(&rowID, &rowSN, &rowPID, &hasChipUID, &chipUIDMatches)
+		switch {
+		case err == nil:
+			if rowPID != pid || (hasChipUID && !chipUIDMatches) {
+				return "", activation.ErrDeviceIdentityConflict
+			}
+			if !hasChipUID && len(reservation.ChipUID) > 0 {
+				if _, updateErr := transaction.Exec(ctx, `
+					UPDATE device_registry SET chip_uid=$2, updated_at=now() WHERE id=$1
+				`, rowID, reservation.ChipUID); updateErr != nil {
+					return "", fmt.Errorf("adopt chip uid for existing device identity: %w", updateErr)
+				}
+			}
+			return rowID, nil
+		case !errors.Is(err, pgx.ErrNoRows):
+			return "", fmt.Errorf("find device identity by device sn: %w", err)
+		}
+	}
+	if reservation.DeviceSN == "" {
+		return "", activation.ErrInvalidDeviceSN
+	}
+	if _, err := transaction.Exec(ctx, `
+		INSERT INTO device_registry (id, device_sn, thing_name, pid, dp_profile_id, status, chip_uid, sn_source)
+		VALUES ($1,$2,$2,$3,$4,'provisioning',$5,$6)
+	`, reservation.DeviceInternalID, reservation.DeviceSN, pid, profileID, reservation.ChipUID, reservation.SNSource); err != nil {
+		var postgresError *pgconn.PgError
+		if errors.As(err, &postgresError) && postgresError.Code == "23505" {
+			return "", activation.ErrDeviceIdentityConflict
+		}
+		return "", fmt.Errorf("reserve device identity: %w", err)
+	}
+	return reservation.DeviceInternalID, nil
 }
 
 func (repository *ActivationRepository) CompletePreparation(
@@ -342,7 +417,8 @@ func loadActivationRecord(ctx context.Context, querier rowQuerier, id string, fo
 		       COALESCE(a.device_registry_id::text, ''), COALESCE(d.device_sn, ''),
 		       COALESCE(s.csr_pem, ''), COALESCE(d.certificate_id, ''),
 		       COALESCE(s.certificate_pem, ''), COALESCE(d.aws_iot_endpoint, ''),
-		       COALESCE(s.installation_nonce, ''), COALESCE(a.failure_code, ''), COALESCE(profile.code, '')
+		       COALESCE(s.installation_nonce, ''), COALESCE(a.failure_code, ''), COALESCE(profile.code, ''),
+		       COALESCE(a.requested_device_sn, ''), a.requested_chip_uid
 		FROM device_activations a
 		LEFT JOIN dp_profiles profile ON profile.id=a.dp_profile_id
 		LEFT JOIN device_registry d ON d.id=a.device_registry_id
@@ -362,6 +438,7 @@ func loadActivationRecord(ctx context.Context, querier rowQuerier, id string, fo
 		&method, &record.Activation.PID, &status, &codeHash, &record.Activation.IdempotencyKey, &requestHash,
 		&record.Activation.ExpiresAt, &record.DeviceInternalID, &record.Activation.DeviceSN,
 		&record.CSRPEM, &certificateID, &certificatePEM, &endpoint, &nonce, &record.FailureCode, &record.Activation.DPProfile,
+		&record.Activation.RequestedDeviceSN, &record.Activation.RequestedChipUID,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return activation.Record{}, activation.ErrActivationNotFound

@@ -818,6 +818,8 @@ func (s server) createActivation(writer http.ResponseWriter, request *http.Reque
 		BindingExternalUserID string `json:"binding_external_user_id"`
 		IdempotencyKey        string `json:"idempotency_key"`
 		PID                   string `json:"pid"`
+		DeviceSN              string `json:"device_sn,omitempty"`
+		ChipUID               string `json:"chip_uid,omitempty"`
 		SessionID             string `json:"session_id,omitempty"`
 		ClientHelloCBOR       string `json:"client_hello_cbor,omitempty"`
 		DeviceHelloCBOR       string `json:"device_hello_cbor,omitempty"`
@@ -828,6 +830,7 @@ func (s server) createActivation(writer http.ResponseWriter, request *http.Reque
 	created, err := s.activation.Create(request.Context(), activation.CreateInput{
 		InternalAppID: principal.InternalAppID, BindingExternalUserID: body.BindingExternalUserID,
 		IdempotencyKey: body.IdempotencyKey, Method: activation.Method(body.Method), PID: body.PID,
+		DeviceSN: body.DeviceSN, ChipUID: body.ChipUID,
 	})
 	if err != nil {
 		writeActivationError(writer, err)
@@ -1036,6 +1039,8 @@ func (s server) prepareDevice(writer http.ResponseWriter, request *http.Request,
 		Code         string `json:"activation_code"`
 		CSRPEM       string `json:"csr_pem"`
 		Method       string `json:"method,omitempty"`
+		DeviceSN     string `json:"device_sn,omitempty"`
+		ChipUID      string `json:"chip_uid,omitempty"`
 	}
 	if !decodeJSON(writer, request, &body) {
 		return
@@ -1049,6 +1054,7 @@ func (s server) prepareDevice(writer http.ResponseWriter, request *http.Request,
 	}
 	installation, err := s.activation.Prepare(request.Context(), activation.PrepareInput{
 		ActivationID: body.ActivationID, Code: body.Code, CSRPEM: body.CSRPEM, ExpectedMethod: expectedMethod,
+		DeviceSN: body.DeviceSN, ChipUID: body.ChipUID,
 	})
 	if err != nil {
 		writeActivationError(writer, err)
@@ -1355,6 +1361,10 @@ func writeActivationError(writer http.ResponseWriter, err error) {
 		writeError(writer, http.StatusConflict, "activation_in_progress", "activation operation is already in progress")
 	case errors.Is(err, activation.ErrIdempotencyConflict):
 		writeError(writer, http.StatusConflict, "idempotency_conflict", "idempotency key was used for another request")
+	case errors.Is(err, activation.ErrInvalidDeviceSN), errors.Is(err, activation.ErrInvalidChipUID):
+		writeError(writer, http.StatusBadRequest, "invalid_device_identity", "device sn or chip uid is invalid")
+	case errors.Is(err, activation.ErrDeviceIdentityConflict):
+		writeError(writer, http.StatusConflict, "device_identity_conflict", "device identity conflicts with an existing registration")
 	case errors.Is(err, activation.ErrDeviceBindingConflict):
 		writeError(writer, http.StatusConflict, "device_binding_conflict", "device already has an active binding")
 	default:

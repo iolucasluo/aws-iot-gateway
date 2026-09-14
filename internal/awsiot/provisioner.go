@@ -2,6 +2,7 @@ package awsiot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -12,6 +13,7 @@ import (
 
 type Client interface {
 	CreateCertificateFromCsr(context.Context, *iot.CreateCertificateFromCsrInput, ...func(*iot.Options)) (*iot.CreateCertificateFromCsrOutput, error)
+	DescribeThing(context.Context, *iot.DescribeThingInput, ...func(*iot.Options)) (*iot.DescribeThingOutput, error)
 	CreateThing(context.Context, *iot.CreateThingInput, ...func(*iot.Options)) (*iot.CreateThingOutput, error)
 	AttachThingPrincipal(context.Context, *iot.AttachThingPrincipalInput, ...func(*iot.Options)) (*iot.AttachThingPrincipalOutput, error)
 	AttachPolicy(context.Context, *iot.AttachPolicyInput, ...func(*iot.Options)) (*iot.AttachPolicyOutput, error)
@@ -46,16 +48,12 @@ func (p *Provisioner) Provision(ctx context.Context, deviceSN, csrPEM string) (a
 	if certificate.CertificateArn == nil || certificate.CertificateId == nil || certificate.CertificatePem == nil {
 		return activation.PreparedIdentity{}, fmt.Errorf("create certificate from csr: incomplete response")
 	}
-	thing, err := p.client.CreateThing(ctx, &iot.CreateThingInput{ThingName: aws.String(thingName)})
-	if err != nil {
-		return activation.PreparedIdentity{}, fmt.Errorf("create thing: %w", err)
-	}
-	if thing.ThingName == nil || *thing.ThingName == "" {
-		return activation.PreparedIdentity{}, fmt.Errorf("create thing: incomplete response")
+	if err := p.ensureThing(ctx, thingName); err != nil {
+		return activation.PreparedIdentity{}, err
 	}
 	if _, err := p.client.AttachThingPrincipal(ctx, &iot.AttachThingPrincipalInput{
 		Principal:          certificate.CertificateArn,
-		ThingName:          thing.ThingName,
+		ThingName:          aws.String(thingName),
 		ThingPrincipalType: types.ThingPrincipalTypeExclusiveThing,
 	}); err != nil {
 		return activation.PreparedIdentity{}, fmt.Errorf("attach certificate to thing: %w", err)
@@ -74,11 +72,32 @@ func (p *Provisioner) Provision(ctx context.Context, deviceSN, csrPEM string) (a
 		return activation.PreparedIdentity{}, fmt.Errorf("describe data endpoint: incomplete response")
 	}
 	return activation.PreparedIdentity{
-		DeviceID:       *thing.ThingName,
+		DeviceID:       thingName,
 		CertificateID:  *certificate.CertificateId,
 		CertificatePEM: *certificate.CertificatePem,
 		AWSIoTEndpoint: *endpoint.EndpointAddress,
 	}, nil
+}
+
+// ensureThing 让 Thing 的创建幂等：设备重新激活时复用已存在的 Thing，
+// 否则 CreateThing 会以 ResourceAlreadyExists 失败。
+func (p *Provisioner) ensureThing(ctx context.Context, thingName string) error {
+	if _, err := p.client.DescribeThing(ctx, &iot.DescribeThingInput{ThingName: aws.String(thingName)}); err == nil {
+		return nil
+	} else {
+		var notFound *types.ResourceNotFoundException
+		if !errors.As(err, &notFound) {
+			return fmt.Errorf("describe thing: %w", err)
+		}
+	}
+	if _, err := p.client.CreateThing(ctx, &iot.CreateThingInput{ThingName: aws.String(thingName)}); err != nil {
+		var exists *types.ResourceAlreadyExistsException
+		if errors.As(err, &exists) {
+			return nil
+		}
+		return fmt.Errorf("create thing: %w", err)
+	}
+	return nil
 }
 
 func (p *Provisioner) Activate(ctx context.Context, certificateID string) error {

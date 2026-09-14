@@ -6,6 +6,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iot"
+	"github.com/aws/aws-sdk-go-v2/service/iot/types"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/activation"
 )
 
@@ -47,11 +48,45 @@ func TestProvisionCreatesInactiveCertificateAndAttachesOnlyFixedResources(t *tes
 	}
 }
 
+// 复用已存在 Thing 的重新激活路径：不得再次 CreateThing。
+func TestProvisionReusesExistingThing(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeClient{thingExists: true}
+	provisioner, err := New(client, "aws-iot-gateway-staging-device")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	identity, err := provisioner.Provision(context.Background(), "EXF1-PACSNBZY-5", "csr-pem")
+	if err != nil {
+		t.Fatalf("Provision() error = %v", err)
+	}
+	if identity.DeviceID != "EXF1-PACSNBZY-5" {
+		t.Fatalf("Provision() device id = %q, want EXF1-PACSNBZY-5", identity.DeviceID)
+	}
+	if client.thingInput != nil {
+		t.Fatalf("Provision() created an existing thing: %#v", client.thingInput)
+	}
+	if client.describeInput == nil || aws.ToString(client.describeInput.ThingName) != "EXF1-PACSNBZY-5" {
+		t.Fatalf("describe input = %#v", client.describeInput)
+	}
+}
+
 type fakeClient struct {
 	certificateInput *iot.CreateCertificateFromCsrInput
 	thingInput       *iot.CreateThingInput
+	describeInput    *iot.DescribeThingInput
 	policyInput      *iot.AttachPolicyInput
 	activateInput    *iot.UpdateCertificateInput
+	thingExists      bool
+}
+
+func (f *fakeClient) DescribeThing(_ context.Context, input *iot.DescribeThingInput, _ ...func(*iot.Options)) (*iot.DescribeThingOutput, error) {
+	f.describeInput = input
+	if !f.thingExists {
+		return nil, &types.ResourceNotFoundException{}
+	}
+	return &iot.DescribeThingOutput{ThingName: input.ThingName}, nil
 }
 
 func (f *fakeClient) CreateCertificateFromCsr(_ context.Context, input *iot.CreateCertificateFromCsrInput, _ ...func(*iot.Options)) (*iot.CreateCertificateFromCsrOutput, error) {
