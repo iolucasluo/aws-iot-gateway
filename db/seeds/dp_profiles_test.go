@@ -108,3 +108,26 @@ func TestPublishedDPProfilesDefinesFeederCommandAndMediaContract(t *testing.T) {
 		}
 	}
 }
+
+// 自动夜视阈值/迟滞值是可选的向后兼容扩展，两个 profile 的 night_mode 定义必须一致。
+func TestPublishedDPProfilesDefinesNightModeAutoThresholds(t *testing.T) {
+	t.Parallel()
+
+	content, err := Files.ReadFile("002_dp_profiles.sql")
+	if err != nil {
+		t.Fatalf("read product DP seed: %v", err)
+	}
+	seed := string(content)
+	const spec = `"threshold":{"type":"integer","minimum":0,"maximum":255},` +
+		`"hysteresis":{"type":"integer","minimum":1,"maximum":255}`
+	if count := strings.Count(seed, spec); count != 2 {
+		t.Fatalf("night_mode threshold/hysteresis spec appears %d times, want 2 (feeder-v1 + camera-v1)", count)
+	}
+	for _, fragment := range []string{
+		`"required":["mode"],"properties":{"mode":{"type":"string","enum":["day","night","auto"]},` + spec + `},"allow_extra":false`,
+	} {
+		if !strings.Contains(seed, fragment) {
+			t.Errorf("night_mode auto threshold contract missing %q", fragment)
+		}
+	}
+}

@@ -109,6 +109,9 @@ func TestGetDeviceInfoProjectionUsesProviderNeutralCommand(t *testing.T) {
 		},
 		"wifi_mac": "48:a4:fd:7d:6f:0b", "version": "dev-cn-20260902d",
 		"build": float64(790), "ip": "192.168.11.228",
+		"night_mode": "auto", "night_active": true, "night_mode_threshold": float64(78),
+		"night_mode_hysteresis": float64(20), "light_level": float64(182),
+		"light_level_raw": float64(731),
 	}}, repository, "cn-staging", func() (string, error) { return "device-info-session", nil })
 
 	projection, err := service.GetDeviceInfoProjection(context.Background(), "demo-local", "device-id", "fdr-0001", "feeder-x1")
@@ -117,7 +120,10 @@ func TestGetDeviceInfoProjectionUsesProviderNeutralCommand(t *testing.T) {
 	}
 	if projection["sn"] != "fdr-0001" || projection["pid"] != "feeder-x1" || projection["online"] != true ||
 		projection["wifi_mac"] != "48:a4:fd:7d:6f:0b" || projection["version"] != "dev-cn-20260902d" ||
-		projection["build"] != float64(790) || projection["ip"] != "192.168.11.228" {
+		projection["build"] != float64(790) || projection["ip"] != "192.168.11.228" ||
+		projection["night_mode"] != "auto" || projection["night_active"] != true ||
+		projection["night_mode_threshold"] != float64(78) || projection["night_mode_hysteresis"] != float64(20) ||
+		projection["light_level"] != float64(182) || projection["light_level_raw"] != float64(731) {
 		t.Fatalf("projection = %#v", projection)
 	}
 	var payload map[string]any
@@ -126,6 +132,28 @@ func TestGetDeviceInfoProjectionUsesProviderNeutralCommand(t *testing.T) {
 	}
 	if payload["action"] != "device_info" || publisher.topic != "cmd/cn-staging/fdr-0001/req" {
 		t.Fatalf("command = topic %q payload %#v", publisher.topic, payload)
+	}
+}
+
+// 传感器不可读时设备显式上报 light_level=null，投影必须原样保留该键。
+func TestGetDeviceInfoProjectionKeepsNullLightLevel(t *testing.T) {
+	t.Parallel()
+	service := NewService(&publisherStub{}, ackWaiterStub{ack: map[string]any{
+		"code": float64(0),
+		"device_config": map[string]any{
+			"pid": "lamp-x1", "device_sn": "lamp-0001",
+		},
+		"night_mode": "auto", "night_active": false, "light_level": nil,
+		"night_mode_threshold": float64(50), "night_mode_hysteresis": float64(50),
+	}}, &commandRepositoryStub{}, "cn-staging", func() (string, error) { return "device-info-session", nil })
+
+	projection, err := service.GetDeviceInfoProjection(context.Background(), "demo-local", "device-id", "lamp-0001", "lamp-x1")
+	if err != nil {
+		t.Fatalf("GetDeviceInfoProjection() error = %v", err)
+	}
+	value, found := projection["light_level"]
+	if !found || value != nil {
+		t.Fatalf("light_level = %#v (found=%t), want explicit nil", value, found)
 	}
 }
 
