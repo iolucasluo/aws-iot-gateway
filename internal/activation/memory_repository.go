@@ -2,6 +2,7 @@ package activation
 
 import (
 	"context"
+	"encoding/hex"
 	"sort"
 	"sync"
 )
@@ -9,13 +10,24 @@ import (
 type MemoryRepository struct {
 	mu       sync.Mutex
 	records  map[string]Record
+	devices  map[string]*memoryDeviceRow
 	products map[string]Product
 	profiles map[string]DPProfile
+}
+
+// memoryDeviceRow 对应 device_registry 的一行，按 chip UID 归并。
+type memoryDeviceRow struct {
+	ID       string
+	DeviceSN string
+	PID      string
+	ChipUID  string // hex；空表示未知
+	SNSource string
 }
 
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
 		records: make(map[string]Record),
+		devices: make(map[string]*memoryDeviceRow),
 		profiles: map[string]DPProfile{
 			"feeder-v1": {Code: "feeder-v1", Name: "Anyka Feeder X1 v1"},
 			"camera-v1": {Code: "camera-v1", Name: "Taixin Minion Cam X1 v1"},
@@ -103,31 +115,82 @@ func (repository *MemoryRepository) FindByIdempotency(_ context.Context, interna
 	return Record{}, ErrActivationNotFound
 }
 
-func (repository *MemoryRepository) ReservePreparation(_ context.Context, activationID, deviceInternalID, deviceSN, csrPEM string) (Record, error) {
+func (repository *MemoryRepository) ReservePreparation(_ context.Context, reservation Reservation) (Record, error) {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
-	record, found := repository.records[activationID]
+	record, found := repository.records[reservation.ActivationID]
 	if !found {
 		return Record{}, ErrActivationNotFound
 	}
 	switch record.Activation.Status {
 	case StatusPending:
+		row, err := repository.reserveDeviceRow(reservation, record.Activation.PID)
+		if err != nil {
+			return Record{}, err
+		}
 		record.Activation.Status = StatusActivating
-		record.Activation.DeviceSN = deviceSN
-		record.DeviceInternalID = deviceInternalID
-		record.CSRPEM = csrPEM
-		repository.records[activationID] = record
+		record.Activation.DeviceSN = row.DeviceSN
+		record.DeviceInternalID = row.ID
+		record.CSRPEM = reservation.CSRPEM
+		repository.records[reservation.ActivationID] = record
 		return record, nil
 	case StatusActivating:
-		if record.CSRPEM == csrPEM {
+		if record.CSRPEM == reservation.CSRPEM {
 			return Record{}, ErrPreparationInProgress
 		}
 	case StatusInstalling, StatusActivated:
-		if record.CSRPEM == csrPEM && record.Installation.ActivationID != "" {
+		if record.CSRPEM == reservation.CSRPEM && record.Installation.ActivationID != "" {
 			return record, nil
 		}
 	}
 	return Record{}, ErrActivationAlreadyPrepared
+}
+
+// reserveDeviceRow 实现与 PostgreSQL 实现一致的 chip UID 归并语义：
+// 同 UID 复用行与 device_sn，跨产品或不一致的外部 SN 一律拒绝。
+func (repository *MemoryRepository) reserveDeviceRow(reservation Reservation, pid string) (*memoryDeviceRow, error) {
+	chipUID := ""
+	if len(reservation.ChipUID) > 0 {
+		chipUID = hex.EncodeToString(reservation.ChipUID)
+	}
+	if chipUID != "" {
+		for _, row := range repository.devices {
+			if row.ChipUID != chipUID {
+				continue
+			}
+			if row.PID != pid {
+				return nil, ErrDeviceIdentityConflict
+			}
+			if reservation.SNSource != SNSourceGenerated && reservation.DeviceSN != "" &&
+				row.DeviceSN != reservation.DeviceSN {
+				return nil, ErrDeviceIdentityConflict
+			}
+			return row, nil
+		}
+	}
+	if reservation.DeviceSN != "" {
+		for _, row := range repository.devices {
+			if row.DeviceSN != reservation.DeviceSN {
+				continue
+			}
+			if row.PID != pid {
+				return nil, ErrDeviceIdentityConflict
+			}
+			if chipUID != "" && row.ChipUID != "" && row.ChipUID != chipUID {
+				return nil, ErrDeviceIdentityConflict
+			}
+			if chipUID != "" {
+				row.ChipUID = chipUID
+			}
+			return row, nil
+		}
+	}
+	row := &memoryDeviceRow{
+		ID: reservation.DeviceInternalID, DeviceSN: reservation.DeviceSN,
+		PID: pid, ChipUID: chipUID, SNSource: reservation.SNSource,
+	}
+	repository.devices[row.ID] = row
+	return row, nil
 }
 
 func (repository *MemoryRepository) CompletePreparation(_ context.Context, activationID string, installation Installation) (Record, error) {

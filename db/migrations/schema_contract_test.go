@@ -84,6 +84,14 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 		"CONSTRAINT products_capabilities_check",
 		"updated_at timestamptz NOT NULL DEFAULT now()",
 		"COMMENT ON TABLE device_schedules",
+		"chip_uid bytea",
+		"sn_source varchar(16) NOT NULL DEFAULT 'generated'",
+		"CONSTRAINT device_registry_sn_source_check",
+		"CREATE UNIQUE INDEX uniq_device_registry_chip_uid",
+		"ON device_registry (chip_uid) WHERE chip_uid IS NOT NULL",
+		"COMMENT ON TABLE device_registry",
+		"requested_device_sn varchar(64)",
+		"requested_chip_uid bytea",
 	} {
 		requireMigrationContains(t, initial, fragment)
 	}

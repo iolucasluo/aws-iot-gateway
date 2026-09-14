@@ -82,6 +82,10 @@ CREATE TABLE device_registry (
     certificate_id varchar(128),
     certificate_arn text,
     aws_iot_endpoint text,
+    chip_uid bytea,
+    sn_source varchar(16) NOT NULL DEFAULT 'generated'
+        CONSTRAINT device_registry_sn_source_check
+        CHECK (sn_source IN ('caller', 'device', 'generated')),
     status varchar(24) NOT NULL
         CONSTRAINT device_registry_status_check
         CHECK (status IN ('provisioning', 'active', 'revoked', 'reset')),
@@ -93,6 +97,12 @@ CREATE TABLE device_registry (
     CONSTRAINT device_registry_thing_name_check CHECK (thing_name = device_sn),
     CONSTRAINT device_registry_pid_fkey FOREIGN KEY (pid) REFERENCES products(pid) ON DELETE RESTRICT
 );
+
+CREATE UNIQUE INDEX uniq_device_registry_chip_uid
+    ON device_registry (chip_uid) WHERE chip_uid IS NOT NULL;
+
+COMMENT ON TABLE device_registry IS
+    '运行身份锚点：ThingName、证书、presence、DP 快照、事件与 OTA 历史的归属。制造登记事实源在平台 explorex-api 的同名表，二者语义不同、不共享数据库。';
 
 CREATE TABLE device_activations (
     id uuid CONSTRAINT device_activations_pkey PRIMARY KEY,
@@ -117,6 +127,10 @@ CREATE TABLE device_activations (
     device_registry_id uuid
         CONSTRAINT device_activations_device_registry_id_fkey REFERENCES device_registry(id),
     failure_code varchar(64),
+    requested_device_sn varchar(64)
+        CONSTRAINT device_activations_requested_device_sn_check
+        CHECK (requested_device_sn IS NULL OR btrim(requested_device_sn) <> ''),
+    requested_chip_uid bytea,
     expires_at timestamptz NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),

@@ -21,6 +21,9 @@ var (
 	ErrDeviceBindingConflict     = errors.New("device already has an active binding")
 	ErrDPProfileUnavailable      = errors.New("DP profile is unavailable for activation")
 	ErrProductUnavailable        = errors.New("product is unavailable for activation")
+	ErrInvalidDeviceSN           = errors.New("device sn does not match the numbering standard")
+	ErrInvalidChipUID            = errors.New("chip uid is not valid hex")
+	ErrDeviceIdentityConflict    = errors.New("device identity conflicts with an existing registration")
 )
 
 type Method string
@@ -49,6 +52,10 @@ type CreateInput struct {
 	IdempotencyKey        string
 	Method                Method
 	PID                   string
+	// DeviceSN 是产线发放的 device_sn，ChipUID 是 eFuse 芯片 UID 的 hex 形式。
+	// 两者均可选；缺省时回落为设备上报或兜底生成。
+	DeviceSN string
+	ChipUID  string
 }
 
 type PrepareInput struct {
@@ -56,6 +63,9 @@ type PrepareInput struct {
 	Code           string
 	CSRPEM         string
 	ExpectedMethod Method
+	// DeviceSN / ChipUID 由设备上报，优先级低于创建 activation 时调用方提供的值。
+	DeviceSN string
+	ChipUID  string
 }
 
 type ConfirmInput struct {
@@ -77,6 +87,10 @@ type Activation struct {
 	DeviceSN              string
 	Status                Status
 	ExpiresAt             time.Time
+	// RequestedDeviceSN / RequestedChipUID 是创建 activation 时调用方提供的身份事实，
+	// 在 prepare 阶段作为最高优先级来源参与归并。
+	RequestedDeviceSN string
+	RequestedChipUID  []byte
 }
 
 type PreparedIdentity struct {
@@ -144,7 +158,7 @@ type Repository interface {
 	Create(context.Context, Record) error
 	FindByID(context.Context, string) (Record, error)
 	FindByIdempotency(context.Context, string, string) (Record, error)
-	ReservePreparation(context.Context, string, string, string, string) (Record, error)
+	ReservePreparation(context.Context, Reservation) (Record, error)
 	CompletePreparation(context.Context, string, Installation) (Record, error)
 	FailPreparation(context.Context, string, string) error
 	CompleteActivation(context.Context, string, string) (Record, error)

@@ -51,6 +51,14 @@ func (service *Service) Create(ctx context.Context, input CreateInput) (Activati
 		return Activation{}, ErrInvalidInput
 	}
 	input.PID = strings.TrimSpace(input.PID)
+	requestedDeviceSN, err := normalizeReportedDeviceSN(input.DeviceSN)
+	if err != nil {
+		return Activation{}, err
+	}
+	requestedChipUID, err := normalizeChipUID(input.ChipUID)
+	if err != nil {
+		return Activation{}, err
+	}
 	// The request fingerprint contains caller-controlled fields only. Changing a
 	// product default must not change an existing activation or its retry result.
 	requestHash := sha256.Sum256([]byte(strings.Join([]string{
@@ -92,6 +100,7 @@ func (service *Service) Create(ctx context.Context, input CreateInput) (Activati
 		ID: id, Code: code, Method: input.Method, PID: product.PID, DPProfile: profile.Code, InternalAppID: input.InternalAppID,
 		BindingExternalUserID: input.BindingExternalUserID, IdempotencyKey: input.IdempotencyKey,
 		RequestHash: requestHash, Status: StatusPending, ExpiresAt: service.now().Add(5 * time.Minute),
+		RequestedDeviceSN: requestedDeviceSN, RequestedChipUID: requestedChipUID,
 	}
 	if err := service.repository.Create(ctx, Record{Activation: value, CodeHash: sha256.Sum256([]byte(code))}); err != nil {
 		return Activation{}, err
@@ -126,11 +135,32 @@ func (service *Service) Prepare(ctx context.Context, input PrepareInput) (Instal
 	if err != nil {
 		return Installation{}, fmt.Errorf("generate internal device id: %w", err)
 	}
-	deviceSN, err := randomDeviceSN()
+	reportedDeviceSN, err := normalizeReportedDeviceSN(input.DeviceSN)
 	if err != nil {
-		return Installation{}, fmt.Errorf("generate device sn: %w", err)
+		return Installation{}, err
 	}
-	record, err = service.repository.ReservePreparation(ctx, input.ActivationID, deviceInternalID, deviceSN, input.CSRPEM)
+	reportedChipUID, err := normalizeChipUID(input.ChipUID)
+	if err != nil {
+		return Installation{}, err
+	}
+	// 身份来源优先级：创建 activation 的调用方 → 设备上报 → 兜底生成。
+	deviceSN, chipUID, snSource := resolveDeviceIdentity(
+		record.Activation.RequestedDeviceSN, record.Activation.RequestedChipUID, reportedDeviceSN, reportedChipUID)
+	if deviceSN == "" {
+		generated, err := randomDeviceSN()
+		if err != nil {
+			return Installation{}, fmt.Errorf("generate device sn: %w", err)
+		}
+		deviceSN = generated
+	}
+	record, err = service.repository.ReservePreparation(ctx, Reservation{
+		ActivationID:     input.ActivationID,
+		DeviceInternalID: deviceInternalID,
+		DeviceSN:         deviceSN,
+		ChipUID:          chipUID,
+		SNSource:         snSource,
+		CSRPEM:           input.CSRPEM,
+	})
 	if err != nil {
 		return Installation{}, err
 	}
