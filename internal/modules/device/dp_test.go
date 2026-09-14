@@ -291,3 +291,45 @@ func TestValidateCommandsEnforcesEnumPropertyType(t *testing.T) {
 		}
 	}
 }
+
+// night_mode 的自动阈值/迟滞值是可选扩展：旧 App 的 {"mode":"auto"} 继续通过，
+// 已提供字段做类型与单值范围校验；成对出现与总和上限由设备端最终裁决。
+func TestValidateCommandsAcceptsNightModeAutoThresholds(t *testing.T) {
+	t.Parallel()
+	definitions := []DPDefinition{{
+		Code: "night_mode", Type: "object", Direction: "downlink_request_ack", Status: "active",
+		Spec: json.RawMessage(`{
+			"required":["mode"],
+			"properties":{
+				"mode":{"type":"string","enum":["day","night","auto"]},
+				"threshold":{"type":"integer","minimum":0,"maximum":255},
+				"hysteresis":{"type":"integer","minimum":1,"maximum":255}
+			},
+			"allow_extra":false
+		}`),
+	}}
+
+	for _, testCase := range []struct {
+		name  string
+		value string
+		valid bool
+	}{
+		{name: "day keeps legacy payload", value: `{"mode":"day"}`, valid: true},
+		{name: "night keeps legacy payload", value: `{"mode":"night"}`, valid: true},
+		{name: "legacy auto without values", value: `{"mode":"auto"}`, valid: true},
+		{name: "auto with both values", value: `{"mode":"auto","threshold":78,"hysteresis":20}`, valid: true},
+		{name: "single value passes gateway contract", value: `{"mode":"auto","threshold":78}`, valid: true},
+		{name: "threshold above range", value: `{"mode":"auto","threshold":256,"hysteresis":1}`, valid: false},
+		{name: "threshold below range", value: `{"mode":"auto","threshold":-1,"hysteresis":1}`, valid: false},
+		{name: "hysteresis below range", value: `{"mode":"auto","threshold":10,"hysteresis":0}`, valid: false},
+		{name: "non integer threshold", value: `{"mode":"auto","threshold":"78","hysteresis":20}`, valid: false},
+		{name: "unknown field stays rejected", value: `{"mode":"auto","white_light_enabled":false}`, valid: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := ValidateCommands(definitions, []CommandInput{{Code: "night_mode", Value: json.RawMessage(testCase.value)}})
+			if (err == nil) != testCase.valid {
+				t.Fatalf("ValidateCommands(%s) error = %v, valid=%t", testCase.value, err, testCase.valid)
+			}
+		})
+	}
+}
