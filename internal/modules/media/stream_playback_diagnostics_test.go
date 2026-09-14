@@ -1,6 +1,7 @@
 package media
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -104,5 +105,39 @@ func TestParsePlaybackControlReportsMissingControlChannel(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "data_channel") {
 		t.Fatalf("err = %v, want it to name the missing control data channel", err)
+	}
+}
+
+// The field detail is worthless if the only production caller collapses it into a bare
+// rejection: operators and viewers see exactly the error Create returns.
+func TestCreateStreamReportsRejectedPlaybackControlField(t *testing.T) {
+	t.Parallel()
+	ack := map[string]any{
+		"code": float64(0), "action": "stream", "type": "webrtc", "start": float64(1),
+		"status": "ready", "viewer_client_id": "viewer-playback",
+		"capability_contract_version": "webrtc.v1", "firmware_version": "v1.2.3",
+		"supported": map[string]any{
+			"video_receive": true, "audio_receive": true, "audio_send": true,
+			"data_channels": []any{"explorex.control.v1"},
+		},
+		"accepted": map[string]any{
+			"video_receive": true, "audio_receive": false, "audio_send": false,
+			"data_channels": []any{ControlDataChannelProtocol},
+		},
+		"playback_control": map[string]any{
+			"contract": "sd-playback.v2", "ops": sdPlaybackOps(),
+			"progress_interval_ms": float64(500), "max_concurrent_sessions": float64(1),
+			"supports_rate": false,
+		},
+	}
+	service := NewStreamService(kvsStub{}, &commanderStub{ack: ack}, &streamRepositoryStub{},
+		"aws-iot-gateway-staging-", func() (string, error) { return "viewer-playback", nil })
+	_, err := service.Create(context.Background(), "livpet-staging", "device-id", "binding-id",
+		"fdr-0001", StreamCapabilities{VideoReceive: true, DataChannels: []string{ControlDataChannelProtocol}})
+	if !errors.Is(err, ErrStreamRejected) {
+		t.Fatalf("Create() error = %v, want ErrStreamRejected", err)
+	}
+	if !strings.Contains(err.Error(), "contract") {
+		t.Fatalf("Create() error = %v, want the rejected playback_control field so operators can locate it", err)
 	}
 }

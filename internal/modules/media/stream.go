@@ -454,7 +454,9 @@ func validateCapabilityACK(result device.SendCommandsResult, viewerID string, re
 	}
 	playbackControl, err := parsePlaybackControl(ack["playback_control"], accepted)
 	if err != nil {
-		return capabilityFacts{}, ErrStreamRejected
+		// Keep the field-level detail: this is the only production caller, and collapsing
+		// it here leaves operators with a bare 409 stream_rejected.
+		return capabilityFacts{}, err
 	}
 	return capabilityFacts{
 		firmwareVersion: firmwareVersion, supported: supported, accepted: accepted,
