@@ -168,7 +168,7 @@ func (service *Service) GetDeviceInfoProjection(
 		"sn": deviceSN, "pid": pid, "online": true, "device_config": config,
 	}
 	for _, key := range []string{"wifi_mac", "version", "build", "ip", "speaker_volume",
-		"motion_detection_enabled", "night_mode", "night_mode_threshold", "night_mode_hysteresis", "light_level", "light_level_raw", "night_active", "motion_sensitivity", "motion_report_interval_sec",
+		"motion_detection_enabled", "night_mode", "motion_sensitivity", "motion_report_interval_sec",
 		"video_resolution"} {
 		if value, found := data[key]; found {
 			projection[key] = value
