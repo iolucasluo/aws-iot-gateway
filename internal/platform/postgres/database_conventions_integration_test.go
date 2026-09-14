@@ -197,7 +197,8 @@ func TestApplyMigrationsRecordsOnlyCurrentInitialSchema(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate migration names: %v", err)
 	}
-	want := []string{"001_initial.sql"}
+	// 002 是首个顺序增量迁移（设备身份锚列）；空库必须按序应用全部当前迁移文件。
+	want := []string{"001_initial.sql", "002_device_identity.sql"}
 	if fmt.Sprint(appliedNames) != fmt.Sprint(want) {
 		t.Fatalf("applied migrations = %v, want %v", appliedNames, want)
 	}

@@ -14,9 +14,35 @@ func TestMigrationLayoutContainsOnlyCurrentInitialSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read embedded migrations: %v", err)
 	}
-	want := []string{"001_initial.sql"}
+	// 002 是首个真正的顺序增量迁移：001 基线不含运行时身份锚列，而已部署库已登记
+	// 001_initial.sql，runner 按文件名跳过，必须靠新文件补齐，不能原地改 001。
+	want := []string{"001_initial.sql", "002_device_identity.sql"}
 	if got := migrationNames(entries); len(got) != len(want) || fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("migration files = %v, want %v", got, want)
+	}
+}
+
+// 002 必须是幂等、非破坏的增量：只允许加列/索引，不得删改既有结构或数据。
+func TestDeviceIdentityMigrationIsAdditiveAndIdempotent(t *testing.T) {
+	t.Parallel()
+
+	migration := readMigration(t, "002_device_identity.sql")
+	for _, fragment := range []string{
+		"ALTER TABLE device_registry ADD COLUMN IF NOT EXISTS chip_uid bytea",
+		"ADD COLUMN IF NOT EXISTS sn_source varchar(16) NOT NULL DEFAULT 'generated'",
+		"CREATE UNIQUE INDEX IF NOT EXISTS uniq_device_registry_chip_uid",
+		"ALTER TABLE device_activations ADD COLUMN IF NOT EXISTS requested_device_sn varchar(64)",
+		"ALTER TABLE device_activations ADD COLUMN IF NOT EXISTS requested_chip_uid bytea",
+		"device_registry_sn_source_check",
+		"device_activations_requested_device_sn_check",
+		"CHECK (sn_source IN ('caller', 'device', 'generated'))",
+	} {
+		requireMigrationContains(t, migration, fragment)
+	}
+	for _, forbidden := range []string{"DROP ", "TRUNCATE", "DELETE ", "UPDATE "} {
+		if strings.Contains(migration, forbidden) {
+			t.Errorf("device identity migration must stay additive, found %q", forbidden)
+		}
 	}
 }
 
