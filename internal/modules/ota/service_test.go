@@ -226,9 +226,18 @@ func TestRecordIDsAreValidatedBeforeRepositoryAccess(t *testing.T) {
 func TestPublishedMetadataFitsTheDeviceCommandEnvelope(t *testing.T) {
 	t.Parallel()
 	input := validFirmwareInput()
+	// RSA-3072 signatures are 384 bytes -> 512 base64 chars; the production OTA key
+	// must fit the device command envelope.
 	input.Signature = base64.StdEncoding.EncodeToString(make([]byte, 384))
+	if err := validateFirmwareInput(input); err != nil {
+		t.Fatalf("validateFirmwareInput() error = %v, want nil for RSA-3072 signature", err)
+	}
+
+	// 768 bytes -> 1024 base64 chars exceeds the device command envelope bound.
+	input = validFirmwareInput()
+	input.Signature = base64.StdEncoding.EncodeToString(make([]byte, 768))
 	if err := validateFirmwareInput(input); !errors.Is(err, ErrInvalidInput) {
-		t.Fatalf("validateFirmwareInput() error = %v, want ErrInvalidInput", err)
+		t.Fatalf("validateFirmwareInput() error = %v, want ErrInvalidInput for oversized signature", err)
 	}
 
 	input = validFirmwareInput()

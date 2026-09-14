@@ -26,6 +26,12 @@ const (
 	UpgradeTypeEnvironment = "environment"
 
 	maxFirmwareBytes = int64(3 * 1024 * 1024)
+
+	// MaxSignatureBase64Len bounds the base64 RSA signature carried in the
+	// ota_install MQTT command. It mirrors the device-side signature[] buffer in
+	// unified_handlers.c and must admit the production RSA-3072 key (512 base64
+	// chars) plus headroom for RSA-4096 (684).
+	MaxSignatureBase64Len = 1023
 )
 
 var (
@@ -389,7 +395,7 @@ func validateFirmwareInput(input CreateFirmwareVersionInput) error {
 		return ErrInvalidInput
 	}
 	signature, err := base64.StdEncoding.DecodeString(input.Signature)
-	if err != nil || len(input.Signature) > 511 || len(signature) == 0 ||
+	if err != nil || len(input.Signature) > MaxSignatureBase64Len || len(signature) == 0 ||
 		base64.StdEncoding.EncodeToString(signature) != input.Signature {
 		return ErrInvalidInput
 	}

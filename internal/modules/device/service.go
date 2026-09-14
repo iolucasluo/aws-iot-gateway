@@ -321,7 +321,7 @@ func (service *Service) SendOTACommand(ctx context.Context, command ota.Command)
 		command.FirmwareBuild <= 0 || command.FileSize <= 0 || command.FileSize > 3*1024*1024 ||
 		len(command.DownloadURL) < 8 || len(command.DownloadURL) > 1023 ||
 		len(command.SHA256) != 64 || len(command.ReleaseStatement) == 0 ||
-		len(command.ReleaseStatement) > 1023 || len(command.Signature) == 0 || len(command.Signature) > 511 {
+		len(command.ReleaseStatement) > 1023 || len(command.Signature) == 0 || len(command.Signature) > ota.MaxSignatureBase64Len {
 		return ErrInvalidInput
 	}
 	payload := map[string]any{
