@@ -115,7 +115,7 @@ func newDeveloperFixture(t *testing.T) developerFixture {
 		t.Fatalf("project.NewService() error = %v", err)
 	}
 	auditRecorder := &stubAuditRecorder{}
-	server, err := New(accounts, projects, auditRecorder, &stubLimiter{allowed: true}, Options{
+	server, err := New(Dependencies{Accounts: accounts, Projects: projects, Audit: auditRecorder}, &stubLimiter{allowed: true}, Options{
 		AllowedOrigins:  []string{"https://developer.example.com"},
 		LoginRateLimit:  5,
 		LoginRateWindow: 15 * time.Minute,

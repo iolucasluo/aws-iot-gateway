@@ -96,7 +96,7 @@ func outcomeForStatus(status int) string {
 // recordPortalWrite 记录一次门户写操作。审计失败不改变响应，但必须交给
 // AuditErrorHandler 记录，不能静默丢弃。
 func (server *Server) recordPortalWrite(request *http.Request, audience portalaccount.Audience, path string, holder *actorHolder, status int) {
-	if server.audit == nil {
+	if server.audit() == nil {
 		return
 	}
 	operation, resourceType, resourceID := describeOperation(audience, path, request.Method)
@@ -124,10 +124,10 @@ func (server *Server) recordPortalWrite(request *http.Request, audience portalac
 }
 
 func (server *Server) recordAudit(ctx context.Context, entry audit.Entry) {
-	if server.audit == nil {
+	if server.audit() == nil {
 		return
 	}
-	if err := server.audit.Record(ctx, entry); err != nil && server.options.AuditErrorHandler != nil {
+	if err := server.audit().Record(ctx, entry); err != nil && server.options.AuditErrorHandler != nil {
 		server.options.AuditErrorHandler(err)
 	}
 }

@@ -52,7 +52,7 @@ func newAPIFixture(t *testing.T) apiFixture {
 		t.Fatalf("portalaccount.NewService() error = %v", err)
 	}
 	limiter := &stubLimiter{allowed: true}
-	server, err := New(accounts, nil, nil, limiter, Options{
+	server, err := New(Dependencies{Accounts: accounts}, limiter, Options{
 		AllowedOrigins:  []string{"https://admin.example.com"},
 		LoginRateLimit:  5,
 		LoginRateWindow: 15 * time.Minute,

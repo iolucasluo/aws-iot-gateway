@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/audit"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/operations"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/portalaccount"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/project"
 )
@@ -43,20 +44,35 @@ type AuditRecorder interface {
 	Record(ctx context.Context, entry audit.Entry) error
 }
 
-// Server 是平台面 HTTP 入口。它只服务门户前缀，不注册任何设备侧路由。
-type Server struct {
-	accounts *portalaccount.Service
-	projects *project.Service
-	audit    AuditRecorder
-	limiter  LoginLimiter
-	options  Options
-	cors     corsPolicy
+// Dependencies 是平台 API 的协作者。集中成一个结构体，
+// 避免每加一项能力就改一次构造函数签名。
+type Dependencies struct {
+	Accounts   *portalaccount.Service
+	Projects   *project.Service
+	Audit      AuditRecorder
+	Operations *operations.QueryService
 }
 
-// New 组装平台 API。projects 为 nil 时项目/产品/凭证路由返回 503，不会静默降级；
-// audit 为 nil 时不写审计（仅限测试与本地开发，部署必须注入）。
-func New(accounts *portalaccount.Service, projects *project.Service, auditRecorder AuditRecorder, limiter LoginLimiter, options Options) (*Server, error) {
-	if accounts == nil {
+// Server 是平台面 HTTP 入口。它只服务门户前缀，不注册任何设备侧路由。
+type Server struct {
+	dependencies Dependencies
+	limiter      LoginLimiter
+	options      Options
+	cors         corsPolicy
+}
+
+func (server *Server) accounts() *portalaccount.Service { return server.dependencies.Accounts }
+func (server *Server) projects() *project.Service       { return server.dependencies.Projects }
+func (server *Server) audit() AuditRecorder             { return server.dependencies.Audit }
+func (server *Server) operations() *operations.QueryService {
+	return server.dependencies.Operations
+}
+
+// New 组装平台 API。缺少的必要协作者不会静默降级：
+// Accounts 必填；Projects 缺失时 developer/admin 的项目类路由返回 503；
+// Audit 缺失时不写审计（仅限测试与本地开发）；Operations 缺失时运维视图返回 503。
+func New(dependencies Dependencies, limiter LoginLimiter, options Options) (*Server, error) {
+	if dependencies.Accounts == nil {
 		return nil, errors.New("platform api requires an account service")
 	}
 	if limiter == nil {
@@ -72,7 +88,7 @@ func New(accounts *portalaccount.Service, projects *project.Service, auditRecord
 		options.Now = time.Now
 	}
 	return &Server{
-		accounts: accounts, projects: projects, audit: auditRecorder, limiter: limiter, options: options,
+		dependencies: dependencies, limiter: limiter, options: options,
 		cors: newCORSPolicy(options.AllowedOrigins),
 	}, nil
 }
@@ -110,7 +126,7 @@ func (server *Server) servePortal(writer http.ResponseWriter, request *http.Requ
 		server.setPassword(writer, request, audience)
 	case path == "auth/logout" && request.Method == http.MethodPost:
 		server.authenticated(writer, request, audience, func(_ context.Context, _ portalaccount.Account, session portalaccount.Session) {
-			if err := server.accounts.Logout(request.Context(), session); err != nil {
+			if err := server.accounts().Logout(request.Context(), session); err != nil {
 				writeAccountError(writer, err)
 				return
 			}
@@ -129,7 +145,7 @@ func (server *Server) servePortal(writer http.ResponseWriter, request *http.Requ
 			if !decodeBody(writer, request, &body) {
 				return
 			}
-			if err := server.accounts.ChangePassword(request.Context(), account.ID, body.CurrentPassword, body.NewPassword); err != nil {
+			if err := server.accounts().ChangePassword(request.Context(), account.ID, body.CurrentPassword, body.NewPassword); err != nil {
 				writeAccountError(writer, err)
 				return
 			}
@@ -142,7 +158,7 @@ func (server *Server) servePortal(writer http.ResponseWriter, request *http.Requ
 
 func (server *Server) serveResources(writer http.ResponseWriter, request *http.Request, audience portalaccount.Audience, path string) {
 	// 只有依赖项目域的门户才需要它；staff 的账号治理不因此降级。
-	if audience == portalaccount.AudienceDeveloper && server.projects == nil {
+	if audience == portalaccount.AudienceDeveloper && server.projects() == nil {
 		writeError(writer, http.StatusServiceUnavailable, "projects_unavailable", "project services are unavailable")
 		return
 	}
@@ -153,7 +169,7 @@ func (server *Server) serveResources(writer http.ResponseWriter, request *http.R
 		}
 		server.serveAdminResources(target, incoming, path)
 	}
-	if server.audit == nil || !isWriteMethod(request.Method) {
+	if server.audit() == nil || !isWriteMethod(request.Method) {
 		dispatch(writer, request)
 		return
 	}
@@ -174,7 +190,7 @@ func (server *Server) serveAdminResources(writer http.ResponseWriter, request *h
 				Kind:   portalaccount.AccountKind(strings.TrimSpace(request.URL.Query().Get("kind"))),
 				Status: strings.TrimSpace(request.URL.Query().Get("status")),
 			}
-			accounts, err := server.accounts.ListAccounts(request.Context(), portalaccount.ActorFromAccount(account), filter)
+			accounts, err := server.accounts().ListAccounts(request.Context(), portalaccount.ActorFromAccount(account), filter)
 			if err != nil {
 				writeAccountError(writer, err)
 				return
@@ -197,7 +213,7 @@ func (server *Server) serveAdminResources(writer http.ResponseWriter, request *h
 			if !decodeBody(writer, request, &body) {
 				return
 			}
-			result, err := server.accounts.CreateAccount(request.Context(), portalaccount.ActorFromAccount(account), portalaccount.CreateAccountInput{
+			result, err := server.accounts().CreateAccount(request.Context(), portalaccount.ActorFromAccount(account), portalaccount.CreateAccountInput{
 				Kind: portalaccount.AccountKind(strings.TrimSpace(body.Kind)), Role: strings.TrimSpace(body.Role),
 				Email: body.Email, DisplayName: body.DisplayName, ManufacturerID: body.ManufacturerID,
 			})
@@ -227,7 +243,7 @@ func (server *Server) serveAccountResource(writer http.ResponseWriter, request *
 			return
 		}
 		server.authenticated(writer, request, portalaccount.AudienceAdmin, func(_ context.Context, account portalaccount.Account, _ portalaccount.Session) {
-			token, err := server.accounts.ResetPassword(request.Context(), portalaccount.ActorFromAccount(account), resetID)
+			token, err := server.accounts().ResetPassword(request.Context(), portalaccount.ActorFromAccount(account), resetID)
 			if err != nil {
 				writeAccountError(writer, err)
 				return
@@ -243,7 +259,7 @@ func (server *Server) serveAccountResource(writer http.ResponseWriter, request *
 	switch request.Method {
 	case http.MethodGet:
 		server.authenticated(writer, request, portalaccount.AudienceAdmin, func(_ context.Context, account portalaccount.Account, _ portalaccount.Session) {
-			target, err := server.accounts.GetAccount(request.Context(), portalaccount.ActorFromAccount(account), accountID)
+			target, err := server.accounts().GetAccount(request.Context(), portalaccount.ActorFromAccount(account), accountID)
 			if err != nil {
 				writeAccountError(writer, err)
 				return
@@ -260,7 +276,7 @@ func (server *Server) serveAccountResource(writer http.ResponseWriter, request *
 			if !decodeBody(writer, request, &body) {
 				return
 			}
-			updated, err := server.accounts.UpdateAccount(request.Context(), portalaccount.ActorFromAccount(account), accountID,
+			updated, err := server.accounts().UpdateAccount(request.Context(), portalaccount.ActorFromAccount(account), accountID,
 				portalaccount.AccountPatch{DisplayName: body.DisplayName, Role: body.Role, Status: body.Status})
 			if err != nil {
 				writeAccountError(writer, err)
@@ -300,7 +316,7 @@ func (server *Server) login(writer http.ResponseWriter, request *http.Request, a
 		writeError(writer, http.StatusTooManyRequests, "too_many_requests", "too many login attempts")
 		return
 	}
-	result, err := server.accounts.Login(request.Context(), audience, email, body.Password)
+	result, err := server.accounts().Login(request.Context(), audience, email, body.Password)
 	if err != nil {
 		server.recordLogin(request.Context(), request, audience, email, portalaccount.Account{}, false)
 		writeAccountError(writer, err)
@@ -334,7 +350,7 @@ func (server *Server) setPassword(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusTooManyRequests, "too_many_requests", "too many password setup attempts")
 		return
 	}
-	account, err := server.accounts.SetPassword(request.Context(), body.Token, body.NewPassword)
+	account, err := server.accounts().SetPassword(request.Context(), body.Token, body.NewPassword)
 	if err != nil {
 		server.recordAudit(request.Context(), audit.Entry{
 			ActorKind: audit.ActorSystem, Operation: "POST auth.set_password",
@@ -369,7 +385,7 @@ func (server *Server) authenticated(
 	writer http.ResponseWriter, request *http.Request, audience portalaccount.Audience,
 	handle func(ctx context.Context, account portalaccount.Account, session portalaccount.Session),
 ) {
-	account, session, err := server.accounts.Authenticate(request.Context(), audience, bearerToken(request))
+	account, session, err := server.accounts().Authenticate(request.Context(), audience, bearerToken(request))
 	if err != nil {
 		writeAccountError(writer, err)
 		return

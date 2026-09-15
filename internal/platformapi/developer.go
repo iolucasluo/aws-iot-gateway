@@ -143,7 +143,7 @@ func (server *Server) serveDeveloperProject(writer http.ResponseWriter, request 
 	switch {
 	case !hasSub && request.Method == http.MethodGet:
 		server.withDeveloperActor(writer, request, func(ctx context.Context, actor project.Actor) {
-			value, err := server.projects.GetProject(ctx, actor, projectID)
+			value, err := server.projects().GetProject(ctx, actor, projectID)
 			if err != nil {
 				writeProjectError(writer, err)
 				return
@@ -160,7 +160,7 @@ func (server *Server) serveDeveloperProject(writer http.ResponseWriter, request 
 			if !decodeBody(writer, request, &body) {
 				return
 			}
-			value, err := server.projects.UpdateProject(ctx, actor, projectID, project.ProjectPatch{
+			value, err := server.projects().UpdateProject(ctx, actor, projectID, project.ProjectPatch{
 				Name: body.Name, Description: body.Description, Status: body.Status,
 			})
 			if err != nil {
@@ -171,7 +171,7 @@ func (server *Server) serveDeveloperProject(writer http.ResponseWriter, request 
 		})
 	case sub == "products" && request.Method == http.MethodGet:
 		server.withDeveloperActor(writer, request, func(ctx context.Context, actor project.Actor) {
-			productIDs, pids, err := server.projects.ListProjectProducts(ctx, actor, projectID)
+			productIDs, pids, err := server.projects().ListProjectProducts(ctx, actor, projectID)
 			if err != nil {
 				writeProjectError(writer, err)
 				return
@@ -186,7 +186,7 @@ func (server *Server) serveDeveloperProject(writer http.ResponseWriter, request 
 			if !decodeBody(writer, request, &body) {
 				return
 			}
-			value, err := server.projects.AttachProduct(ctx, actor, projectID, body.ProductID)
+			value, err := server.projects().AttachProduct(ctx, actor, projectID, body.ProductID)
 			if err != nil {
 				writeProjectError(writer, err)
 				return
@@ -200,7 +200,7 @@ func (server *Server) serveDeveloperProject(writer http.ResponseWriter, request 
 			return
 		}
 		server.withDeveloperActor(writer, request, func(ctx context.Context, actor project.Actor) {
-			value, err := server.projects.DetachProduct(ctx, actor, projectID, productID)
+			value, err := server.projects().DetachProduct(ctx, actor, projectID, productID)
 			if err != nil {
 				writeProjectError(writer, err)
 				return
@@ -209,7 +209,7 @@ func (server *Server) serveDeveloperProject(writer http.ResponseWriter, request 
 		})
 	case sub == "credentials" && request.Method == http.MethodGet:
 		server.withDeveloperActor(writer, request, func(ctx context.Context, actor project.Actor) {
-			credentials, err := server.projects.ListCredentials(ctx, actor, projectID)
+			credentials, err := server.projects().ListCredentials(ctx, actor, projectID)
 			if err != nil {
 				writeProjectError(writer, err)
 				return
@@ -235,7 +235,7 @@ func (server *Server) serveDeveloperProject(writer http.ResponseWriter, request 
 				writeError(writer, http.StatusBadRequest, "invalid_request", "expires_at must be an RFC3339 timestamp")
 				return
 			}
-			result, err := server.projects.CreateCredential(ctx, actor, projectID, project.CreateCredentialInput{
+			result, err := server.projects().CreateCredential(ctx, actor, projectID, project.CreateCredentialInput{
 				Name: body.Name, Permissions: body.Permissions, ExpiresAt: expiresAt,
 			})
 			if err != nil {
@@ -261,7 +261,7 @@ func (server *Server) serveDeveloperCredential(writer http.ResponseWriter, reque
 	server.withDeveloperActor(writer, request, func(ctx context.Context, actor project.Actor) {
 		switch action {
 		case "rotate":
-			result, err := server.projects.RotateCredential(ctx, actor, credentialID)
+			result, err := server.projects().RotateCredential(ctx, actor, credentialID)
 			if err != nil {
 				writeProjectError(writer, err)
 				return
@@ -271,7 +271,7 @@ func (server *Server) serveDeveloperCredential(writer http.ResponseWriter, reque
 				"api_secret": result.APISecret,
 			})
 		case "disable":
-			value, err := server.projects.DisableCredential(ctx, actor, credentialID)
+			value, err := server.projects().DisableCredential(ctx, actor, credentialID)
 			if err != nil {
 				writeProjectError(writer, err)
 				return
@@ -291,7 +291,7 @@ func (server *Server) serveDeveloperProduct(writer http.ResponseWriter, request 
 	switch request.Method {
 	case http.MethodGet:
 		server.withDeveloperActor(writer, request, func(ctx context.Context, actor project.Actor) {
-			value, err := server.projects.GetProduct(ctx, actor, pid)
+			value, err := server.projects().GetProduct(ctx, actor, pid)
 			if err != nil {
 				writeProjectError(writer, err)
 				return
@@ -309,7 +309,7 @@ func (server *Server) serveDeveloperProduct(writer http.ResponseWriter, request 
 			if !decodeBody(writer, request, &body) {
 				return
 			}
-			value, err := server.projects.UpdateProduct(ctx, actor, pid, project.ProductPatch{
+			value, err := server.projects().UpdateProduct(ctx, actor, pid, project.ProductPatch{
 				Name: body.Name, Status: body.Status, Capabilities: body.Capabilities, Category: body.Category,
 			})
 			if err != nil {
@@ -325,7 +325,7 @@ func (server *Server) serveDeveloperProduct(writer http.ResponseWriter, request 
 
 func (server *Server) listProjects(writer http.ResponseWriter, request *http.Request) {
 	server.withDeveloperActor(writer, request, func(ctx context.Context, actor project.Actor) {
-		values, err := server.projects.ListProjects(ctx, actor, project.ProjectFilter{
+		values, err := server.projects().ListProjects(ctx, actor, project.ProjectFilter{
 			Type:   project.ProjectType(strings.TrimSpace(request.URL.Query().Get("project_type"))),
 			Status: strings.TrimSpace(request.URL.Query().Get("status")),
 		})
@@ -352,7 +352,7 @@ func (server *Server) createProject(writer http.ResponseWriter, request *http.Re
 		if !decodeBody(writer, request, &body) {
 			return
 		}
-		value, err := server.projects.CreateProject(ctx, actor, project.CreateProjectInput{
+		value, err := server.projects().CreateProject(ctx, actor, project.CreateProjectInput{
 			Type: project.ProjectType(strings.TrimSpace(body.ProjectType)), Name: body.Name,
 			Description: body.Description, ManufacturerID: body.ManufacturerID,
 		})
@@ -366,7 +366,7 @@ func (server *Server) createProject(writer http.ResponseWriter, request *http.Re
 
 func (server *Server) listDPProfiles(writer http.ResponseWriter, request *http.Request) {
 	server.withDeveloperActor(writer, request, func(ctx context.Context, _ project.Actor) {
-		profiles, err := server.projects.ListActiveDPProfiles(ctx)
+		profiles, err := server.projects().ListActiveDPProfiles(ctx)
 		if err != nil {
 			writeProjectError(writer, err)
 			return
@@ -381,7 +381,7 @@ func (server *Server) listDPProfiles(writer http.ResponseWriter, request *http.R
 
 func (server *Server) listProducts(writer http.ResponseWriter, request *http.Request) {
 	server.withDeveloperActor(writer, request, func(ctx context.Context, actor project.Actor) {
-		values, err := server.projects.ListProducts(ctx, actor, project.ProductFilter{
+		values, err := server.projects().ListProducts(ctx, actor, project.ProductFilter{
 			Status: strings.TrimSpace(request.URL.Query().Get("status")),
 			PID:    strings.TrimSpace(request.URL.Query().Get("pid")),
 		})
@@ -409,7 +409,7 @@ func (server *Server) createProduct(writer http.ResponseWriter, request *http.Re
 		if !decodeBody(writer, request, &body) {
 			return
 		}
-		value, err := server.projects.CreateProduct(ctx, actor, project.CreateProductInput{
+		value, err := server.projects().CreateProduct(ctx, actor, project.CreateProductInput{
 			PID: body.PID, Name: body.Name, DPProfileCode: body.DPProfileCode,
 			Capabilities: body.Capabilities, Category: body.Category,
 		})
