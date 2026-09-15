@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 	"time"
@@ -90,11 +91,32 @@ func TestLoadPlatformConfigRequiresCORSAndDatabaseOutsideDevelopment(t *testing.
 	if _, err := LoadPlatformConfig(platformEnv(map[string]string{"GATEWAY_ENVIRONMENT": "staging"})); err == nil {
 		t.Fatal("staging without PLATFORM_CORS_ALLOWED_ORIGINS was accepted")
 	}
+	// 非 development 还要求凭证 KEK：没有主密钥就无法服务项目/凭证。
 	if _, err := LoadPlatformConfig(platformEnv(map[string]string{
 		"GATEWAY_ENVIRONMENT":           "staging",
 		"PLATFORM_CORS_ALLOWED_ORIGINS": "https://admin.example.com",
-	})); err != nil {
-		t.Fatalf("staging with an explicit origin list was rejected: %v", err)
+	})); err == nil {
+		t.Fatal("staging without PLATFORM_CREDENTIAL_KEK was accepted")
+	}
+	// 格式错误（长度不对的 base64）必须在启动前被拒绝。
+	if _, err := LoadPlatformConfig(platformEnv(map[string]string{
+		"GATEWAY_ENVIRONMENT":           "staging",
+		"PLATFORM_CORS_ALLOWED_ORIGINS": "https://admin.example.com",
+		"PLATFORM_CREDENTIAL_KEK":       "c2hvcnQ=",
+	})); err == nil {
+		t.Fatal("staging with a malformed PLATFORM_CREDENTIAL_KEK was accepted")
+	}
+	stagingKEK := make([]byte, 32)
+	stagingConfig, err := LoadPlatformConfig(platformEnv(map[string]string{
+		"GATEWAY_ENVIRONMENT":           "staging",
+		"PLATFORM_CORS_ALLOWED_ORIGINS": "https://admin.example.com",
+		"PLATFORM_CREDENTIAL_KEK":       base64.StdEncoding.EncodeToString(stagingKEK),
+	}))
+	if err != nil {
+		t.Fatalf("staging with an explicit origin list and KEK was rejected: %v", err)
+	}
+	if stagingConfig.CredentialKEKID != "kek-v1" {
+		t.Fatalf("default credential kek id = %q, want kek-v1", stagingConfig.CredentialKEKID)
 	}
 	if _, err := LoadPlatformConfig(func(string) string { return "" }); err == nil {
 		t.Fatal("missing DATABASE_URL and PGHOST were accepted")

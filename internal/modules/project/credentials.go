@@ -41,11 +41,17 @@ func (service *Service) CreateCredential(ctx context.Context, actor Actor, proje
 }
 
 // ListCredentials 返回项目凭证；SecretCiphertext 不允许出现在 API 响应里，
-// 由调用方（transport）负责投影。凭证元数据只对可写主体可见。
+// 由调用方（transport）负责投影。
+//
+// 不可见的项目按 ErrProjectNotFound 处理（不泄露存在性）；可见但不可写
+// （例如厂商对项目只有只读权限）才返回 ErrForbidden。
 func (service *Service) ListCredentials(ctx context.Context, actor Actor, projectID string) ([]Credential, error) {
 	target, err := service.repository.FindProjectByID(ctx, projectID)
 	if err != nil {
 		return nil, err
+	}
+	if !canReadProject(actor, target) {
+		return nil, ErrProjectNotFound
 	}
 	if !canWriteProject(actor, target) {
 		return nil, ErrForbidden

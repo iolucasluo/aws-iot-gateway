@@ -11,10 +11,12 @@ import (
 	"time"
 
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/portalaccount"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/project"
 )
 
 const (
 	adminPrefix         = "/api/v1/admin/"
+	developerPrefix     = "/api/v1/developer/"
 	maxRequestBodyBytes = 8 << 10
 )
 
@@ -35,12 +37,14 @@ type Options struct {
 // Server 是平台面 HTTP 入口。它只服务门户前缀，不注册任何设备侧路由。
 type Server struct {
 	accounts *portalaccount.Service
+	projects *project.Service
 	limiter  LoginLimiter
 	options  Options
 	cors     corsPolicy
 }
 
-func New(accounts *portalaccount.Service, limiter LoginLimiter, options Options) (*Server, error) {
+// New 组装平台 API。projects 为 nil 时项目/产品/凭证路由返回 503，不会静默降级。
+func New(accounts *portalaccount.Service, projects *project.Service, limiter LoginLimiter, options Options) (*Server, error) {
 	if accounts == nil {
 		return nil, errors.New("platform api requires an account service")
 	}
@@ -57,7 +61,7 @@ func New(accounts *portalaccount.Service, limiter LoginLimiter, options Options)
 		options.Now = time.Now
 	}
 	return &Server{
-		accounts: accounts, limiter: limiter, options: options,
+		accounts: accounts, projects: projects, limiter: limiter, options: options,
 		cors: newCORSPolicy(options.AllowedOrigins),
 	}, nil
 }
@@ -74,21 +78,25 @@ func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		// 平台进程的依赖就绪由 main 注入的探针决定，这里只表示进程在服务。
 		writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
 	case strings.HasPrefix(request.URL.Path, adminPrefix):
-		server.serveAdmin(writer, request)
+		server.servePortal(writer, request, portalaccount.AudienceAdmin, adminPrefix)
+	case strings.HasPrefix(request.URL.Path, developerPrefix):
+		server.servePortal(writer, request, portalaccount.AudienceDeveloper, developerPrefix)
 	default:
 		writeError(writer, http.StatusNotFound, "not_found", "endpoint not found")
 	}
 }
 
-func (server *Server) serveAdmin(writer http.ResponseWriter, request *http.Request) {
-	path := strings.TrimPrefix(request.URL.Path, adminPrefix)
+// servePortal 处理三个门户共用的会话面，再按 audience 分派各自资源。
+// audience 直接决定 token 可命中的前缀，跨门户拿到的会话在这里被拒绝。
+func (server *Server) servePortal(writer http.ResponseWriter, request *http.Request, audience portalaccount.Audience, prefix string) {
+	path := strings.TrimPrefix(request.URL.Path, prefix)
 	switch {
 	case path == "auth/login" && request.Method == http.MethodPost:
-		server.login(writer, request, portalaccount.AudienceAdmin)
+		server.login(writer, request, audience)
 	case path == "auth/set-password" && request.Method == http.MethodPost:
-		server.setPassword(writer, request, portalaccount.AudienceAdmin)
+		server.setPassword(writer, request, audience)
 	case path == "auth/logout" && request.Method == http.MethodPost:
-		server.authenticated(writer, request, func(_ context.Context, _ portalaccount.Account, session portalaccount.Session) {
+		server.authenticated(writer, request, audience, func(_ context.Context, _ portalaccount.Account, session portalaccount.Session) {
 			if err := server.accounts.Logout(request.Context(), session); err != nil {
 				writeAccountError(writer, err)
 				return
@@ -96,11 +104,11 @@ func (server *Server) serveAdmin(writer http.ResponseWriter, request *http.Reque
 			writeJSON(writer, http.StatusOK, map[string]string{"status": "logged_out"})
 		})
 	case path == "auth/me" && request.Method == http.MethodGet:
-		server.authenticated(writer, request, func(_ context.Context, account portalaccount.Account, _ portalaccount.Session) {
+		server.authenticated(writer, request, audience, func(_ context.Context, account portalaccount.Account, _ portalaccount.Session) {
 			writeJSON(writer, http.StatusOK, map[string]any{"account": newAccountResponse(account)})
 		})
 	case path == "auth/password" && request.Method == http.MethodPost:
-		server.authenticated(writer, request, func(_ context.Context, account portalaccount.Account, _ portalaccount.Session) {
+		server.authenticated(writer, request, audience, func(_ context.Context, account portalaccount.Account, _ portalaccount.Session) {
 			var body struct {
 				CurrentPassword string `json:"current_password"`
 				NewPassword     string `json:"new_password"`
@@ -114,8 +122,30 @@ func (server *Server) serveAdmin(writer http.ResponseWriter, request *http.Reque
 			}
 			writeJSON(writer, http.StatusOK, map[string]string{"status": "password_changed"})
 		})
+	default:
+		server.serveResources(writer, request, audience, path)
+	}
+}
+
+func (server *Server) serveResources(writer http.ResponseWriter, request *http.Request, audience portalaccount.Audience, path string) {
+	switch audience {
+	case portalaccount.AudienceDeveloper:
+		// 只有依赖项目域的门户才需要它；staff 的账号治理不因此降级。
+		if server.projects == nil {
+			writeError(writer, http.StatusServiceUnavailable, "projects_unavailable", "project services are unavailable")
+			return
+		}
+		server.serveDeveloper(writer, request, path)
+	default:
+		server.serveAdminResources(writer, request, path)
+	}
+}
+
+// serveAdminResources 处理 staff 专属资源。会话面已在 servePortal 处理。
+func (server *Server) serveAdminResources(writer http.ResponseWriter, request *http.Request, path string) {
+	switch {
 	case path == "accounts" && request.Method == http.MethodGet:
-		server.authenticated(writer, request, func(_ context.Context, account portalaccount.Account, _ portalaccount.Session) {
+		server.authenticated(writer, request, portalaccount.AudienceAdmin, func(_ context.Context, account portalaccount.Account, _ portalaccount.Session) {
 			filter := portalaccount.AccountFilter{
 				Kind:   portalaccount.AccountKind(strings.TrimSpace(request.URL.Query().Get("kind"))),
 				Status: strings.TrimSpace(request.URL.Query().Get("status")),
@@ -132,7 +162,7 @@ func (server *Server) serveAdmin(writer http.ResponseWriter, request *http.Reque
 			writeJSON(writer, http.StatusOK, map[string]any{"items": items})
 		})
 	case path == "accounts" && request.Method == http.MethodPost:
-		server.authenticated(writer, request, func(_ context.Context, account portalaccount.Account, _ portalaccount.Session) {
+		server.authenticated(writer, request, portalaccount.AudienceAdmin, func(_ context.Context, account portalaccount.Account, _ portalaccount.Session) {
 			var body struct {
 				Kind           string `json:"kind"`
 				Role           string `json:"role"`
@@ -172,7 +202,7 @@ func (server *Server) serveAccountResource(writer http.ResponseWriter, request *
 			writeError(writer, http.StatusNotFound, "not_found", "endpoint not found")
 			return
 		}
-		server.authenticated(writer, request, func(_ context.Context, account portalaccount.Account, _ portalaccount.Session) {
+		server.authenticated(writer, request, portalaccount.AudienceAdmin, func(_ context.Context, account portalaccount.Account, _ portalaccount.Session) {
 			token, err := server.accounts.ResetPassword(request.Context(), portalaccount.ActorFromAccount(account), resetID)
 			if err != nil {
 				writeAccountError(writer, err)
@@ -188,7 +218,7 @@ func (server *Server) serveAccountResource(writer http.ResponseWriter, request *
 	}
 	switch request.Method {
 	case http.MethodGet:
-		server.authenticated(writer, request, func(_ context.Context, account portalaccount.Account, _ portalaccount.Session) {
+		server.authenticated(writer, request, portalaccount.AudienceAdmin, func(_ context.Context, account portalaccount.Account, _ portalaccount.Session) {
 			target, err := server.accounts.GetAccount(request.Context(), portalaccount.ActorFromAccount(account), accountID)
 			if err != nil {
 				writeAccountError(writer, err)
@@ -197,7 +227,7 @@ func (server *Server) serveAccountResource(writer http.ResponseWriter, request *
 			writeJSON(writer, http.StatusOK, map[string]any{"account": newAccountResponse(target)})
 		})
 	case http.MethodPatch:
-		server.authenticated(writer, request, func(_ context.Context, account portalaccount.Account, _ portalaccount.Session) {
+		server.authenticated(writer, request, portalaccount.AudienceAdmin, func(_ context.Context, account portalaccount.Account, _ portalaccount.Session) {
 			var body struct {
 				DisplayName *string `json:"display_name"`
 				Role        *string `json:"role"`
@@ -300,10 +330,10 @@ func (server *Server) allow(audience portalaccount.Audience, scope string, reque
 }
 
 func (server *Server) authenticated(
-	writer http.ResponseWriter, request *http.Request,
+	writer http.ResponseWriter, request *http.Request, audience portalaccount.Audience,
 	handle func(ctx context.Context, account portalaccount.Account, session portalaccount.Session),
 ) {
-	account, session, err := server.accounts.Authenticate(request.Context(), portalaccount.AudienceAdmin, bearerToken(request))
+	account, session, err := server.accounts.Authenticate(request.Context(), audience, bearerToken(request))
 	if err != nil {
 		writeAccountError(writer, err)
 		return

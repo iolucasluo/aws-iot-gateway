@@ -52,7 +52,7 @@ func newAPIFixture(t *testing.T) apiFixture {
 		t.Fatalf("portalaccount.NewService() error = %v", err)
 	}
 	limiter := &stubLimiter{allowed: true}
-	server, err := New(accounts, limiter, Options{
+	server, err := New(accounts, nil, limiter, Options{
 		AllowedOrigins:  []string{"https://admin.example.com"},
 		LoginRateLimit:  5,
 		LoginRateWindow: 15 * time.Minute,
@@ -121,8 +121,17 @@ func TestHealthAndUnknownRoutes(t *testing.T) {
 	if recorder := fixture.do(t, http.MethodGet, "/api/v1/openapi/device-products", "", ""); recorder.Code != http.StatusNotFound {
 		t.Fatalf("device route status = %d, want 404 (the platform process must not serve device routes)", recorder.Code)
 	}
-	if recorder := fixture.do(t, http.MethodGet, "/api/v1/developer/projects", "", ""); recorder.Code != http.StatusNotFound {
+	if recorder := fixture.do(t, http.MethodGet, "/api/v1/manufacturer/projects", "", ""); recorder.Code != http.StatusNotFound {
 		t.Fatalf("unimplemented portal prefix status = %d, want 404", recorder.Code)
+	}
+	// developer 前缀已实现；未注入项目服务时整个前缀按依赖缺失 fail closed（503），
+	// 而不是悄悄退回 404 或放行。
+	if recorder := fixture.do(t, http.MethodGet, "/api/v1/developer/projects", "", ""); recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("developer prefix without a project service status = %d, want 503", recorder.Code)
+	}
+	// 账号治理不依赖项目域：admin 前缀在同样条件下仍然正常工作。
+	if recorder := fixture.do(t, http.MethodGet, "/api/v1/admin/accounts", "", ""); recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("admin accounts without a project service status = %d, want 401", recorder.Code)
 	}
 	if recorder := fixture.do(t, http.MethodGet, "/healthz", "", ""); recorder.Header().Get("X-Request-Id") == "" {
 		t.Fatal("response is missing X-Request-Id")

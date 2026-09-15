@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/credentialcipher"
 )
 
 // PlatformConfig 是 cmd/explorex-platform-api 的配置。
@@ -23,6 +25,10 @@ type PlatformConfig struct {
 	LoginRateLimit     int
 	LoginRateWindow    time.Duration
 	TrustedProxyHeader string
+	// CredentialKEK 是项目凭证 secret 的 AES-256-GCM 主密钥（base64）。
+	// development 可留空（项目/凭证路由返回 503）；其它环境必填。
+	CredentialKEK   string
+	CredentialKEKID string
 }
 
 const (
@@ -76,6 +82,8 @@ func LoadPlatformConfig(getenv func(string) string) (PlatformConfig, error) {
 		LoginRateLimit:     rateLimit,
 		LoginRateWindow:    rateWindow,
 		TrustedProxyHeader: strings.TrimSpace(getenv("PLATFORM_TRUSTED_PROXY_HEADER")),
+		CredentialKEK:      strings.TrimSpace(getenv("PLATFORM_CREDENTIAL_KEK")),
+		CredentialKEKID:    valueOr(getenv("PLATFORM_CREDENTIAL_KEK_ID"), "kek-v1"),
 	}
 	if !validEnvironment(config.Environment) {
 		return PlatformConfig{}, fmt.Errorf("GATEWAY_ENVIRONMENT must be development, staging, or production")
@@ -101,6 +109,13 @@ func LoadPlatformConfig(getenv func(string) string) (PlatformConfig, error) {
 	}
 	if strings.ContainsAny(config.TrustedProxyHeader, ":\r\n ") {
 		return PlatformConfig{}, fmt.Errorf("PLATFORM_TRUSTED_PROXY_HEADER must be a single header name")
+	}
+	if config.CredentialKEK != "" {
+		if _, err := credentialcipher.NewFromBase64(config.CredentialKEK, config.CredentialKEKID); err != nil {
+			return PlatformConfig{}, fmt.Errorf("PLATFORM_CREDENTIAL_KEK is invalid: %w", err)
+		}
+	} else if config.Environment != "development" {
+		return PlatformConfig{}, fmt.Errorf("PLATFORM_CREDENTIAL_KEK is required outside development")
 	}
 	return config, nil
 }

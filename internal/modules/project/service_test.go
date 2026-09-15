@@ -235,8 +235,19 @@ func TestCredentialLifecycleKeepsOwnershipOnTheProject(t *testing.T) {
 	if _, err := service.CreateCredential(ctx, owner, created.ID, CreateCredentialInput{Name: " "}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("CreateCredential(blank name) error = %v, want ErrInvalidInput", err)
 	}
-	if _, err := service.ListCredentials(ctx, manufacturerActor(), created.ID); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("ListCredentials(manufacturer) error = %v, want ErrForbidden", err)
+	// cloud 项目对该厂商不可见：按不存在处理，不泄露存在性。
+	if _, err := service.ListCredentials(ctx, manufacturerActor(), created.ID); !errors.Is(err, ErrProjectNotFound) {
+		t.Fatalf("ListCredentials(manufacturer on a foreign project) error = %v, want ErrProjectNotFound", err)
+	}
+	// 本厂商名下的 OEM 项目可见但只读：可见性通过后才是 403。
+	oem, err := service.CreateProject(ctx, owner, CreateProjectInput{
+		Type: TypeOEM, Name: "OEM Line", ManufacturerID: testManufacturerID,
+	})
+	if err != nil {
+		t.Fatalf("CreateProject(oem) error = %v", err)
+	}
+	if _, err := service.ListCredentials(ctx, manufacturerActor(), oem.ID); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("ListCredentials(manufacturer on its own project) error = %v, want ErrForbidden", err)
 	}
 
 	// 验签主体必须是 project id，而不是凭证行 id。

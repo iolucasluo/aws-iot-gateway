@@ -117,7 +117,7 @@ func (repository *MemoryRepository) AddProjectProduct(_ context.Context, _, proj
 	if _, found := repository.projects[projectID]; !found {
 		return ErrProjectNotFound
 	}
-	if _, found := repository.products[productID]; !found {
+	if !repository.productExistsLocked(productID) {
 		return ErrProductNotFound
 	}
 	for _, existing := range repository.projectItems[projectID] {
@@ -153,10 +153,28 @@ func (repository *MemoryRepository) ListProjectPIDs(_ context.Context, projectID
 	defer repository.mutex.Unlock()
 	pids := make([]string, 0, len(repository.projectItems[projectID]))
 	for _, productID := range repository.projectItems[projectID] {
-		pids = append(pids, repository.products[productID])
+		pids = append(pids, repository.pidForLocked(productID))
 	}
 	sort.Strings(pids)
 	return pids, nil
+}
+
+// productExistsLocked 与 pidForLocked 同时覆盖两种登记方式：
+// AddProduct 登记的既有目录产品，以及 CreateProduct 新建的产品。
+// 生产实现只有 products 一张表，内存实现必须保持同样的可见性。
+func (repository *MemoryRepository) productExistsLocked(productID string) bool {
+	if _, found := repository.products[productID]; found {
+		return true
+	}
+	_, found := repository.productCatalog[productID]
+	return found
+}
+
+func (repository *MemoryRepository) pidForLocked(productID string) string {
+	if pid, found := repository.products[productID]; found {
+		return pid
+	}
+	return repository.productCatalog[productID].PID
 }
 
 func (repository *MemoryRepository) ManufacturerExists(_ context.Context, manufacturerID string) (bool, error) {

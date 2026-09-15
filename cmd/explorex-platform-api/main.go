@@ -15,6 +15,8 @@ import (
 	redisclient "github.com/redis/go-redis/v9"
 
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/portalaccount"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/project"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/credentialcipher"
 	gatewaypostgres "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/postgres"
 	redisstore "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/redis"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platformapi"
@@ -51,6 +53,22 @@ func run(ctx context.Context, getenv func(string) string) error {
 	if err != nil {
 		return err
 	}
+	// 项目/产品/凭证服务：只有配置了 KEK 才启用，避免在缺少主密钥时静默降级。
+	var projects *project.Service
+	if config.CredentialKEK != "" {
+		credentialCipher, err := credentialcipher.NewFromBase64(config.CredentialKEK, config.CredentialKEKID)
+		if err != nil {
+			return fmt.Errorf("configure credential cipher: %w", err)
+		}
+		projectRepository, err := gatewaypostgres.NewProjectRepository(pool)
+		if err != nil {
+			return err
+		}
+		projects, err = project.NewService(projectRepository, credentialCipher, time.Now)
+		if err != nil {
+			return err
+		}
+	}
 	redisOptions, err := redisclient.ParseURL(config.RedisURL)
 	if err != nil {
 		return fmt.Errorf("configure Redis: %w", err)
@@ -64,7 +82,7 @@ func run(ctx context.Context, getenv func(string) string) error {
 	if err != nil {
 		return err
 	}
-	handler, err := platformapi.New(accounts, limiter, platformapi.Options{
+	handler, err := platformapi.New(accounts, projects, limiter, platformapi.Options{
 		AllowedOrigins:     config.CORSAllowedOrigins,
 		LoginRateLimit:     config.LoginRateLimit,
 		LoginRateWindow:    config.LoginRateWindow,
