@@ -36,6 +36,7 @@ func (limiter *stubLimiter) Allow(_ context.Context, key string, limit int, _ ti
 type apiFixture struct {
 	server     *Server
 	repository *portalaccount.MemoryRepository
+	accounts   *portalaccount.Service
 	limiter    *stubLimiter
 	staff      portalaccount.Account
 	token      string
@@ -71,7 +72,7 @@ func newAPIFixture(t *testing.T) apiFixture {
 	if err := repository.CreateAccount(context.Background(), staff); err != nil {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
-	return apiFixture{server: server, repository: repository, limiter: limiter, staff: staff}
+	return apiFixture{server: server, repository: repository, accounts: accounts, limiter: limiter, staff: staff}
 }
 
 func (fixture apiFixture) login(t *testing.T) string {
@@ -274,4 +275,61 @@ func TestClientIPHonoursTrustedProxyHeaderOnlyWhenConfigured(t *testing.T) {
 	if got := clientIP(request, "X-Forwarded-For"); got != "198.51.100.7" {
 		t.Fatalf("clientIP with a trusted proxy header = %q, want the first forwarded entry", got)
 	}
+}
+func TestSetPasswordRedeemsSetupTokenOnlyForTheMatchingPortal(t *testing.T) {
+	t.Parallel()
+	fixture := newAPIFixture(t)
+	ctx := context.Background()
+	session := fixture.login(t)
+	actor := portalaccount.ActorFromAccount(fixture.staff)
+
+	adminInvite, err := fixture.accounts.CreateAccount(ctx, actor, portalaccount.CreateAccountInput{
+		Kind: portalaccount.KindStaff, Role: portalaccount.RoleSuperAdmin, Email: "second@example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateAccount(staff) error = %v", err)
+	}
+	developerInvite, err := fixture.accounts.CreateAccount(ctx, actor, portalaccount.CreateAccountInput{
+		Kind: portalaccount.KindDeveloper, Role: portalaccount.RoleDeveloper, Email: "dev@example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateAccount(developer) error = %v", err)
+	}
+
+	// 跨门户兑换被拒绝：developer 的 token 不能用于 admin 前缀。
+	crossPortal := fixture.do(t, http.MethodPost, "/api/v1/admin/auth/set-password",
+		`{"token":"`+developerInvite.SetupToken+`","new_password":"a brand new passphrase"}`, "")
+	if crossPortal.Code != http.StatusUnauthorized {
+		t.Fatalf("cross-portal set-password status = %d body = %s, want 401", crossPortal.Code, crossPortal.Body.String())
+	}
+
+	weak := fixture.do(t, http.MethodPost, "/api/v1/admin/auth/set-password",
+		`{"token":"`+adminInvite.SetupToken+`","new_password":"short"}`, "")
+	if weak.Code != http.StatusBadRequest {
+		t.Fatalf("weak password status = %d, want 400", weak.Code)
+	}
+
+	redeemed := fixture.do(t, http.MethodPost, "/api/v1/admin/auth/set-password",
+		`{"token":"`+adminInvite.SetupToken+`","new_password":"a brand new passphrase"}`, "")
+	if redeemed.Code != http.StatusOK {
+		t.Fatalf("set-password status = %d body = %s", redeemed.Code, redeemed.Body.String())
+	}
+	if strings.Contains(redeemed.Body.String(), "argon2") {
+		t.Fatal("set-password response leaked the password hash")
+	}
+	replay := fixture.do(t, http.MethodPost, "/api/v1/admin/auth/set-password",
+		`{"token":"`+adminInvite.SetupToken+`","new_password":"another brand new passphrase"}`, "")
+	if replay.Code != http.StatusConflict {
+		t.Fatalf("replay status = %d, want 409", replay.Code)
+	}
+
+	login := fixture.do(t, http.MethodPost, "/api/v1/admin/auth/login",
+		`{"email":"second@example.com","password":"a brand new passphrase"}`, "")
+	if login.Code != http.StatusOK {
+		t.Fatalf("login with the redeemed password status = %d body = %s", login.Code, login.Body.String())
+	}
+	if recorder := fixture.do(t, http.MethodPost, "/api/v1/admin/auth/set-password", `{}`, ""); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("empty set-password body status = %d, want 400", recorder.Code)
+	}
+	_ = session
 }

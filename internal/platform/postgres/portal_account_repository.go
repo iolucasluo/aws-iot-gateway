@@ -131,10 +131,11 @@ func (repository *PortalAccountRepository) CreateSession(ctx context.Context, se
 func (repository *PortalAccountRepository) FindSessionByTokenHash(ctx context.Context, tokenHash [32]byte) (portalaccount.Session, error) {
 	var session portalaccount.Session
 	var audience string
+	var rawHash []byte
 	err := repository.pool.QueryRow(ctx, `
 		SELECT id::text, account_id::text, token_hash, audience, expires_at, revoked_at, last_seen_at, created_at
 		FROM portal_sessions WHERE token_hash=$1
-	`, tokenHash[:]).Scan(&session.ID, &session.AccountID, &session.TokenHash, &audience,
+	`, tokenHash[:]).Scan(&session.ID, &session.AccountID, &rawHash, &audience,
 		&session.ExpiresAt, &session.RevokedAt, &session.LastSeenAt, &session.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return portalaccount.Session{}, portalaccount.ErrSessionNotFound
@@ -142,6 +143,11 @@ func (repository *PortalAccountRepository) FindSessionByTokenHash(ctx context.Co
 	if err != nil {
 		return portalaccount.Session{}, fmt.Errorf("find portal session: %w", err)
 	}
+	// pgx 不能把 bytea 直接扫进定长数组：先取字节再按长度校验，长度不符视为不可用。
+	if len(rawHash) != len(session.TokenHash) {
+		return portalaccount.Session{}, portalaccount.ErrSessionNotFound
+	}
+	copy(session.TokenHash[:], rawHash)
 	session.Audience = portalaccount.Audience(audience)
 	return session, nil
 }
@@ -185,10 +191,11 @@ func (repository *PortalAccountRepository) CreateSetupToken(ctx context.Context,
 
 func (repository *PortalAccountRepository) FindSetupTokenByHash(ctx context.Context, tokenHash [32]byte) (portalaccount.SetupToken, error) {
 	var token portalaccount.SetupToken
+	var rawHash []byte
 	err := repository.pool.QueryRow(ctx, `
 		SELECT id::text, account_id::text, token_hash, purpose, expires_at, used_at, created_at
 		FROM portal_account_setup_tokens WHERE token_hash=$1
-	`, tokenHash[:]).Scan(&token.ID, &token.AccountID, &token.TokenHash, &token.Purpose,
+	`, tokenHash[:]).Scan(&token.ID, &token.AccountID, &rawHash, &token.Purpose,
 		&token.ExpiresAt, &token.UsedAt, &token.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return portalaccount.SetupToken{}, portalaccount.ErrSetupTokenNotFound
@@ -196,6 +203,10 @@ func (repository *PortalAccountRepository) FindSetupTokenByHash(ctx context.Cont
 	if err != nil {
 		return portalaccount.SetupToken{}, fmt.Errorf("find portal setup token: %w", err)
 	}
+	if len(rawHash) != len(token.TokenHash) {
+		return portalaccount.SetupToken{}, portalaccount.ErrSetupTokenNotFound
+	}
+	copy(token.TokenHash[:], rawHash)
 	return token, nil
 }
 

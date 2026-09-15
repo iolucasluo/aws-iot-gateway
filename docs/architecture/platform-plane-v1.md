@@ -93,7 +93,7 @@
 
 统一约定：`Authorization: Bearer <token>`；错误体沿用 `{"error_code","message","error"}`；列表统一 `?limit=`（默认 50，上限 200），响应 `{"items":[...]}`；不透明 `?cursor=`（编码 `(created_at,id)`）只用于高基数列表（设备、事件、审计、投递记录，P3 起），账号/项目/产品等有界列表 v1 不提供 cursor；写操作落审计（P3 接入）；`Idempotency-Key` 可选支持于凭证创建/轮换与 OTA deployment 创建。
 
-- **`/api/v1/admin/*`**（audience=admin）：`auth/{login,logout,me,password}`；`accounts*`（含 `password-reset`）；`manufacturers*`；`products*`；`projects*`（只读 + 状态）；`credentials`（只读 + disable）；`devices`（只读）、`devices/{device_sn}/force-unbind`；`bindings`、`device-tokens`、`activations`、`certificates`；`ota/firmware-versions`、`ota/deployments`；`factory-test-reports`、`audit-logs`、`hook-audit`。
+- **`/api/v1/admin/*`**（audience=admin）：`auth/{login,set-password,logout,me,password}`；`accounts*`（含 `password-reset`）；`manufacturers*`；`products*`；`projects*`（只读 + 状态）；`credentials`（只读 + disable）；`devices`（只读）、`devices/{device_sn}/force-unbind`；`bindings`、`device-tokens`、`activations`、`certificates`；`ota/firmware-versions`、`ota/deployments`；`factory-test-reports`、`audit-logs`、`hook-audit`。
 - **`/api/v1/developer/*`**（audience=developer）：`auth/*`；`projects*` 与 `projects/{id}/products`；`products*`；`dp-profiles`（active 只读）；`projects/{id}/credentials` 与 `credentials/{id}/{rotate,disable}`；`projects/{id}/devices`、`devices/{device_sn}`、`.../status`、`.../commands`；`projects/{id}/webhooks` 与投递记录；`ota/firmware-versions`（含 `complete`）、`devices/{device_sn}/ota-deployments`；`manufacturers`（只读目录）。
 - **`/api/v1/manufacturer/*`**（audience=manufacturer）：`auth/{login,set-password,logout,me,password}`；`projects`（scope）；`production-runs*`（含 `close`）；`stations*`；`production-runs/{id}/station-reports`；`test-reports`；`devices`（scope，只读）；`workers*`（仅 role=admin）。
 

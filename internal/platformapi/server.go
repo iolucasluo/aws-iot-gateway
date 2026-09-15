@@ -85,6 +85,8 @@ func (server *Server) serveAdmin(writer http.ResponseWriter, request *http.Reque
 	switch {
 	case path == "auth/login" && request.Method == http.MethodPost:
 		server.login(writer, request, portalaccount.AudienceAdmin)
+	case path == "auth/set-password" && request.Method == http.MethodPost:
+		server.setPassword(writer, request, portalaccount.AudienceAdmin)
 	case path == "auth/logout" && request.Method == http.MethodPost:
 		server.authenticated(writer, request, func(_ context.Context, _ portalaccount.Account, session portalaccount.Session) {
 			if err := server.accounts.Logout(request.Context(), session); err != nil {
@@ -254,6 +256,38 @@ func (server *Server) login(writer http.ResponseWriter, request *http.Request, a
 		"expires_at": result.ExpiresAt.UTC().Format(timeLayout),
 		"account":    newAccountResponse(result.Account),
 	})
+}
+
+// setPassword 用一次性 setup token 设置首次口令或重置口令。
+// token 本身就是凭据，因此不需要会话，但仍按 IP 限流以防暴力尝试。
+// token 所属账号必须属于当前门户前缀，否则返回 401，不允许跨门户兑换。
+func (server *Server) setPassword(writer http.ResponseWriter, request *http.Request, audience portalaccount.Audience) {
+	var body struct {
+		Token       string `json:"token"`
+		NewPassword string `json:"new_password"`
+	}
+	if !decodeBody(writer, request, &body) {
+		return
+	}
+	allowed, err := server.allow(audience, "set-password:ip:"+clientIP(request, server.options.TrustedProxyHeader), request)
+	if err != nil {
+		writeError(writer, http.StatusServiceUnavailable, "rate_limit_unavailable", "password setup throttling is unavailable")
+		return
+	}
+	if !allowed {
+		writeError(writer, http.StatusTooManyRequests, "too_many_requests", "too many password setup attempts")
+		return
+	}
+	account, err := server.accounts.SetPassword(request.Context(), body.Token, body.NewPassword)
+	if err != nil {
+		writeAccountError(writer, err)
+		return
+	}
+	if account.Audience() != audience {
+		writeError(writer, http.StatusUnauthorized, "unauthenticated", "setup token does not belong to this portal")
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"status": "password_set", "account": newAccountResponse(account)})
 }
 
 func (server *Server) allow(audience portalaccount.Audience, scope string, request *http.Request) (bool, error) {

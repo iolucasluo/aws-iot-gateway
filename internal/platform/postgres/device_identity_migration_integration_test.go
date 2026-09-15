@@ -8,7 +8,19 @@ import (
 // baselineWithoutDeviceIdentity 是 664fdfa 之前的 device_registry / device_activations 基线。
 // 已部署库登记过 001_initial.sql，runner 按文件名跳过，因此只能靠 002 顺序增量补齐身份列。
 // 这里内嵌最小基线，避免测试依赖 Git 历史中的旧文件内容。
+//
+// set_updated_at() 也必须出现在基线里：它自最初版 001 起就由每个业务表的 trg_*_updated_at
+// 依赖，任何真实登记过 001 的库都有它；而 003 起的顺序增量会继续复用它。
 const baselineWithoutDeviceIdentity = `
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $body$
+BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+END;
+$body$;
 CREATE TABLE device_registry (
     id uuid CONSTRAINT device_registry_pkey PRIMARY KEY,
     device_sn varchar(64) NOT NULL CONSTRAINT device_registry_device_sn_key UNIQUE,
