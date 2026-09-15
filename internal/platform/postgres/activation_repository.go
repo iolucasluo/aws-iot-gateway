@@ -222,8 +222,7 @@ func (repository *ActivationRepository) reserveDeviceRow(
 			if rowPID != pid {
 				return "", activation.ErrDeviceIdentityConflict
 			}
-			if reservation.SNSource != activation.SNSourceGenerated && reservation.DeviceSN != "" &&
-				rowSN != reservation.DeviceSN {
+			if !reservation.DeviceSNGenerated && rowSN != reservation.DeviceSN {
 				return "", activation.ErrDeviceIdentityConflict
 			}
 			return rowID, nil
@@ -259,9 +258,9 @@ func (repository *ActivationRepository) reserveDeviceRow(
 		return "", activation.ErrInvalidDeviceSN
 	}
 	if _, err := transaction.Exec(ctx, `
-		INSERT INTO device_registry (id, device_sn, thing_name, pid, dp_profile_id, status, chip_uid, sn_source)
-		VALUES ($1,$2,$2,$3,$4,'provisioning',$5,$6)
-	`, reservation.DeviceInternalID, reservation.DeviceSN, pid, profileID, reservation.ChipUID, reservation.SNSource); err != nil {
+		INSERT INTO device_registry (id, device_sn, thing_name, pid, dp_profile_id, status, chip_uid)
+		VALUES ($1,$2,$2,$3,$4,'provisioning',$5)
+	`, reservation.DeviceInternalID, reservation.DeviceSN, pid, profileID, reservation.ChipUID); err != nil {
 		var postgresError *pgconn.PgError
 		if errors.As(err, &postgresError) && postgresError.Code == "23505" {
 			return "", activation.ErrDeviceIdentityConflict

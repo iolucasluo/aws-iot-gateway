@@ -8,13 +8,6 @@ import (
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/devicesn"
 )
 
-// device_sn 来源标记，写入 device_registry.sn_source，供审计与迁移观测。
-const (
-	SNSourceCaller    = "caller"    // HMAC 认证的内部 App 在创建 activation 时提供
-	SNSourceDevice    = "device"    // 设备在 prepare-installation 时上报
-	SNSourceGenerated = "generated" // 两者都没有时的兜底生成（兼容窗口）
-)
-
 const (
 	minChipUIDHexLength = 4
 	maxChipUIDHexLength = 64
@@ -30,9 +23,11 @@ type Reservation struct {
 	ActivationID     string
 	DeviceInternalID string
 	DeviceSN         string
-	ChipUID          []byte
-	SNSource         string
-	CSRPEM           string
+	// DeviceSNGenerated 标识 DeviceSN 是 caller/device 未申报时的兜底铸号。
+	// 仅用于归并冲突判定，不持久化：设备身份始终只由 device_sn 表达。
+	DeviceSNGenerated bool
+	ChipUID           []byte
+	CSRPEM            string
 }
 
 // normalizeReportedDeviceSN 归一化外部上报的 device_sn。
@@ -70,19 +65,18 @@ func normalizeChipUID(value string) ([]byte, error) {
 	return decoded, nil
 }
 
-// resolveDeviceIdentity 合并调用方与设备上报的身份事实。
-// 返回的 device_sn 为空表示需要兜底生成；来源标记反映 device_sn 的实际出处。
-func resolveDeviceIdentity(callerSN string, callerChipUID []byte, deviceSN string, deviceChipUID []byte) (string, []byte, string) {
+// resolveDeviceIdentity 合并调用方与设备上报的身份事实；设备身份只用 device_sn 表达。
+// 返回的 device_sn 为空表示需要兜底生成。
+func resolveDeviceIdentity(callerSN string, callerChipUID []byte, deviceSN string, deviceChipUID []byte) (string, []byte) {
 	chipUID := callerChipUID
 	if len(chipUID) == 0 {
 		chipUID = deviceChipUID
 	}
-	switch {
-	case callerSN != "":
-		return callerSN, chipUID, SNSourceCaller
-	case deviceSN != "":
-		return deviceSN, chipUID, SNSourceDevice
-	default:
-		return "", chipUID, SNSourceGenerated
+	if callerSN != "" {
+		return callerSN, chipUID
 	}
+	if deviceSN != "" {
+		return deviceSN, chipUID
+	}
+	return "", chipUID
 }

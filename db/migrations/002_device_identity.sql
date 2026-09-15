@@ -1,31 +1,13 @@
--- 002_device_identity：运行身份硬件锚与 device_sn 来源审计。
+-- 002_device_identity：运行身份硬件锚与产线身份上报字段。
 --
 -- 背景：001_initial.sql 在设备身份归并落地时被原地扩展，但 runner 按文件名登记迁移
 -- （internal/platform/postgres/migrate.go），已部署库既然登记过 001_initial.sql 就永远
--- 不会重跑，chip_uid / sn_source / requested_* 因此缺失，activation 会在
+-- 不会重跑，chip_uid / requested_* 因此缺失，activation 会在
 -- "column chip_uid does not exist" 处失败。这里以顺序增量补齐，不改写 001 的历史。
 --
--- 语义：纯 additive（只加列与索引），可重复执行；既有行 sn_source 取默认值
--- 'generated' 是正确的历史事实——它们的 device_sn 全部由 Gateway 兜底铸号产生。
+-- 语义：纯 additive（只加列与索引），可重复执行。
 
 ALTER TABLE device_registry ADD COLUMN IF NOT EXISTS chip_uid bytea;
-
-ALTER TABLE device_registry
-    ADD COLUMN IF NOT EXISTS sn_source varchar(16) NOT NULL DEFAULT 'generated';
-
--- 列与命名约束分开添加：ADD COLUMN IF NOT EXISTS 在列已存在时会连同内联约束一起跳过，
--- 单独补约束才能保证最终 schema 与 001 基线一致，同时保持可重复执行。
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'device_registry_sn_source_check'
-          AND conrelid = 'device_registry'::regclass
-    ) THEN
-        ALTER TABLE device_registry ADD CONSTRAINT device_registry_sn_source_check
-            CHECK (sn_source IN ('caller', 'device', 'generated'));
-    END IF;
-END $$;
 
 -- partial unique index：同一 eFuse UID 只能对应一行运行身份，是"一芯多号"的最终防线。
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_device_registry_chip_uid
@@ -33,8 +15,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS uniq_device_registry_chip_uid
 
 COMMENT ON COLUMN device_registry.chip_uid IS
     'eFuse 芯片 UID（hex 解码后的字节）。可空：存量行与未上报 UID 的设备保持 NULL，首次上报时由归并逻辑回填。';
-COMMENT ON COLUMN device_registry.sn_source IS
-    'device_sn 来源：caller（内部 App 创建 activation 时提供）、device（设备 prepare 上报）、generated（Gateway 兜底铸号）。';
 
 ALTER TABLE device_activations ADD COLUMN IF NOT EXISTS requested_device_sn varchar(64);
 
