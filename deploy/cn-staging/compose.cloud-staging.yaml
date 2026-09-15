@@ -1,8 +1,96 @@
 name: explorex-cn-cloud-staging
 
+x-cloud-logging: &cloud-logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
 services:
   gateway-api:
     ports: !override []
+
+  # ExploreX 平台面：与 gateway-api 同一镜像（同 module）的第二个入口进程。
+  # 它不发布端口：门户 nginx 通过 application 网络按服务名访问 :14081，
+  # 设备域写操作由它用项目自身凭证签名代理到 gateway-api:14080。
+  explorex-platform-api:
+    image: ${CN_STAGING_GATEWAY_IMAGE:?CN_STAGING_GATEWAY_IMAGE is required}
+    command:
+      - /usr/local/bin/explorex-platform-api
+    env_file:
+      - ${CN_STAGING_PLATFORM_ENV_FILE:?CN_STAGING_PLATFORM_ENV_FILE is required for cloud staging}
+    environment:
+      PLATFORM_LISTEN_ADDRESS: 0.0.0.0:14081
+      PLATFORM_GATEWAY_INTERNAL_BASE_URL: http://gateway-api:14080
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      gateway-api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O - http://127.0.0.1:14081/healthz >/dev/null
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    networks:
+      - private
+      - application
+    restart: unless-stopped
+    logging: *cloud-logging
+
+  # 三门户：纯静态 SPA（nginx），/api 由镜像内的 nginx 反代到 explorex-platform-api:14081。
+  admin-console:
+    image: ${CN_STAGING_ADMIN_CONSOLE_IMAGE:?CN_STAGING_ADMIN_CONSOLE_IMAGE is required for cloud staging}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O - http://127.0.0.1/ >/dev/null
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    networks:
+      - application
+    restart: unless-stopped
+    logging: *cloud-logging
+
+  developer-portal:
+    image: ${CN_STAGING_DEVELOPER_PORTAL_IMAGE:?CN_STAGING_DEVELOPER_PORTAL_IMAGE is required for cloud staging}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O - http://127.0.0.1/ >/dev/null
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    networks:
+      - application
+    restart: unless-stopped
+    logging: *cloud-logging
+
+  manufacturer-portal:
+    image: ${CN_STAGING_MANUFACTURER_PORTAL_IMAGE:?CN_STAGING_MANUFACTURER_PORTAL_IMAGE is required for cloud staging}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -q -O - http://127.0.0.1/ >/dev/null
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    networks:
+      - application
+    restart: unless-stopped
+    logging: *cloud-logging
 
   rtc-signaling:
     ports: !override []

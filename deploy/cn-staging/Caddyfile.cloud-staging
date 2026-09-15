@@ -12,3 +12,17 @@ http://api-staging.livpet.top, https://api-staging.livpet.top {
 http://rtc-staging.livpet.top, https://rtc-staging.livpet.top {
 	reverse_proxy rtc-signaling:18084
 }
+
+# 三门户：各自子域直达静态 SPA；/api 与 /healthz 由门户镜像内的 nginx
+# 反代到 explorex-platform-api:14081（同 application 网络，不经过公网）。
+http://admin-staging.livpet.top, https://admin-staging.livpet.top {
+	reverse_proxy admin-console:80
+}
+
+http://developer-staging.livpet.top, https://developer-staging.livpet.top {
+	reverse_proxy developer-portal:80
+}
+
+http://manufacturer-staging.livpet.top, https://manufacturer-staging.livpet.top {
+	reverse_proxy manufacturer-portal:80
+}

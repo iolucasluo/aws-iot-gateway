@@ -226,6 +226,26 @@ go run ./cmd/mqtt-provider-smoke
 私钥必须留在 ignored runtime 路径。该 harness 只证明 mTLS adapter 到 bridge callback 的传输，
 不替代 ACK store、event ingest、真实 feeder 或生产门禁。
 
+## ExploreX 平台面与三门户（cloud staging 追加服务）
+
+平台面是三门户的后端，与 `gateway-api` **同一镜像**（`CN_STAGING_GATEWAY_IMAGE`）的第二个进程：
+
+| 服务 | 镜像 | 网络 | 对外入口 |
+|---|---|---|---|
+| `explorex-platform-api` | 同 `CN_STAGING_GATEWAY_IMAGE`，命令 `/usr/local/bin/explorex-platform-api` | `private` + `application` | 不发布端口；由门户 nginx 反代 |
+| `admin-console` | `CN_STAGING_ADMIN_CONSOLE_IMAGE` | `application` | `https://admin-staging.livpet.top` |
+| `developer-portal` | `CN_STAGING_DEVELOPER_PORTAL_IMAGE` | `application` | `https://developer-staging.livpet.top` |
+| `manufacturer-portal` | `CN_STAGING_MANUFACTURER_PORTAL_IMAGE` | `application` | `https://manufacturer-staging.livpet.top` |
+
+- 平台面环境在**独立** `platform.env`（示例 `platform.cloud-staging.env.example`，目标路径
+  `/opt/explorex-cn-cloud-staging/config/platform.env`）：必须与 `gateway.env` 共用同一个
+  `PLATFORM_CREDENTIAL_KEK`，否则 DB 凭证验签 401 / 平台面项目路由 503。
+- 三门户是纯静态 SPA：镜像内 nginx 提供静态文件，并把 `/api/` 与 `/healthz` 反代到
+  `explorex-platform-api:14081`（同 `application` 网络，不经过公网）。平台面自身**不**暴露公网路由。
+- 平台面以项目自身凭证签名调用 `gateway-api:14080` 处理设备 I/O 与 OTA，因此它不需要
+  IoT/S3/KVS 凭据；CORS 同源即可，示例里仍显式列出三个门户 origin。
+- gateway 首次以平台面版本启动时会应用 **003–007 纯新增表**迁移；不涉及既有表改写。
+
 ## DELL Ubuntu 等价运行
 
 DELL 可以作为单 ECS 的低并发 staging 模拟机。将 `.env.cn-staging.local` 放在 DELL 上的仓库根目录；只有在受控协议 harness 中才设置 `CN_STAGING_EDGE_BIND_ADDRESS` 为 LAN bind address。`mqtt` 仍是匿名协议 harness；feeder/App HIL 必须使用 `mqtt-mtls` profile、受控证书和 ACL。不要把 DELL 账号、密码、固定 LAN 地址或真实云凭据写进本目录。
