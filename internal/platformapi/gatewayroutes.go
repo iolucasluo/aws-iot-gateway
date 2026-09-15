@@ -2,6 +2,7 @@ package platformapi
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
@@ -68,6 +69,19 @@ func (server *Server) deviceInProjectPID(
 	// 否则一个项目能发布/查看任意产品的固件。
 	writeError(writer, http.StatusForbidden, "pid_not_in_project", "product is not part of the project")
 	return false
+}
+
+// pidFromBody 只从请求体里取 pid（平台层用它做项目收窄），不校验其余字段：
+// 整包 body 原样转发给 gateway，保持"平台层不解释设备域语义"。
+func pidFromBody(writer http.ResponseWriter, body []byte) (string, bool) {
+	var payload struct {
+		PID string `json:"pid"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "request body is invalid")
+		return "", false
+	}
+	return strings.TrimSpace(payload.PID), true
 }
 
 func readProxyBody(writer http.ResponseWriter, request *http.Request) ([]byte, bool) {
@@ -182,19 +196,19 @@ func (server *Server) proxyCreateFirmwareVersion(writer http.ResponseWriter, req
 	if !ok {
 		return
 	}
-	var payload struct {
-		PID string `json:"pid"`
-	}
+	var pid string
 	if len(body) > 0 {
-		if !decodeBodyInto(writer, body, &payload) {
+		var ok bool
+		if pid, ok = pidFromBody(writer, body); !ok {
 			return
 		}
 	}
 	server.withDeveloperActor(writer, request, func(ctx context.Context, actor project.Actor) {
-		projectID, ok := server.developerProjectForPID(writer, ctx, actor, payload.PID)
+		projectID, ok := server.developerProjectForPID(writer, ctx, actor, pid)
 		if !ok {
 			return
 		}
+		// 发布体（含 release_statement 与签名）原样转发：平台层不重写、不裁剪。
 		response, err := server.dependencies.Gateway.Call(ctx, projectID, "ota:publish", http.MethodPost,
 			"/api/v1/openapi/ota/firmware-versions", nil, body, "")
 		writeGatewayResponse(writer, response, err)
@@ -209,16 +223,15 @@ func (server *Server) proxyCompleteFirmwareVersion(writer http.ResponseWriter, r
 	if !ok {
 		return
 	}
-	var payload struct {
-		PID string `json:"pid"`
-	}
+	var pid string
 	if len(body) > 0 {
-		if !decodeBodyInto(writer, body, &payload) {
+		var ok bool
+		if pid, ok = pidFromBody(writer, body); !ok {
 			return
 		}
 	}
 	server.withDeveloperActor(writer, request, func(ctx context.Context, actor project.Actor) {
-		projectID, ok := server.developerProjectForPID(writer, ctx, actor, payload.PID)
+		projectID, ok := server.developerProjectForPID(writer, ctx, actor, pid)
 		if !ok {
 			return
 		}

@@ -146,7 +146,7 @@ func TestDeveloperDeviceCommandProxiesThroughGateway(t *testing.T) {
 	fixture.createProjectWithDevice(t, []string{"devices:read", "devices:operate"})
 
 	recorder := fixture.call(t, http.MethodPost, "/api/v1/developer/devices/"+opsFixtureDeviceSN+"/commands",
-		`{"code":"led","value":{"on":true}}`, fixture.token)
+		`{"commands":[{"code":"led","value":{"on":true}}],"wait_ack":false}`, fixture.token)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("command status = %d body = %s", recorder.Code, recorder.Body.String())
 	}
@@ -171,7 +171,8 @@ func TestDeveloperDeviceCommandProxiesThroughGateway(t *testing.T) {
 	if commandRequest.APIKey == "" || commandRequest.Signature == "" || commandRequest.Nonce == "" {
 		t.Fatalf("command request was not signed: %+v", commandRequest)
 	}
-	if string(commandRequest.Body) != `{"code":"led","value":{"on":true}}` {
+	// 平台层不重写设备域请求体：命令体按 gateway openapi 形状原样转发。
+	if string(commandRequest.Body) != `{"commands":[{"code":"led","value":{"on":true}}],"wait_ack":false}` {
 		t.Fatalf("command body = %s", commandRequest.Body)
 	}
 }
@@ -203,6 +204,58 @@ func TestDeveloperOTARequiresPIDInProjectScope(t *testing.T) {
 	requests := fixture.stub.recorded()
 	if len(requests) != 1 || requests[0].RawQuery != "pid=lamp-x1" {
 		t.Fatalf("gateway requests = %+v", requests)
+	}
+}
+
+// OTA 发布体（含 release_statement 与签名）必须整包转发：平台层只借 pid 做项目收窄，
+// 不能因为出现未知字段就 400 —— 否则两段式发布第一步就死。
+func TestDeveloperOTAPublishForwardsTheFullBody(t *testing.T) {
+	t.Parallel()
+	fixture := newGatewayProxyFixture(t, nil)
+	projectID := fixture.createProjectWithDevice(t, []string{"ota:publish", "ota:deploy"})
+	fixture.attachProduct(t, projectID, "30000000-0000-0000-0000-0000000000f2", "lamp-x1")
+
+	body := `{"idempotency_key":"ci-42","pid":"lamp-x1","version":"1.4.0","firmware_build":140,` +
+		` "sha256":"` + strings.Repeat("a", 64) + `","manifest_sha256":"` + strings.Repeat("b", 64) + `",` +
+		` "file_size":1048576,"release_statement":"schema=explorex-ota-v2|pid=lamp-x1","signature":"c2lnbmF0dXJl",` +
+		` "upstream_build_id":"ci-42"}`
+	recorder := fixture.call(t, http.MethodPost, "/api/v1/developer/ota/firmware-versions", body, fixture.token)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("publish status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	requests := fixture.stub.recorded()
+	if len(requests) != 1 {
+		t.Fatalf("gateway saw %d requests, want 1", len(requests))
+	}
+	if requests[0].Path != "/api/v1/openapi/ota/firmware-versions" || requests[0].Method != http.MethodPost {
+		t.Fatalf("publish request = %+v", requests[0])
+	}
+	if string(requests[0].Body) != body {
+		t.Fatalf("publish body was rewritten: got %s want %s", requests[0].Body, body)
+	}
+	if requests[0].APIKey == "" || requests[0].Signature == "" {
+		t.Fatalf("publish request was not signed with the project credential: %+v", requests[0])
+	}
+}
+
+// 完成上传同样整包转发；pid 决定用哪个项目的凭证。
+func TestDeveloperOTACompleteForwardsPidBody(t *testing.T) {
+	t.Parallel()
+	fixture := newGatewayProxyFixture(t, nil)
+	projectID := fixture.createProjectWithDevice(t, []string{"ota:publish"})
+	fixture.attachProduct(t, projectID, "30000000-0000-0000-0000-0000000000f3", "lamp-x1")
+
+	body := `{"pid":"lamp-x1","artifact_key":"ota/lamp-x1/1.4.0.bin"}`
+	recorder := fixture.call(t, http.MethodPost, "/api/v1/developer/ota/firmware-versions/018f0000-0000-7000-8000-0000000000aa/complete", body, fixture.token)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("complete status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+	requests := fixture.stub.recorded()
+	if len(requests) != 1 || requests[0].Path != "/api/v1/openapi/ota/firmware-versions/018f0000-0000-7000-8000-0000000000aa/complete" {
+		t.Fatalf("complete requests = %+v", requests)
+	}
+	if string(requests[0].Body) != body {
+		t.Fatalf("complete body was rewritten: %s", requests[0].Body)
 	}
 }
 
