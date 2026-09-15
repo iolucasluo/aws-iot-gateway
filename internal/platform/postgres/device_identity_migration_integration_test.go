@@ -37,6 +37,13 @@ CREATE TABLE device_activations (
     status varchar(24) NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()
 );
+-- products 也属于最初版 001：004 会给它补归属列，因此基线必须包含它。
+CREATE TABLE products (
+    id uuid CONSTRAINT products_pkey PRIMARY KEY,
+    pid varchar(64) NOT NULL CONSTRAINT products_pid_key UNIQUE,
+    name varchar(128) NOT NULL,
+    status varchar(16) NOT NULL DEFAULT 'active'
+);
 INSERT INTO device_registry (id, device_sn, thing_name, pid, status)
 VALUES ('00000000-0000-4000-8000-0000000000a1',
         'fdr-319fe199e4be7aa2d71958f4a0f8c941',
