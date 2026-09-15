@@ -33,4 +33,8 @@ type Repository interface {
 	CreateSetupToken(ctx context.Context, token SetupToken) error
 	FindSetupTokenByHash(ctx context.Context, tokenHash [32]byte) (SetupToken, error)
 	ConsumeSetupToken(ctx context.Context, tokenID string, at time.Time) error
+
+	// ManufacturerExists 是只读存在性检查：厂商主数据由制造面拥有（P4），
+	// 账号域只依赖它来保证 manufacturer 账号的 scope 不会指向不存在的厂商。
+	ManufacturerExists(ctx context.Context, manufacturerID string) (bool, error)
 }

@@ -44,16 +44,17 @@ const (
 )
 
 var (
-	ErrInvalidInput       = errors.New("invalid portal account input")
-	ErrAccountNotFound    = errors.New("portal account not found")
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrAccountDisabled    = errors.New("portal account is disabled")
-	ErrSessionNotFound    = errors.New("portal session not found")
-	ErrAudienceMismatch   = errors.New("portal session audience does not match the account")
-	ErrSetupTokenNotFound = errors.New("setup token not found")
-	ErrSetupTokenUsed     = errors.New("setup token already used")
-	ErrEmailTaken         = errors.New("portal account email already exists")
-	ErrForbidden          = errors.New("portal account operation forbidden")
+	ErrInvalidInput         = errors.New("invalid portal account input")
+	ErrAccountNotFound      = errors.New("portal account not found")
+	ErrInvalidCredentials   = errors.New("invalid credentials")
+	ErrAccountDisabled      = errors.New("portal account is disabled")
+	ErrSessionNotFound      = errors.New("portal session not found")
+	ErrAudienceMismatch     = errors.New("portal session audience does not match the account")
+	ErrSetupTokenNotFound   = errors.New("setup token not found")
+	ErrSetupTokenUsed       = errors.New("setup token already used")
+	ErrEmailTaken           = errors.New("portal account email already exists")
+	ErrManufacturerNotFound = errors.New("manufacturer not found")
+	ErrForbidden            = errors.New("portal account operation forbidden")
 )
 
 // Account 是门户账号的持久化投影，password_hash 永不出现在 API 响应中。

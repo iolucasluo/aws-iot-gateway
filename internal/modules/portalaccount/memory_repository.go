@@ -10,18 +10,34 @@ import (
 // MemoryRepository 是不依赖 PostgreSQL 的实现，供单元测试与本地开发使用。
 // 它复制真实实现必须保证的唯一性语义，不复制 SQL 细节。
 type MemoryRepository struct {
-	mutex      sync.Mutex
-	accounts   map[string]Account
-	sessions   map[string]Session
-	setupToken map[string]SetupToken
+	mutex         sync.Mutex
+	accounts      map[string]Account
+	sessions      map[string]Session
+	setupToken    map[string]SetupToken
+	manufacturers map[string]struct{}
 }
 
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
-		accounts:   map[string]Account{},
-		sessions:   map[string]Session{},
-		setupToken: map[string]SetupToken{},
+		accounts:      map[string]Account{},
+		sessions:      map[string]Session{},
+		setupToken:    map[string]SetupToken{},
+		manufacturers: map[string]struct{}{},
 	}
+}
+
+// AddManufacturer 供测试与本地开发登记厂商；厂商主数据在 P4 由制造面拥有。
+func (repository *MemoryRepository) AddManufacturer(manufacturerID string) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	repository.manufacturers[manufacturerID] = struct{}{}
+}
+
+func (repository *MemoryRepository) ManufacturerExists(_ context.Context, manufacturerID string) (bool, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	_, found := repository.manufacturers[manufacturerID]
+	return found, nil
 }
 
 func (repository *MemoryRepository) CreateAccount(_ context.Context, account Account) error {
