@@ -183,6 +183,39 @@ func (server *Server) serveResources(writer http.ResponseWriter, request *http.R
 
 // serveAdminResources 处理 staff 专属资源。会话面已在 servePortal 处理。
 func (server *Server) serveAdminResources(writer http.ResponseWriter, request *http.Request, path string) {
+	// 只读运维视图与治理视图：全部要求 admin audience 会话。
+	switch {
+	case path == "devices" && request.Method == http.MethodGet:
+		server.listDevices(writer, request)
+		return
+	case strings.HasPrefix(path, "devices/") && request.Method == http.MethodGet:
+		server.getDevice(writer, request, strings.TrimPrefix(path, "devices/"))
+		return
+	case path == "bindings" && request.Method == http.MethodGet:
+		server.listBindings(writer, request)
+		return
+	case path == "activations" && request.Method == http.MethodGet:
+		server.listActivations(writer, request)
+		return
+	case path == "audit-logs" && request.Method == http.MethodGet:
+		server.listAuditLogs(writer, request)
+		return
+	case path == "projects" && request.Method == http.MethodGet:
+		server.listAdminProjects(writer, request)
+		return
+	case strings.HasPrefix(path, "projects/") && request.Method == http.MethodGet:
+		server.getAdminProject(writer, request, strings.TrimPrefix(path, "projects/"))
+		return
+	case path == "products" && request.Method == http.MethodGet:
+		server.listAdminProducts(writer, request)
+		return
+	case strings.HasPrefix(path, "products/") && request.Method == http.MethodGet:
+		server.getAdminProduct(writer, request, strings.TrimPrefix(path, "products/"))
+		return
+	case path == "credentials" && request.Method == http.MethodGet:
+		server.listAdminCredentials(writer, request)
+		return
+	}
 	switch {
 	case path == "accounts" && request.Method == http.MethodGet:
 		server.authenticated(writer, request, portalaccount.AudienceAdmin, func(_ context.Context, account portalaccount.Account, _ portalaccount.Session) {

@@ -77,6 +77,8 @@ type DeviceFilter struct {
 
 // Device 是设备运行身份的只读投影。
 type Device struct {
+	// ID 只用于键集游标，不对外暴露；设备对外的稳定标识是 device_sn。
+	ID                    string
 	DeviceSN              string
 	PID                   string
 	Status                string

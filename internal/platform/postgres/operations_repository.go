@@ -32,7 +32,7 @@ func keyset(before *operations.Cursor) (any, any) {
 func (repository *OperationsRepository) ListDevices(ctx context.Context, filter operations.DeviceFilter) ([]operations.Device, error) {
 	beforeAt, beforeID := keyset(filter.Page.Before)
 	rows, err := repository.pool.Query(ctx, `
-		SELECT d.device_sn, d.pid, d.status, d.presence_online, d.last_seen_at,
+		SELECT d.id::text, d.device_sn, d.pid, d.status, d.presence_online, d.last_seen_at,
 		       COALESCE(d.certificate_id, ''), d.created_at,
 		       COALESCE(b.internal_app_id, ''), COALESCE(b.binding_external_user_id, ''), b.activated_at
 		FROM device_registry d
@@ -65,7 +65,7 @@ func (repository *OperationsRepository) ListDevices(ctx context.Context, filter 
 
 func (repository *OperationsRepository) FindDevice(ctx context.Context, deviceSN string) (operations.Device, error) {
 	return scanDevice(repository.pool.QueryRow(ctx, `
-		SELECT d.device_sn, d.pid, d.status, d.presence_online, d.last_seen_at,
+		SELECT d.id::text, d.device_sn, d.pid, d.status, d.presence_online, d.last_seen_at,
 		       COALESCE(d.certificate_id, ''), d.created_at,
 		       COALESCE(b.internal_app_id, ''), COALESCE(b.binding_external_user_id, ''), b.activated_at
 		FROM device_registry d
@@ -187,7 +187,7 @@ func (repository *OperationsRepository) ListAuditLogs(ctx context.Context, filte
 
 func scanDevice(row pgx.Row) (operations.Device, error) {
 	var device operations.Device
-	err := row.Scan(&device.DeviceSN, &device.PID, &device.Status, &device.Online, &device.LastSeenAt,
+	err := row.Scan(&device.ID, &device.DeviceSN, &device.PID, &device.Status, &device.Online, &device.LastSeenAt,
 		&device.CertificateID, &device.CreatedAt, &device.BindingProjectID,
 		&device.BindingExternalUserID, &device.BindingActivatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
