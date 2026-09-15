@@ -1,6 +1,8 @@
 # aws-iot-gateway
 
-`aws-iot-gateway` 是 LivPet 和内部 Demo App 共用的 **Internal AWS API**。它拥有用户激活、全局唯一绑定、设备运行身份和受限设备操作；`products` 与独立的 `dp_profiles`/`dp_definitions`/`dp_profile_members` 作为受控的只读激活/设备合同目录，不实现 Developer、Project、Product/DP CRUD/owner、Factory、tenant、IDevID、RMA 或 OTA campaign 平台。OTA 只保留签名版本和单设备 deployment。
+`aws-iot-gateway` 拥有两件事：**(a) IoT 中间层**——LivPet 和内部 Demo App 共用的 Internal AWS API，负责用户激活、全局唯一绑定、设备运行身份和受限设备操作；**(b) ExploreX 平台面**——门户账号与会话、Developer/Project/Product 归属、项目级 API 凭证、代工厂与产线质量证据，见 [Platform Plane v1](docs/architecture/platform-plane-v1.md)。
+
+它**仍然不是**通用多租户 IoT 平台：Project/Product/Factory 只在单一平台实例内表达归属与作用域，不作为 tenant 隔离维度，也不引入第二套设备域。`products` 与独立的 `dp_profiles`/`dp_definitions`/`dp_profile_members` 仍是受控的激活/设备合同目录，DP 定义只由 reviewed contract seed 发布，门户不提供 DP CRUD。不实现 IDevID、RMA、OTA campaign/批量发布、设备证书轮换、计量计费或自助注册；OTA 只保留签名版本和单设备 deployment。
 
 `/api/v1/openapi/*` 中的 `openapi` 只是 LivPet wire compatibility，产品和代码语义均使用 internal app。App 读取受控产品目录，创建 activation 时只提交 active `pid`。
 Gateway 根据 `products.dp_profile_code` 确定协议；多个产品可共享 profile，activation/设备保存当时的协议快照。

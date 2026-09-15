@@ -1,9 +1,11 @@
 # aws-iot-gateway PostgreSQL migrations
 
-本目录是 Gateway schema 的唯一权威源。这里只保留用户 activation、全局设备绑定、运行身份、设备控制、
-事件、媒体和 outbox。`products` 与独立的 DP profile/definition/member 是 Gateway schema 自有的只读激活/设备合同目录，不是旧 IoT 平台的 Product 域；没有
-Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或 OTA campaign/platform 表。Gateway
-只保留签名固件版本与单设备 deployment 执行事实。
+本目录是 Gateway schema 的唯一权威源，包含两部分：**设备域**（用户 activation、全局设备绑定、运行身份、设备控制、
+事件、媒体和 outbox）与 `003` 起的**平台面**（门户账号与会话、`manufacturers`/`projects`/`project_products`、
+项目级 `api_credentials`/`project_webhooks`、产线工位与质量证据）。`products` 与独立的 DP profile/definition/member
+是 Gateway schema 自有的受控激活/设备合同目录；DP 定义只由 reviewed contract seed 发布，门户不提供 DP CRUD。
+仍然有意的非目标：IDevID、RMA、tenant 隔离维度、OTA campaign/platform，以及第二套设备域
+（不新建 `devices`/`bindings`/`device_tokens`/`device_certificates`）。Gateway 只保留签名固件版本与单设备 deployment 执行事实。
 
 ## 文件与执行约定
 

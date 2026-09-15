@@ -29,7 +29,8 @@ Composition policy    某地域/环境允许哪些 instance 及其依赖
 ## 2. 非目标
 
 - 不提供动态 Go `.so` 插件、运行时下载代码或用户自选云厂商。
-- 不建设 tenant、Project、Factory、产线身份或通用 IoT 平台。
+- 不建设 tenant 隔离维度、产线身份或通用 IoT 平台。平台面的 Project/Factory 归属与产线质量证据见
+  [Platform Plane v1](../architecture/platform-plane-v1.md)，本契约不引入其语义。
 - 不把 AWS Shadow 作为所有 MQTT provider 的必需能力。
 - 不把“所有笛卡尔积都可运行”当作任意组合；组合必须通过依赖和数据地域校验。
 
