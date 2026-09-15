@@ -121,8 +121,12 @@ func TestHealthAndUnknownRoutes(t *testing.T) {
 	if recorder := fixture.do(t, http.MethodGet, "/api/v1/openapi/device-products", "", ""); recorder.Code != http.StatusNotFound {
 		t.Fatalf("device route status = %d, want 404 (the platform process must not serve device routes)", recorder.Code)
 	}
-	if recorder := fixture.do(t, http.MethodGet, "/api/v1/manufacturer/projects", "", ""); recorder.Code != http.StatusNotFound {
-		t.Fatalf("unimplemented portal prefix status = %d, want 404", recorder.Code)
+	// 三个门户前缀都已实现；未注入对应依赖时按依赖缺失 fail closed，而不是 404。
+	if recorder := fixture.do(t, http.MethodGet, "/api/v1/manufacturer/projects", "", ""); recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("manufacturer prefix without a manufacturing service status = %d, want 503", recorder.Code)
+	}
+	if recorder := fixture.do(t, http.MethodGet, "/api/v1/reseller/projects", "", ""); recorder.Code != http.StatusNotFound {
+		t.Fatalf("unknown portal prefix status = %d, want 404", recorder.Code)
 	}
 	// developer 前缀已实现；未注入项目服务时整个前缀按依赖缺失 fail closed（503），
 	// 而不是悄悄退回 404 或放行。

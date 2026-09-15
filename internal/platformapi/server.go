@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/audit"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/manufacturing"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/operations"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/portalaccount"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/project"
@@ -19,6 +20,7 @@ import (
 const (
 	adminPrefix         = "/api/v1/admin/"
 	developerPrefix     = "/api/v1/developer/"
+	manufacturerPrefix  = "/api/v1/manufacturer/"
 	maxRequestBodyBytes = 8 << 10
 )
 
@@ -47,10 +49,11 @@ type AuditRecorder interface {
 // Dependencies 是平台 API 的协作者。集中成一个结构体，
 // 避免每加一项能力就改一次构造函数签名。
 type Dependencies struct {
-	Accounts   *portalaccount.Service
-	Projects   *project.Service
-	Audit      AuditRecorder
-	Operations *operations.QueryService
+	Accounts      *portalaccount.Service
+	Projects      *project.Service
+	Audit         AuditRecorder
+	Operations    *operations.QueryService
+	Manufacturing *manufacturing.Service
 }
 
 // Server 是平台面 HTTP 入口。它只服务门户前缀，不注册任何设备侧路由。
@@ -66,6 +69,9 @@ func (server *Server) projects() *project.Service       { return server.dependen
 func (server *Server) audit() AuditRecorder             { return server.dependencies.Audit }
 func (server *Server) operations() *operations.QueryService {
 	return server.dependencies.Operations
+}
+func (server *Server) manufacturing() *manufacturing.Service {
+	return server.dependencies.Manufacturing
 }
 
 // New 组装平台 API。缺少的必要协作者不会静默降级：
@@ -110,6 +116,8 @@ func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		server.servePortal(writer, request, portalaccount.AudienceAdmin, adminPrefix)
 	case strings.HasPrefix(request.URL.Path, developerPrefix):
 		server.servePortal(writer, request, portalaccount.AudienceDeveloper, developerPrefix)
+	case strings.HasPrefix(request.URL.Path, manufacturerPrefix):
+		server.servePortal(writer, request, portalaccount.AudienceManufacturer, manufacturerPrefix)
 	default:
 		writeError(writer, http.StatusNotFound, "not_found", "endpoint not found")
 	}
@@ -157,17 +165,24 @@ func (server *Server) servePortal(writer http.ResponseWriter, request *http.Requ
 }
 
 func (server *Server) serveResources(writer http.ResponseWriter, request *http.Request, audience portalaccount.Audience, path string) {
-	// 只有依赖项目域的门户才需要它；staff 的账号治理不因此降级。
+	// 只有依赖该域的门户才需要它；staff 的账号治理不因此降级。
 	if audience == portalaccount.AudienceDeveloper && server.projects() == nil {
 		writeError(writer, http.StatusServiceUnavailable, "projects_unavailable", "project services are unavailable")
 		return
 	}
+	if audience == portalaccount.AudienceManufacturer && server.manufacturing() == nil {
+		writeError(writer, http.StatusServiceUnavailable, "manufacturing_unavailable", "manufacturing services are unavailable")
+		return
+	}
 	dispatch := func(target http.ResponseWriter, incoming *http.Request) {
-		if audience == portalaccount.AudienceDeveloper {
+		switch audience {
+		case portalaccount.AudienceDeveloper:
 			server.serveDeveloper(target, incoming, path)
-			return
+		case portalaccount.AudienceManufacturer:
+			server.serveManufacturer(target, incoming, path)
+		default:
+			server.serveAdminResources(target, incoming, path)
 		}
-		server.serveAdminResources(target, incoming, path)
 	}
 	if server.audit() == nil || !isWriteMethod(request.Method) {
 		dispatch(writer, request)
@@ -220,6 +235,15 @@ func (server *Server) serveAdminResources(writer http.ResponseWriter, request *h
 		return
 	case path == "credentials" && request.Method == http.MethodGet:
 		server.listAdminCredentials(writer, request)
+		return
+	case path == "manufacturers" && request.Method == http.MethodGet:
+		server.listAdminManufacturers(writer, request)
+		return
+	case path == "manufacturers" && request.Method == http.MethodPost:
+		server.createAdminManufacturer(writer, request)
+		return
+	case strings.HasPrefix(path, "manufacturers/") && request.Method == http.MethodPatch:
+		server.updateAdminManufacturer(writer, request, strings.TrimPrefix(path, "manufacturers/"))
 		return
 	}
 	switch {

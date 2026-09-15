@@ -16,6 +16,7 @@ import (
 	redisclient "github.com/redis/go-redis/v9"
 
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/audit"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/manufacturing"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/operations"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/portalaccount"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/project"
@@ -113,7 +114,18 @@ func run(ctx context.Context, getenv func(string) string) error {
 	if err != nil {
 		return err
 	}
-	handler, err := platformapi.New(platformapi.Dependencies{Accounts: accounts, Projects: projects, Audit: auditRecorder, Operations: operationsService}, limiter, platformapi.Options{
+	manufacturingRepository, err := gatewaypostgres.NewManufacturingRepository(pool)
+	if err != nil {
+		return err
+	}
+	manufacturingService, err := manufacturing.NewService(manufacturingRepository, time.Now)
+	if err != nil {
+		return err
+	}
+	handler, err := platformapi.New(platformapi.Dependencies{
+		Accounts: accounts, Projects: projects, Audit: auditRecorder,
+		Operations: operationsService, Manufacturing: manufacturingService,
+	}, limiter, platformapi.Options{
 		AllowedOrigins:     config.CORSAllowedOrigins,
 		LoginRateLimit:     config.LoginRateLimit,
 		LoginRateWindow:    config.LoginRateWindow,
