@@ -7,18 +7,27 @@ Developer、Project、Product CRUD/owner、Factory、IDevID、RMA、tenant 或 O
 
 ## 文件与执行约定
 
-- 当前未上线、未量产，按确认的开发阶段重新建立基线：唯一 schema 文件为 `001_initial.sql`。
-- 文件直接声明最终表、外键、索引、函数和触发器；没有历史升级、回填、down 或示例数据。
-- PostgreSQL runner 保留事务、advisory lock 和 migration ledger，重复启动不会重复建表。
+- `001_initial.sql` 是基线：直接声明最终表、外键、索引、函数和触发器，没有历史升级、回填、down 或示例数据。
+- `002_device_identity.sql` 是首个顺序增量迁移。设备身份归并所需的 `device_registry.chip_uid` /
+  `sn_source`、`device_activations.requested_device_sn` / `requested_chip_uid` 与
+  `uniq_device_registry_chip_uid` 曾一度直接写进 `001_initial.sql`，但 runner 按**文件名**登记迁移，
+  已部署库登记过 `001_initial.sql` 就永远不会重跑，这些列因此缺失并让 activation 在
+  `column chip_uid does not exist` 处失败。故以增量补齐，不改写 001 的历史。
+- 增量迁移必须保持纯 additive 且可重复执行（`ADD COLUMN IF NOT EXISTS`、`CREATE INDEX IF NOT EXISTS`、
+  命名约束用 `DO` 块按 `pg_constraint` 条件补），不得删除或改写既有结构。
+- PostgreSQL runner 保留事务、advisory lock 和 migration ledger，重复启动不会重复建表或重复应用。
 - 产品与 DP 数据单独由 `../seeds/001_products.sql`、`../seeds/002_dp_profiles.sql` 显式初始化。
-- 后续真正需要增量升级时再添加顺序 migration；不提前保留当前已删除的兼容路径。
+- 后续真正需要增量升级时继续添加顺序 migration；不提前保留当前已删除的兼容路径。
 
 ## 本地数据库重建
 
-本次 schema 收敛只支持空库。旧开发库可能已登记同名 `001_initial.sql`，启动不会自动覆盖或补齐旧结构。
-停止对应 API/worker，明确确认目标开发数据库后重建空库，再执行 owning child 的 seed 入口并启动服务。
-也可以为该环境配置全新的空数据库。不得仅删除 migration ledger 后在旧业务表上重跑。
-本仓不自动 DROP 现有数据库，不操作其他开发者的共享 PostgreSQL/Redis；现有设备测试记录不做兼容搬迁。
+- 已登记过 `001_initial.sql` 的旧库靠顺序迁移补齐，不需要重建：runner 会跳过已登记文件并按序应用
+  `002` 及以后的文件；`002` 对既有行保留原值，`sn_source` 取历史正确的默认 `generated`。
+- 比 `001_initial.sql` 更早、结构差异更大的历史库仍只支持空库。旧开发库可能已登记同名
+  `001_initial.sql` 而结构不同，启动不会自动覆盖或补齐。
+  停止对应 API/worker，明确确认目标开发数据库后重建空库，再执行 owning child 的 seed 入口并启动服务。
+  也可以为该环境配置全新的空数据库。不得仅删除 migration ledger 后在旧业务表上重跑。
+- 本仓不自动 DROP 现有数据库，不操作其他开发者的共享 PostgreSQL/Redis；现有设备测试记录不做兼容搬迁。
 
 ## 当前 schema 快照
 
