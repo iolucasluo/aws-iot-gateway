@@ -24,13 +24,17 @@ const (
 
 // stubOperationsRepository 让 admin 契约测试不依赖数据库。
 type stubOperationsRepository struct {
-	devices     []operations.Device
-	bindings    []operations.Binding
-	activations []operations.Activation
-	auditLogs   []operations.AuditEntry
-	lastDevice  operations.DeviceFilter
-	lastAudit   operations.AuditFilter
-	failDevices bool
+	devices         []operations.Device
+	bindings        []operations.Binding
+	activations     []operations.Activation
+	auditLogs       []operations.AuditEntry
+	lastDevice      operations.DeviceFilter
+	lastAudit       operations.AuditFilter
+	lastToken       operations.DeviceTokenFilter
+	lastCertificate operations.CertificateFilter
+	tokens          []operations.DeviceToken
+	certificates    []operations.Certificate
+	failDevices     bool
 }
 
 func (stub *stubOperationsRepository) ListDevices(_ context.Context, filter operations.DeviceFilter) ([]operations.Device, error) {
@@ -38,7 +42,18 @@ func (stub *stubOperationsRepository) ListDevices(_ context.Context, filter oper
 	if stub.failDevices {
 		return nil, operations.ErrInvalidQuery
 	}
-	return stub.devices, nil
+	if filter.SubjectID == "" {
+		return stub.devices, nil
+	}
+	// 真实实现按 active binding 的主体过滤；stub 保持同样的可见性，
+	// 否则契约测试会看到本不该出现的设备。
+	scoped := make([]operations.Device, 0, len(stub.devices))
+	for _, device := range stub.devices {
+		if device.BindingProjectID == filter.SubjectID {
+			scoped = append(scoped, device)
+		}
+	}
+	return scoped, nil
 }
 
 func (stub *stubOperationsRepository) FindDevice(_ context.Context, deviceSN string) (operations.Device, error) {
@@ -61,6 +76,16 @@ func (stub *stubOperationsRepository) ListActivations(_ context.Context, _ opera
 func (stub *stubOperationsRepository) ListAuditLogs(_ context.Context, filter operations.AuditFilter) ([]operations.AuditEntry, error) {
 	stub.lastAudit = filter
 	return stub.auditLogs, nil
+}
+
+func (stub *stubOperationsRepository) ListDeviceTokens(_ context.Context, filter operations.DeviceTokenFilter) ([]operations.DeviceToken, error) {
+	stub.lastToken = filter
+	return stub.tokens, nil
+}
+
+func (stub *stubOperationsRepository) ListCertificates(_ context.Context, filter operations.CertificateFilter) ([]operations.Certificate, error) {
+	stub.lastCertificate = filter
+	return stub.certificates, nil
 }
 
 type adminFixture struct {
@@ -116,6 +141,15 @@ func newAdminFixture(t *testing.T, withOperations bool) adminFixture {
 			ID: "018f0000-0000-7000-8000-0000000000f4", ActorKind: "portal_account",
 			ActorAccountID: adminAccountID, ActorLabel: adminEmail, Operation: "POST auth.login",
 			Outcome: "succeeded", Metadata: map[string]any{"status": 200}, CreatedAt: now,
+		}},
+		tokens: []operations.DeviceToken{{
+			ID: "018f0000-0000-7000-8000-0000000000f5", BindingID: "018f0000-0000-7000-8000-0000000000f2",
+			DeviceSN: opsFixtureDeviceSN, SubjectID: "50000000-0000-0000-0000-0000000000f1",
+			ExpiresAt: now.Add(24 * time.Hour), CreatedAt: now,
+		}},
+		certificates: []operations.Certificate{{
+			DeviceSN: opsFixtureDeviceSN, PID: "feeder-x1", Status: "active",
+			CertificateID: "cert-1", CreatedAt: now, UpdatedAt: now,
 		}},
 	}
 	dependencies := Dependencies{Accounts: accounts, Projects: projects}
@@ -209,11 +243,13 @@ func TestAdminOperationsViewsAreReadOnlyAndScoped(t *testing.T) {
 		t.Fatalf("unknown device status = %d, want 404", missing.Code)
 	}
 	for name, path := range map[string]string{
-		"bindings":    "/api/v1/admin/bindings?subject_id=50000000-0000-0000-0000-0000000000f1",
-		"activations": "/api/v1/admin/activations?status=activated",
-		"audit-logs":  "/api/v1/admin/audit-logs?operation=POST%20auth.login",
-		"projects":    "/api/v1/admin/projects",
-		"products":    "/api/v1/admin/products",
+		"bindings":      "/api/v1/admin/bindings?subject_id=50000000-0000-0000-0000-0000000000f1",
+		"device-tokens": "/api/v1/admin/device-tokens?device_sn=" + opsFixtureDeviceSN,
+		"certificates":  "/api/v1/admin/certificates?device_sn=" + opsFixtureDeviceSN,
+		"activations":   "/api/v1/admin/activations?status=activated",
+		"audit-logs":    "/api/v1/admin/audit-logs?operation=POST%20auth.login",
+		"projects":      "/api/v1/admin/projects",
+		"products":      "/api/v1/admin/products",
 	} {
 		recorder := fixture.call(t, http.MethodGet, path, "", token)
 		if recorder.Code != http.StatusOK {

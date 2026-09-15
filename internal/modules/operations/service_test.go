@@ -7,12 +7,16 @@ import (
 	"time"
 )
 
+const opsTestDeviceSN = "fdr-000000000000000000000000000000a1"
+
 type stubRepository struct {
-	deviceFilter     DeviceFilter
-	bindingFilter    BindingFilter
-	activationFilter ActivationFilter
-	auditFilter      AuditFilter
-	err              error
+	deviceFilter      DeviceFilter
+	bindingFilter     BindingFilter
+	activationFilter  ActivationFilter
+	auditFilter       AuditFilter
+	tokenFilter       DeviceTokenFilter
+	certificateFilter CertificateFilter
+	err               error
 }
 
 func (stub *stubRepository) ListDevices(_ context.Context, filter DeviceFilter) ([]Device, error) {
@@ -35,6 +39,14 @@ func (stub *stubRepository) ListActivations(_ context.Context, filter Activation
 }
 func (stub *stubRepository) ListAuditLogs(_ context.Context, filter AuditFilter) ([]AuditEntry, error) {
 	stub.auditFilter = filter
+	return nil, stub.err
+}
+func (stub *stubRepository) ListDeviceTokens(_ context.Context, filter DeviceTokenFilter) ([]DeviceToken, error) {
+	stub.tokenFilter = filter
+	return nil, stub.err
+}
+func (stub *stubRepository) ListCertificates(_ context.Context, filter CertificateFilter) ([]Certificate, error) {
+	stub.certificateFilter = filter
 	return nil, stub.err
 }
 
@@ -107,6 +119,24 @@ func TestQueryServiceNormalizesFiltersAndLimits(t *testing.T) {
 		t.Fatalf("audit filter = %+v", repository.auditFilter)
 	}
 
+	if _, err := service.ListDeviceTokens(ctx, DeviceTokenFilter{DeviceSN: " " + opsTestDeviceSN + " "}); err != nil {
+		t.Fatalf("ListDeviceTokens() error = %v", err)
+	}
+	if repository.tokenFilter.DeviceSN != opsTestDeviceSN || repository.tokenFilter.Page.Limit != 50 {
+		t.Fatalf("token filter = %+v", repository.tokenFilter)
+	}
+	if _, err := service.ListCertificates(ctx, CertificateFilter{Status: " active "}); err != nil {
+		t.Fatalf("ListCertificates() error = %v", err)
+	}
+	if repository.certificateFilter.Status != "active" || repository.certificateFilter.Page.Limit != 50 {
+		t.Fatalf("certificate filter = %+v", repository.certificateFilter)
+	}
+	if _, err := service.ListDevices(ctx, DeviceFilter{SubjectID: " subject "}); err != nil {
+		t.Fatalf("ListDevices() error = %v", err)
+	}
+	if repository.deviceFilter.SubjectID != "subject" {
+		t.Fatalf("subject filter was not trimmed: %+v", repository.deviceFilter)
+	}
 	if _, err := service.FindDevice(ctx, "   "); !errors.Is(err, ErrInvalidQuery) {
 		t.Fatalf("FindDevice(blank) error = %v, want ErrInvalidQuery", err)
 	}

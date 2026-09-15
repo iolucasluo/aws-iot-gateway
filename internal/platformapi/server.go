@@ -194,6 +194,12 @@ func (server *Server) serveAdminResources(writer http.ResponseWriter, request *h
 	case path == "bindings" && request.Method == http.MethodGet:
 		server.listBindings(writer, request)
 		return
+	case path == "device-tokens" && request.Method == http.MethodGet:
+		server.listDeviceTokens(writer, request)
+		return
+	case path == "certificates" && request.Method == http.MethodGet:
+		server.listCertificates(writer, request)
+		return
 	case path == "activations" && request.Method == http.MethodGet:
 		server.listActivations(writer, request)
 		return

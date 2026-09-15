@@ -143,3 +143,71 @@ func TestOperationsRepositoryProjectsDeviceStateOwnershipAndAudit(t *testing.T) 
 }
 
 func boolPointer(value bool) *bool { return &value }
+
+func TestOperationsRepositoryProjectsTokensCertificatesAndSubjectFilter(t *testing.T) {
+	ctx := context.Background()
+	pool := newIsolatedMigrationPool(t, ctx)
+	if err := ApplyMigrations(ctx, pool); err != nil {
+		t.Fatalf("ApplyMigrations() error = %v", err)
+	}
+	seedOperationsFixture(t, ctx, pool)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO device_tokens (id, device_binding_id, token_hash, expires_at)
+		VALUES ('018f0000-0000-7000-8000-0000000000e5', $1, decode(repeat('cc', 32), 'hex'), now() + interval '1 hour')
+	`, opsBindingID); err != nil {
+		t.Fatalf("seed device token: %v", err)
+	}
+	repository, err := NewOperationsRepository(pool)
+	if err != nil {
+		t.Fatalf("NewOperationsRepository() error = %v", err)
+	}
+	service, err := operations.NewQueryService(repository)
+	if err != nil {
+		t.Fatalf("NewQueryService() error = %v", err)
+	}
+
+	// 设备列表按 active binding 的主体过滤：平台面主体就是项目 id。
+	scoped, err := service.ListDevices(ctx, operations.DeviceFilter{SubjectID: opsSubjectID})
+	if err != nil || len(scoped) != 1 || scoped[0].DeviceSN != opsDeviceSN {
+		t.Fatalf("ListDevices(subject) = %+v, err = %v", scoped, err)
+	}
+	if foreign, err := service.ListDevices(ctx, operations.DeviceFilter{
+		SubjectID: "50000000-0000-0000-0000-0000000000ff",
+	}); err != nil || len(foreign) != 0 {
+		t.Fatalf("ListDevices(foreign subject) = %d, err = %v; want 0", len(foreign), err)
+	}
+	// 未绑定设备不会出现在任何主体过滤下。
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO device_registry (id, dp_profile_id, device_sn, thing_name, pid, status)
+		SELECT '018f0000-0000-7000-8000-0000000000e9', dp_profile_id, 'fdr-unbound-ops', 'fdr-unbound-ops', pid, 'active'
+		FROM device_registry WHERE device_sn = $1
+	`, opsDeviceSN); err != nil {
+		t.Fatalf("seed unbound device: %v", err)
+	}
+	scoped, err = service.ListDevices(ctx, operations.DeviceFilter{SubjectID: opsSubjectID})
+	if err != nil || len(scoped) != 1 {
+		t.Fatalf("unbound device leaked into a subject filter: %+v, err = %v", scoped, err)
+	}
+
+	tokens, err := service.ListDeviceTokens(ctx, operations.DeviceTokenFilter{DeviceSN: opsDeviceSN})
+	if err != nil || len(tokens) != 1 {
+		t.Fatalf("ListDeviceTokens() = %d, err = %v; want 1", len(tokens), err)
+	}
+	if tokens[0].DeviceSN != opsDeviceSN || tokens[0].SubjectID != opsSubjectID || tokens[0].RevokedAt != nil {
+		t.Fatalf("token projection = %+v", tokens[0])
+	}
+	if other, err := service.ListDeviceTokens(ctx, operations.DeviceTokenFilter{DeviceSN: "fdr-unknown"}); err != nil || len(other) != 0 {
+		t.Fatalf("ListDeviceTokens(unknown) = %d, err = %v; want 0", len(other), err)
+	}
+
+	certificates, err := service.ListCertificates(ctx, operations.CertificateFilter{DeviceSN: opsDeviceSN})
+	if err != nil || len(certificates) != 1 {
+		t.Fatalf("ListCertificates() = %d, err = %v; want 1", len(certificates), err)
+	}
+	if certificates[0].CertificateID != "cert-ops-1" || certificates[0].PID != "feeder-x1" {
+		t.Fatalf("certificate projection = %+v", certificates[0])
+	}
+	if revoked, err := service.ListCertificates(ctx, operations.CertificateFilter{Status: "revoked"}); err != nil || len(revoked) != 0 {
+		t.Fatalf("ListCertificates(revoked) = %d, err = %v; want 0", len(revoked), err)
+	}
+}

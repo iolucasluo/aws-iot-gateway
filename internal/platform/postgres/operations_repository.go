@@ -41,10 +41,11 @@ func (repository *OperationsRepository) ListDevices(ctx context.Context, filter 
 		  AND ($2 = '' OR d.status = $2)
 		  AND ($3::boolean IS NULL OR d.presence_online = $3)
 		  AND ($4 = '' OR d.device_sn LIKE $4 || '%')
-		  AND ($5::timestamptz IS NULL OR (d.created_at, d.id::text) < ($5::timestamptz, $6))
+		  AND ($5 = '' OR b.internal_app_id = $5)
+		  AND ($6::timestamptz IS NULL OR (d.created_at, d.id::text) < ($6::timestamptz, $7))
 		ORDER BY d.created_at DESC, d.id DESC
-		LIMIT $7
-	`, filter.PID, filter.Status, filter.Online, filter.Query, beforeAt, beforeID, filter.Page.Limit)
+		LIMIT $8
+	`, filter.PID, filter.Status, filter.Online, filter.Query, filter.SubjectID, beforeAt, beforeID, filter.Page.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("list devices: %w", err)
 	}
@@ -197,4 +198,68 @@ func scanDevice(row pgx.Row) (operations.Device, error) {
 		return operations.Device{}, fmt.Errorf("scan device: %w", err)
 	}
 	return device, nil
+}
+
+func (repository *OperationsRepository) ListDeviceTokens(ctx context.Context, filter operations.DeviceTokenFilter) ([]operations.DeviceToken, error) {
+	beforeAt, beforeID := keyset(filter.Page.Before)
+	rows, err := repository.pool.Query(ctx, `
+		SELECT t.id::text, t.device_binding_id::text, d.device_sn, b.internal_app_id,
+		       t.expires_at, t.revoked_at, t.created_at
+		FROM device_tokens t
+		JOIN device_bindings b ON b.id = t.device_binding_id
+		JOIN device_registry d ON d.id = b.device_registry_id
+		WHERE ($1 = '' OR d.device_sn = $1)
+		  AND ($2::timestamptz IS NULL OR (t.created_at, t.id::text) < ($2::timestamptz, $3))
+		ORDER BY t.created_at DESC, t.id DESC
+		LIMIT $4
+	`, filter.DeviceSN, beforeAt, beforeID, filter.Page.Limit)
+	if err != nil {
+		return nil, fmt.Errorf("list device tokens: %w", err)
+	}
+	defer rows.Close()
+	tokens := make([]operations.DeviceToken, 0, filter.Page.Limit)
+	for rows.Next() {
+		var token operations.DeviceToken
+		if err := rows.Scan(&token.ID, &token.BindingID, &token.DeviceSN, &token.SubjectID,
+			&token.ExpiresAt, &token.RevokedAt, &token.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan device token: %w", err)
+		}
+		tokens = append(tokens, token)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list device tokens: %w", err)
+	}
+	return tokens, nil
+}
+
+func (repository *OperationsRepository) ListCertificates(ctx context.Context, filter operations.CertificateFilter) ([]operations.Certificate, error) {
+	beforeAt, beforeID := keyset(filter.Page.Before)
+	rows, err := repository.pool.Query(ctx, `
+		SELECT d.device_sn, d.pid, d.status, COALESCE(d.certificate_id, ''), COALESCE(d.certificate_arn, ''),
+		       COALESCE(d.aws_iot_endpoint, ''), d.created_at, d.updated_at
+		FROM device_registry d
+		WHERE ($1 = '' OR d.device_sn = $1)
+		  AND ($2 = '' OR d.status = $2)
+		  AND ($3::timestamptz IS NULL OR (d.created_at, d.id::text) < ($3::timestamptz, $4))
+		ORDER BY d.created_at DESC, d.id DESC
+		LIMIT $5
+	`, filter.DeviceSN, filter.Status, beforeAt, beforeID, filter.Page.Limit)
+	if err != nil {
+		return nil, fmt.Errorf("list certificates: %w", err)
+	}
+	defer rows.Close()
+	certificates := make([]operations.Certificate, 0, filter.Page.Limit)
+	for rows.Next() {
+		var certificate operations.Certificate
+		if err := rows.Scan(&certificate.DeviceSN, &certificate.PID, &certificate.Status,
+			&certificate.CertificateID, &certificate.CertificateARN, &certificate.Endpoint,
+			&certificate.CreatedAt, &certificate.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan certificate: %w", err)
+		}
+		certificates = append(certificates, certificate)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list certificates: %w", err)
+	}
+	return certificates, nil
 }

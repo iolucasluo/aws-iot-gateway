@@ -13,6 +13,8 @@ type Repository interface {
 	ListBindings(ctx context.Context, filter BindingFilter) ([]Binding, error)
 	ListActivations(ctx context.Context, filter ActivationFilter) ([]Activation, error)
 	ListAuditLogs(ctx context.Context, filter AuditFilter) ([]AuditEntry, error)
+	ListDeviceTokens(ctx context.Context, filter DeviceTokenFilter) ([]DeviceToken, error)
+	ListCertificates(ctx context.Context, filter CertificateFilter) ([]Certificate, error)
 }
 
 // QueryService 归一化查询参数并委托仓库。它不写任何状态。
@@ -29,6 +31,7 @@ func (service *QueryService) ListDevices(ctx context.Context, filter DeviceFilte
 	filter.PID = strings.TrimSpace(filter.PID)
 	filter.Status = strings.TrimSpace(filter.Status)
 	filter.Query = strings.TrimSpace(filter.Query)
+	filter.SubjectID = strings.TrimSpace(filter.SubjectID)
 	filter.Page.Limit = normalizeLimit(filter.Page.Limit)
 	return service.repository.ListDevices(ctx, filter)
 }
@@ -54,6 +57,19 @@ func (service *QueryService) ListActivations(ctx context.Context, filter Activat
 	filter.Status = strings.TrimSpace(filter.Status)
 	filter.Page.Limit = normalizeLimit(filter.Page.Limit)
 	return service.repository.ListActivations(ctx, filter)
+}
+
+func (service *QueryService) ListDeviceTokens(ctx context.Context, filter DeviceTokenFilter) ([]DeviceToken, error) {
+	filter.DeviceSN = strings.TrimSpace(filter.DeviceSN)
+	filter.Page.Limit = normalizeLimit(filter.Page.Limit)
+	return service.repository.ListDeviceTokens(ctx, filter)
+}
+
+func (service *QueryService) ListCertificates(ctx context.Context, filter CertificateFilter) ([]Certificate, error) {
+	filter.DeviceSN = strings.TrimSpace(filter.DeviceSN)
+	filter.Status = strings.TrimSpace(filter.Status)
+	filter.Page.Limit = normalizeLimit(filter.Page.Limit)
+	return service.repository.ListCertificates(ctx, filter)
 }
 
 func (service *QueryService) ListAuditLogs(ctx context.Context, filter AuditFilter) ([]AuditEntry, error) {

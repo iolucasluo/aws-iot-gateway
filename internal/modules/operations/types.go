@@ -67,12 +67,14 @@ func normalizeLimit(limit int) int {
 }
 
 // DeviceFilter 是设备列表的过滤条件。
+// SubjectID 按当前 active binding 的主体过滤（平台面即项目 id）。
 type DeviceFilter struct {
-	PID    string
-	Status string
-	Online *bool
-	Query  string
-	Page   Page
+	PID       string
+	Status    string
+	Online    *bool
+	Query     string
+	SubjectID string
+	Page      Page
 }
 
 // Device 是设备运行身份的只读投影。
@@ -159,4 +161,41 @@ type AuditEntry struct {
 	ErrorCode      string
 	Metadata       map[string]any
 	CreatedAt      time.Time
+}
+
+// DeviceTokenFilter 是设备令牌列表的过滤条件。
+type DeviceTokenFilter struct {
+	DeviceSN string
+	Page     Page
+}
+
+// DeviceToken 是 binding-scoped token 的只读投影。
+// 它刻意不包含 token hash：那是凭据材料，门户只需要元数据。
+type DeviceToken struct {
+	ID        string
+	BindingID string
+	DeviceSN  string
+	SubjectID string
+	ExpiresAt time.Time
+	RevokedAt *time.Time
+	CreatedAt time.Time
+}
+
+// CertificateFilter 是设备证书列表的过滤条件。
+type CertificateFilter struct {
+	DeviceSN string
+	Status   string
+	Page     Page
+}
+
+// Certificate 是设备运行证书的只读投影（来自 device_registry 的身份锚列）。
+type Certificate struct {
+	DeviceSN       string
+	PID            string
+	Status         string
+	CertificateID  string
+	CertificateARN string
+	Endpoint       string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }

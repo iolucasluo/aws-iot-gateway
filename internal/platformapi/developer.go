@@ -122,6 +122,8 @@ func (server *Server) serveDeveloper(writer http.ResponseWriter, request *http.R
 		server.listProducts(writer, request)
 	case path == "products" && request.Method == http.MethodPost:
 		server.createProduct(writer, request)
+	case strings.HasPrefix(path, "devices/") && request.Method == http.MethodGet:
+		server.getDeveloperDevice(writer, request, strings.TrimPrefix(path, "devices/"))
 	default:
 		switch {
 		case strings.HasPrefix(path, "projects/"):
@@ -211,6 +213,8 @@ func (server *Server) serveDeveloperProject(writer http.ResponseWriter, request 
 			}
 			writeJSON(writer, http.StatusOK, map[string]any{"project": newProjectResponse(value)})
 		})
+	case sub == "devices" && request.Method == http.MethodGet:
+		server.listDeveloperProjectDevices(writer, request, projectID)
 	case sub == "webhooks" && request.Method == http.MethodGet:
 		server.listProjectWebhooks(writer, request, projectID)
 	case sub == "webhooks" && request.Method == http.MethodPost:

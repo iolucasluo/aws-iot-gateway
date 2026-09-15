@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/audit"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/operations"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/portalaccount"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/project"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/credentialcipher"
@@ -52,6 +53,7 @@ type developerFixture struct {
 	server     *Server
 	repository *project.MemoryRepository
 	audit      *stubAuditRecorder
+	ops        *stubOperationsRepository
 }
 
 func newDeveloperFixture(t *testing.T) developerFixture {
@@ -115,7 +117,14 @@ func newDeveloperFixture(t *testing.T) developerFixture {
 		t.Fatalf("project.NewService() error = %v", err)
 	}
 	auditRecorder := &stubAuditRecorder{}
-	server, err := New(Dependencies{Accounts: accounts, Projects: projects, Audit: auditRecorder}, &stubLimiter{allowed: true}, Options{
+	opsStub := &stubOperationsRepository{}
+	operationsService, err := operations.NewQueryService(opsStub)
+	if err != nil {
+		t.Fatalf("operations.NewQueryService() error = %v", err)
+	}
+	server, err := New(Dependencies{
+		Accounts: accounts, Projects: projects, Audit: auditRecorder, Operations: operationsService,
+	}, &stubLimiter{allowed: true}, Options{
 		AllowedOrigins:  []string{"https://developer.example.com"},
 		LoginRateLimit:  5,
 		LoginRateWindow: 15 * time.Minute,
@@ -123,7 +132,7 @@ func newDeveloperFixture(t *testing.T) developerFixture {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	return developerFixture{server: server, repository: projectRepository, audit: auditRecorder}
+	return developerFixture{server: server, repository: projectRepository, audit: auditRecorder, ops: opsStub}
 }
 
 func (fixture developerFixture) call(t *testing.T, method, path, body, token string) *httptest.ResponseRecorder {
@@ -314,5 +323,64 @@ func TestDeveloperScopeIsConfinedOverHTTP(t *testing.T) {
 	}
 	if recorder := fixture.call(t, http.MethodGet, "/api/v1/developer/dp-profiles", "", first); recorder.Code != http.StatusOK {
 		t.Fatalf("dp-profiles status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// 开发者只能看到自己项目当前绑定的设备：列表按项目过滤，详情越权按不存在处理。
+func TestDeveloperDeviceViewsAreConfinedToOwnedProjects(t *testing.T) {
+	t.Parallel()
+	fixture := newDeveloperFixture(t)
+	owner := fixture.login(t, developerOneEmail)
+	stranger := fixture.login(t, developerTwoEmail)
+
+	created := fixture.call(t, http.MethodPost, "/api/v1/developer/projects",
+		`{"project_type":"cloud","name":"Device Owner"}`, owner)
+	projectID := decodeJSON[struct {
+		Project struct {
+			ID string `json:"id"`
+		} `json:"project"`
+	}](t, created).Project.ID
+
+	fixture.ops.devices = []operations.Device{
+		{
+			ID: "018f0000-0000-7000-8000-000000000101", DeviceSN: opsFixtureDeviceSN, PID: "feeder-x1",
+			Status: "active", Online: true, CreatedAt: time.Now(),
+			BindingProjectID: projectID, BindingExternalUserID: "user-1",
+		},
+		{
+			ID: "018f0000-0000-7000-8000-000000000102", DeviceSN: "fdr-unbound", PID: "feeder-x1",
+			Status: "active", CreatedAt: time.Now(),
+		},
+	}
+
+	listed := fixture.call(t, http.MethodGet, "/api/v1/developer/projects/"+projectID+"/devices", "", owner)
+	if listed.Code != http.StatusOK {
+		t.Fatalf("project devices status = %d body = %s", listed.Code, listed.Body.String())
+	}
+	if fixture.ops.lastDevice.SubjectID != projectID {
+		t.Fatalf("device filter subject = %q, want the project id", fixture.ops.lastDevice.SubjectID)
+	}
+	items := decodeJSON[struct {
+		Items []struct {
+			DeviceSN string `json:"device_sn"`
+		} `json:"items"`
+	}](t, listed).Items
+	if len(items) != 1 || items[0].DeviceSN != opsFixtureDeviceSN {
+		t.Fatalf("project devices = %+v", items)
+	}
+
+	if detail := fixture.call(t, http.MethodGet, "/api/v1/developer/devices/"+opsFixtureDeviceSN, "", owner); detail.Code != http.StatusOK {
+		t.Fatalf("owned device detail status = %d body = %s", detail.Code, detail.Body.String())
+	}
+	if other := fixture.call(t, http.MethodGet, "/api/v1/developer/devices/"+opsFixtureDeviceSN, "", stranger); other.Code != http.StatusNotFound {
+		t.Fatalf("cross-developer device detail status = %d, want 404", other.Code)
+	}
+	// 未绑定设备不属于任何项目。
+	if unbound := fixture.call(t, http.MethodGet, "/api/v1/developer/devices/fdr-unbound", "", owner); unbound.Code != http.StatusNotFound {
+		t.Fatalf("unbound device detail status = %d, want 404", unbound.Code)
+	}
+	// 别人的项目：列表按不存在处理。
+	if foreign := fixture.call(t, http.MethodGet, "/api/v1/developer/projects/"+projectID+"/devices", "", stranger); foreign.Code != http.StatusNotFound {
+		t.Fatalf("cross-developer project devices status = %d, want 404", foreign.Code)
 	}
 }
