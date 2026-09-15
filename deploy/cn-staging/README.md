@@ -245,6 +245,11 @@ go run ./cmd/mqtt-provider-smoke
 - 平台面以项目自身凭证签名调用 `gateway-api:14080` 处理设备 I/O 与 OTA，因此它不需要
   IoT/S3/KVS 凭据；CORS 同源即可，示例里仍显式列出三个门户 origin。
 - gateway 首次以平台面版本启动时会应用 **003–007 纯新增表**迁移；不涉及既有表改写。
+- **国内 runtime 的 OTA 是 opt-in**：必须在 `gateway.env` 设置设备可达的
+  `OTA_DEVICE_DOWNLOAD_BASE_URL`（例如 `https://api-staging.livpet.top`），gateway 才会用
+  composition 里的 OSS `media_object` 绑定构造 OTA service；未设置时 developer 的 OTA 目录与
+  单设备下发（以及平台面代理到它们的路由）返回 `503 ota_service_unavailable`，
+  而 admin 的只读 OTA 视图（直接读数据库）不受影响。
 
 ## DELL Ubuntu 等价运行
 
