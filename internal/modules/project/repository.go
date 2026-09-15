@@ -39,6 +39,7 @@ type Repository interface {
 
 	CreateCredential(ctx context.Context, credential Credential) error
 	FindCredentialByID(ctx context.Context, credentialID string) (Credential, error)
+	FindActiveCredentialForPermission(ctx context.Context, projectID, permission string) (Credential, error)
 	FindCredentialByAPIKey(ctx context.Context, apiKey string) (Credential, error)
 	ListCredentials(ctx context.Context, projectID string) ([]Credential, error)
 	UpdateCredential(ctx context.Context, credential Credential) error

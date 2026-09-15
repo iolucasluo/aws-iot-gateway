@@ -437,3 +437,19 @@ func (repository *MemoryRepository) DeleteWebhook(_ context.Context, webhookID s
 	delete(repository.webhooks, webhookID)
 	return nil
 }
+
+func (repository *MemoryRepository) FindActiveCredentialForPermission(_ context.Context, projectID, permission string) (Credential, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	for _, credential := range repository.credentials {
+		if credential.ProjectID != projectID || credential.Status != StatusActive {
+			continue
+		}
+		for _, granted := range credential.Permissions {
+			if granted == permission {
+				return credential, nil
+			}
+		}
+	}
+	return Credential{}, ErrCredentialNotFound
+}

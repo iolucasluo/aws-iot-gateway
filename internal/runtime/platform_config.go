@@ -29,6 +29,9 @@ type PlatformConfig struct {
 	// development 可留空（项目/凭证路由返回 503）；其它环境必填。
 	CredentialKEK   string
 	CredentialKEKID string
+	// GatewayInternalBaseURL 是设备 I/O 与 OTA 代理的目标（gateway 内部 API）。
+	// 为空时这些路由返回 503；只读运维视图不依赖它。
+	GatewayInternalBaseURL string
 }
 
 const (
@@ -84,6 +87,8 @@ func LoadPlatformConfig(getenv func(string) string) (PlatformConfig, error) {
 		TrustedProxyHeader: strings.TrimSpace(getenv("PLATFORM_TRUSTED_PROXY_HEADER")),
 		CredentialKEK:      strings.TrimSpace(getenv("PLATFORM_CREDENTIAL_KEK")),
 		CredentialKEKID:    valueOr(getenv("PLATFORM_CREDENTIAL_KEK_ID"), "kek-v1"),
+		GatewayInternalBaseURL: strings.TrimSuffix(
+			strings.TrimSpace(getenv("PLATFORM_GATEWAY_INTERNAL_BASE_URL")), "/"),
 	}
 	if !validEnvironment(config.Environment) {
 		return PlatformConfig{}, fmt.Errorf("GATEWAY_ENVIRONMENT must be development, staging, or production")

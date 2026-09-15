@@ -226,6 +226,14 @@ func TestCredentialRepositoryRoundTripAndConstraints(t *testing.T) {
 	if byKey.ID != integrationCredentialID || byKey.KEKID != "kek-v1" || len(byKey.Permissions) != 2 {
 		t.Fatalf("credential = %+v", byKey)
 	}
+	// 平台面按权限取项目凭证：命中同一把钥匙，缺权限时显式 ErrCredentialNotFound。
+	granted, err := repository.FindActiveCredentialForPermission(ctx, integrationProjectID, "ota:deploy")
+	if err != nil || granted.ID != integrationCredentialID {
+		t.Fatalf("FindActiveCredentialForPermission(ota:deploy) = %+v, err = %v", granted, err)
+	}
+	if _, err := repository.FindActiveCredentialForPermission(ctx, integrationProjectID, "devices:operate"); !errors.Is(err, project.ErrCredentialNotFound) {
+		t.Fatalf("FindActiveCredentialForPermission(missing permission) error = %v, want ErrCredentialNotFound", err)
+	}
 	// 停用后的凭证仍然按 api_key 查得到：调用方需要区分"不存在"与"已停用"。
 	byKey.Status = project.StatusDisabled
 	byKey.UpdatedAt = now.Add(time.Hour)
@@ -235,6 +243,10 @@ func TestCredentialRepositoryRoundTripAndConstraints(t *testing.T) {
 	disabled, err := repository.FindCredentialByAPIKey(ctx, "ak_integration_primary")
 	if err != nil || disabled.Status != project.StatusDisabled {
 		t.Fatalf("disabled credential = %+v, err = %v", disabled.Status, err)
+	}
+	// 停用后即使权限匹配也不能再被平台面取用。
+	if _, err := repository.FindActiveCredentialForPermission(ctx, integrationProjectID, "devices:read"); !errors.Is(err, project.ErrCredentialNotFound) {
+		t.Fatalf("disabled credential was still usable: %v", err)
 	}
 	if _, err := repository.FindCredentialByAPIKey(ctx, "ak_unknown"); !errors.Is(err, project.ErrCredentialNotFound) {
 		t.Fatalf("FindCredentialByAPIKey(unknown) error = %v, want ErrCredentialNotFound", err)

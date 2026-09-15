@@ -381,6 +381,131 @@ func (server *Server) listAuditLogs(writer http.ResponseWriter, request *http.Re
 	})
 }
 
+type firmwareVersionResponse struct {
+	ID               string `json:"id"`
+	PID              string `json:"pid"`
+	Version          string `json:"version"`
+	FirmwareBuild    int64  `json:"firmware_build"`
+	SHA256           string `json:"sha256"`
+	FileSize         int64  `json:"file_size"`
+	ReleaseStatement string `json:"release_statement"`
+	Status           string `json:"status"`
+	PublishedBy      string `json:"published_by,omitempty"`
+	AvailableAt      string `json:"available_at,omitempty"`
+	CreatedAt        string `json:"created_at"`
+	UpdatedAt        string `json:"updated_at"`
+}
+
+func newFirmwareVersionResponse(version operations.FirmwareVersion) firmwareVersionResponse {
+	response := firmwareVersionResponse{
+		ID: version.ID, PID: version.PID, Version: version.Version,
+		FirmwareBuild: version.FirmwareBuild, SHA256: version.SHA256, FileSize: version.FileSize,
+		ReleaseStatement: version.ReleaseStatement, Status: version.Status, PublishedBy: version.PublishedBy,
+		CreatedAt: version.CreatedAt.UTC().Format(timeLayout),
+		UpdatedAt: version.UpdatedAt.UTC().Format(timeLayout),
+	}
+	if version.AvailableAt != nil {
+		response.AvailableAt = version.AvailableAt.UTC().Format(timeLayout)
+	}
+	return response
+}
+
+type otaDeploymentResponse struct {
+	ID            string `json:"id"`
+	DeviceSN      string `json:"device_sn"`
+	PID           string `json:"pid"`
+	ProjectID     string `json:"project_id,omitempty"`
+	TargetVersion string `json:"target_version"`
+	TargetBuild   int64  `json:"target_build"`
+	State         string `json:"state"`
+	FailureReason string `json:"failure_reason,omitempty"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
+	CompletedAt   string `json:"completed_at,omitempty"`
+}
+
+func newOTADeploymentResponse(deployment operations.OTADeployment) otaDeploymentResponse {
+	response := otaDeploymentResponse{
+		ID: deployment.ID, DeviceSN: deployment.DeviceSN, PID: deployment.PID,
+		ProjectID: deployment.ProjectID, TargetVersion: deployment.TargetVersion,
+		TargetBuild: deployment.TargetBuild, State: deployment.State,
+		FailureReason: deployment.FailureReason,
+		CreatedAt:     deployment.CreatedAt.UTC().Format(timeLayout),
+		UpdatedAt:     deployment.UpdatedAt.UTC().Format(timeLayout),
+	}
+	if deployment.CompletedAt != nil {
+		response.CompletedAt = deployment.CompletedAt.UTC().Format(timeLayout)
+	}
+	return response
+}
+
+// listAdminFirmwareVersions 是 OTA 版本目录的 staff 只读视图。
+//
+// 它读平台自己的只读投影（与 gateway 同一个数据库），不借用任何项目的凭证：
+// staff 看全量版本，而 developer 侧的写入仍必须走项目凭证 + gateway 授权。
+func (server *Server) listAdminFirmwareVersions(writer http.ResponseWriter, request *http.Request) {
+	if !server.requireOperations(writer) {
+		return
+	}
+	page, ok := parsePage(writer, request)
+	if !ok {
+		return
+	}
+	server.withStaff(writer, request, func(ctx context.Context, _ portalaccount.Account) {
+		versions, err := server.operations().ListFirmwareVersions(ctx, operations.FirmwareVersionFilter{
+			PID:    strings.TrimSpace(request.URL.Query().Get("pid")),
+			Status: strings.TrimSpace(request.URL.Query().Get("status")),
+			Page:   page,
+		})
+		if err != nil {
+			writeOperationsError(writer, err)
+			return
+		}
+		items := make([]firmwareVersionResponse, 0, len(versions))
+		for _, version := range versions {
+			items = append(items, newFirmwareVersionResponse(version))
+		}
+		cursor := ""
+		if last := len(versions) - 1; last >= 0 {
+			cursor = nextCursor(page.Limit, len(versions), versions[last].CreatedAt, versions[last].ID)
+		}
+		writePage(writer, items, cursor)
+	})
+}
+
+// listAdminOTADeployments 是 OTA 下发记录的 staff 只读视图（全量设备、全量项目）。
+func (server *Server) listAdminOTADeployments(writer http.ResponseWriter, request *http.Request) {
+	if !server.requireOperations(writer) {
+		return
+	}
+	page, ok := parsePage(writer, request)
+	if !ok {
+		return
+	}
+	server.withStaff(writer, request, func(ctx context.Context, _ portalaccount.Account) {
+		deployments, err := server.operations().ListOTADeployments(ctx, operations.OTADeploymentFilter{
+			DeviceSN:  strings.TrimSpace(request.URL.Query().Get("device_sn")),
+			PID:       strings.TrimSpace(request.URL.Query().Get("pid")),
+			ProjectID: strings.TrimSpace(request.URL.Query().Get("project_id")),
+			State:     strings.TrimSpace(request.URL.Query().Get("state")),
+			Page:      page,
+		})
+		if err != nil {
+			writeOperationsError(writer, err)
+			return
+		}
+		items := make([]otaDeploymentResponse, 0, len(deployments))
+		for _, deployment := range deployments {
+			items = append(items, newOTADeploymentResponse(deployment))
+		}
+		cursor := ""
+		if last := len(deployments) - 1; last >= 0 {
+			cursor = nextCursor(page.Limit, len(deployments), deployments[last].CreatedAt, deployments[last].ID)
+		}
+		writePage(writer, items, cursor)
+	})
+}
+
 func (server *Server) listAdminProjects(writer http.ResponseWriter, request *http.Request) {
 	if !server.requireProjects(writer) {
 		return

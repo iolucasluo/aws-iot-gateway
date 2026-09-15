@@ -52,6 +52,7 @@ func (recorder *stubAuditRecorder) recorded() []audit.Entry {
 type developerFixture struct {
 	server     *Server
 	repository *project.MemoryRepository
+	projects   *project.Service
 	audit      *stubAuditRecorder
 	ops        *stubOperationsRepository
 }
@@ -132,7 +133,10 @@ func newDeveloperFixture(t *testing.T) developerFixture {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	return developerFixture{server: server, repository: projectRepository, audit: auditRecorder, ops: opsStub}
+	return developerFixture{
+		server: server, repository: projectRepository, projects: projects,
+		audit: auditRecorder, ops: opsStub,
+	}
 }
 
 func (fixture developerFixture) call(t *testing.T, method, path, body, token string) *httptest.ResponseRecorder {

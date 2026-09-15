@@ -40,6 +40,27 @@ func (service *Service) CreateCredential(ctx context.Context, actor Actor, proje
 	return service.issueCredential(ctx, target.ID, input.Name, permissions, input.ExpiresAt)
 }
 
+// ProjectAPISecret 返回项目当前 active 凭证的 api key 与明文 secret，
+// 供平台进程"以项目自身身份"调用 gateway 内部 API。
+//
+// 它刻意要求权限：平台进程不会凭空获得比项目更大的授权，
+// 项目必须自己持有一条具备该权限的凭证，否则返回 ErrCredentialNotFound。
+func (service *Service) ProjectAPISecret(ctx context.Context, projectID, permission string) (string, string, error) {
+	permission = strings.TrimSpace(permission)
+	if projectID == "" || !internalauth.ValidPermission(permission) {
+		return "", "", fmt.Errorf("%w: project and a valid permission are required", ErrInvalidInput)
+	}
+	credential, err := service.repository.FindActiveCredentialForPermission(ctx, projectID, permission)
+	if err != nil {
+		return "", "", err
+	}
+	secret, err := service.cipher.Open(credential.SecretCiphertext)
+	if err != nil {
+		return "", "", fmt.Errorf("open credential secret: %w", err)
+	}
+	return credential.APIKey, secret, nil
+}
+
 // ListCredentials 返回项目凭证；SecretCiphertext 不允许出现在 API 响应里，
 // 由调用方（transport）负责投影。
 //

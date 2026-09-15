@@ -1,6 +1,7 @@
 package platformapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -41,6 +42,9 @@ type Options struct {
 	AuditErrorHandler func(error)
 }
 
+// errGatewayRejected 表示 gateway 明确拒绝了这次调用（例如设备 token 无效）。
+var errGatewayRejected = errors.New("gateway rejected the request")
+
 // AuditRecorder 是审计写入边界。
 type AuditRecorder interface {
 	Record(ctx context.Context, entry audit.Entry) error
@@ -54,6 +58,9 @@ type Dependencies struct {
 	Audit         AuditRecorder
 	Operations    *operations.QueryService
 	Manufacturing *manufacturing.Service
+	// Gateway 为空时设备 I/O 与 OTA 路由返回 503；
+	// 读取路径不依赖它（只读运维视图直接读库）。
+	Gateway *GatewayClient
 }
 
 // Server 是平台面 HTTP 入口。它只服务门户前缀，不注册任何设备侧路由。
@@ -220,6 +227,12 @@ func (server *Server) serveAdminResources(writer http.ResponseWriter, request *h
 		return
 	case path == "audit-logs" && request.Method == http.MethodGet:
 		server.listAuditLogs(writer, request)
+		return
+	case path == "ota/firmware-versions" && request.Method == http.MethodGet:
+		server.listAdminFirmwareVersions(writer, request)
+		return
+	case path == "ota/deployments" && request.Method == http.MethodGet:
+		server.listAdminOTADeployments(writer, request)
 		return
 	case path == "projects" && request.Method == http.MethodGet:
 		server.listAdminProjects(writer, request)
@@ -458,6 +471,18 @@ func (server *Server) authenticated(
 		holder.set = true
 	}
 	handle(request.Context(), account, session)
+}
+
+// decodeBodyInto 解码已经读出的请求体。
+// 代理路径需要同时保留原始字节转发给 gateway，因此不能让它再读一次 Body。
+func decodeBodyInto(writer http.ResponseWriter, body []byte, target any) bool {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "request body is invalid")
+		return false
+	}
+	return true
 }
 
 func decodeBody(writer http.ResponseWriter, request *http.Request, target any) bool {

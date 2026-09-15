@@ -33,7 +33,12 @@
 
 理由：把浏览器面（登录、密码、会话、用户输入、CORS）与设备信任进程隔离，可独立扩缩容与回滚；同时避免跨服务鉴权与第二套授权实现。
 
-平台进程**不注册任何设备侧路由**；它通过 import 本仓既有 domain 服务（`internal/activation`、`internal/modules/*`）完成设备查询与操作。IAM 只授予 v1 实际使用的能力（IoT shadow 只读、命令发布、OTA 发布、S3 artifact），不授予设备证书签发与 KVS/KMS。
+平台进程**不注册任何设备侧路由**，并按"读/写分离"两条路径与既有域协作：
+
+- **只读投影（in-process）**：admin 的设备/绑定/激活/令牌/证书/审计/OTA 视图直接 import 仓库层（`internal/platform/postgres` 的只读实现）SELECT 既有表，不写回、不缓存、不复制状态。
+- **设备 I/O 与 OTA 写（内部 API 代理）**：developer 的设备状态、命令下发、单设备 OTA deployment 与固件版本发布，经 platform → gateway 内部 API（`PLATFORM_GATEWAY_INTERNAL_BASE_URL`）转发，并用**该项目自己**具备所需权限的 active 凭证做 HMAC v1 签名；设备 I/O 另附 gateway 签发的 `X-Device-Token`。
+
+这是相对"全部 in-process"的一处有意收敛：设备域授权（binding 归属 + `X-Device-Token`）只保留 gateway 一份实现，平台进程因此**不持有任何 IoT/KVS/S3 凭据**，IAM 也无需为它授权（原设计的"IoT shadow 只读、命令发布、OTA 发布、S3 artifact"全部不需要）。平台层不会因此获得超出项目的授权：没有相应权限凭证的项目拿不到 `409 credential_required`，而不是降级到其它钥匙。
 
 ## 3. 身份、账号与会话
 

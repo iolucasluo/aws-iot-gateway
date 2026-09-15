@@ -15,6 +15,8 @@ type Repository interface {
 	ListAuditLogs(ctx context.Context, filter AuditFilter) ([]AuditEntry, error)
 	ListDeviceTokens(ctx context.Context, filter DeviceTokenFilter) ([]DeviceToken, error)
 	ListCertificates(ctx context.Context, filter CertificateFilter) ([]Certificate, error)
+	ListFirmwareVersions(ctx context.Context, filter FirmwareVersionFilter) ([]FirmwareVersion, error)
+	ListOTADeployments(ctx context.Context, filter OTADeploymentFilter) ([]OTADeployment, error)
 }
 
 // QueryService 归一化查询参数并委托仓库。它不写任何状态。
@@ -70,6 +72,22 @@ func (service *QueryService) ListCertificates(ctx context.Context, filter Certif
 	filter.Status = strings.TrimSpace(filter.Status)
 	filter.Page.Limit = normalizeLimit(filter.Page.Limit)
 	return service.repository.ListCertificates(ctx, filter)
+}
+
+func (service *QueryService) ListFirmwareVersions(ctx context.Context, filter FirmwareVersionFilter) ([]FirmwareVersion, error) {
+	filter.PID = strings.TrimSpace(filter.PID)
+	filter.Status = strings.TrimSpace(filter.Status)
+	filter.Page.Limit = normalizeLimit(filter.Page.Limit)
+	return service.repository.ListFirmwareVersions(ctx, filter)
+}
+
+func (service *QueryService) ListOTADeployments(ctx context.Context, filter OTADeploymentFilter) ([]OTADeployment, error) {
+	filter.DeviceSN = strings.TrimSpace(filter.DeviceSN)
+	filter.PID = strings.TrimSpace(filter.PID)
+	filter.ProjectID = strings.TrimSpace(filter.ProjectID)
+	filter.State = strings.TrimSpace(filter.State)
+	filter.Page.Limit = normalizeLimit(filter.Page.Limit)
+	return service.repository.ListOTADeployments(ctx, filter)
 }
 
 func (service *QueryService) ListAuditLogs(ctx context.Context, filter AuditFilter) ([]AuditEntry, error) {

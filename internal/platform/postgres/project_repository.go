@@ -566,3 +566,14 @@ func scanWebhook(row pgx.Row) (project.Webhook, error) {
 	}
 	return webhook, nil
 }
+
+// FindActiveCredentialForPermission 返回项目下第一条具备该权限的 active 凭证。
+func (repository *ProjectRepository) FindActiveCredentialForPermission(ctx context.Context, projectID, permission string) (project.Credential, error) {
+	return scanCredential(repository.pool.QueryRow(ctx, `
+		SELECT `+credentialColumns+`
+		FROM api_credentials
+		WHERE project_id=$1 AND status='active' AND $2 = ANY(permissions)
+		ORDER BY created_at ASC, id ASC
+		LIMIT 1
+	`, projectID, permission))
+}

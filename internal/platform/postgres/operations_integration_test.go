@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -209,5 +210,113 @@ func TestOperationsRepositoryProjectsTokensCertificatesAndSubjectFilter(t *testi
 	}
 	if revoked, err := service.ListCertificates(ctx, operations.CertificateFilter{Status: "revoked"}); err != nil || len(revoked) != 0 {
 		t.Fatalf("ListCertificates(revoked) = %d, err = %v; want 0", len(revoked), err)
+	}
+}
+
+const (
+	opsFirmwareID      = "018f0000-0000-7000-8000-0000000000e5"
+	opsFirmwareOldID   = "018f0000-0000-7000-8000-0000000000e6"
+	opsOTADeploymentID = "018f0000-0000-7000-8000-0000000000e7"
+	opsOtherProjectID  = "50000000-0000-0000-0000-0000000000ef"
+)
+
+// seedOTAOperationsFixture 追加一版可发布固件、一版上传中的固件和一次成功的下发记录。
+func seedOTAOperationsFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	seedOperationsFixture(t, ctx, pool)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO ota_firmware_versions (
+			id, created_by_internal_app_id, idempotency_key, pid, version, firmware_build,
+			sha256, manifest_sha256, file_size, release_statement, signature, artifact_key,
+			status, available_at, created_at, updated_at
+		) VALUES
+		($1,$3,'ops-fw-140','feeder-x1','1.4.0',140,repeat('a',64),repeat('b',64),1048576,
+		 'fix feeder jam','sig-140','ota/feeder-x1/1.4.0.bin','available', now() - interval '1 hour',
+		 now() - interval '1 hour', now() - interval '1 hour'),
+		($2,$3,'ops-fw-130','feeder-x1','1.3.0',130,repeat('c',64),repeat('d',64),1048576,
+		 'previous build','sig-130','ota/feeder-x1/1.3.0.bin','uploading', NULL,
+		 now() - interval '2 hours', now() - interval '2 hours')
+	`, opsFirmwareID, opsFirmwareOldID, opsSubjectID); err != nil {
+		t.Fatalf("seed firmware versions: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO device_ota_deployments (
+			id, device_registry_id, internal_app_id, firmware_version_id, idempotency_key,
+			target_version, target_build, state, completed_at, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,'ops-deploy-140','1.4.0',140,'succeeded', now(), now(), now())
+	`, opsOTADeploymentID, opsDeviceID, opsSubjectID, opsFirmwareID); err != nil {
+		t.Fatalf("seed ota deployment: %v", err)
+	}
+}
+
+func TestOperationsRepositoryProjectsOTAVersionsAndDeployments(t *testing.T) {
+	ctx := context.Background()
+	pool := newIsolatedMigrationPool(t, ctx)
+	if err := ApplyMigrations(ctx, pool); err != nil {
+		t.Fatalf("ApplyMigrations() error = %v", err)
+	}
+	seedOTAOperationsFixture(t, ctx, pool)
+	repository, err := NewOperationsRepository(pool)
+	if err != nil {
+		t.Fatalf("NewOperationsRepository() error = %v", err)
+	}
+	service, err := operations.NewQueryService(repository)
+	if err != nil {
+		t.Fatalf("NewQueryService() error = %v", err)
+	}
+
+	versions, err := service.ListFirmwareVersions(ctx, operations.FirmwareVersionFilter{PID: "feeder-x1"})
+	if err != nil || len(versions) != 2 {
+		t.Fatalf("ListFirmwareVersions() = %d, err = %v; want 2", len(versions), err)
+	}
+	// 版本目录按 created_at 倒序：新版本在前，且 available 版本带 available_at。
+	if versions[0].Version != "1.4.0" || versions[0].AvailableAt == nil || versions[0].SHA256 != strings.Repeat("a", 64) {
+		t.Fatalf("newest firmware projection = %+v", versions[0])
+	}
+	if versions[0].PublishedBy != opsSubjectID || versions[0].FirmwareBuild != 140 {
+		t.Fatalf("firmware publisher projection = %+v", versions[0])
+	}
+	if versions[1].Version != "1.3.0" || versions[1].AvailableAt != nil || versions[1].Status != "uploading" {
+		t.Fatalf("uploading firmware projection = %+v", versions[1])
+	}
+
+	uploading, err := service.ListFirmwareVersions(ctx, operations.FirmwareVersionFilter{Status: "uploading"})
+	if err != nil || len(uploading) != 1 || uploading[0].Version != "1.3.0" {
+		t.Fatalf("ListFirmwareVersions(uploading) = %+v, err = %v", uploading, err)
+	}
+	if other, err := service.ListFirmwareVersions(ctx, operations.FirmwareVersionFilter{PID: "lamp-x1"}); err != nil || len(other) != 0 {
+		t.Fatalf("ListFirmwareVersions(lamp-x1) = %d, err = %v; want 0", len(other), err)
+	}
+
+	// 键集游标必须能连续翻页，而不是重复第一页。
+	firstPage, err := service.ListFirmwareVersions(ctx, operations.FirmwareVersionFilter{
+		PID: "feeder-x1", Page: operations.Page{Limit: 1},
+	})
+	if err != nil || len(firstPage) != 1 || firstPage[0].Version != "1.4.0" {
+		t.Fatalf("first firmware page = %+v, err = %v", firstPage, err)
+	}
+	secondPage, err := service.ListFirmwareVersions(ctx, operations.FirmwareVersionFilter{
+		PID: "feeder-x1",
+		Page: operations.Page{Limit: 1, Before: &operations.Cursor{
+			CreatedAt: firstPage[0].CreatedAt, ID: firstPage[0].ID,
+		}},
+	})
+	if err != nil || len(secondPage) != 1 || secondPage[0].Version != "1.3.0" {
+		t.Fatalf("second firmware page = %+v, err = %v", secondPage, err)
+	}
+
+	deployments, err := service.ListOTADeployments(ctx, operations.OTADeploymentFilter{DeviceSN: opsDeviceSN, State: "succeeded"})
+	if err != nil || len(deployments) != 1 {
+		t.Fatalf("ListOTADeployments() = %d, err = %v; want 1", len(deployments), err)
+	}
+	if deployments[0].PID != "feeder-x1" || deployments[0].ProjectID != opsSubjectID ||
+		deployments[0].TargetVersion != "1.4.0" || deployments[0].CompletedAt == nil {
+		t.Fatalf("deployment projection = %+v", deployments[0])
+	}
+	if none, err := service.ListOTADeployments(ctx, operations.OTADeploymentFilter{ProjectID: opsOtherProjectID}); err != nil || len(none) != 0 {
+		t.Fatalf("ListOTADeployments(other project) = %d, err = %v; want 0", len(none), err)
+	}
+	if running, err := service.ListOTADeployments(ctx, operations.OTADeploymentFilter{State: "installing"}); err != nil || len(running) != 0 {
+		t.Fatalf("ListOTADeployments(installing) = %d, err = %v; want 0", len(running), err)
 	}
 }

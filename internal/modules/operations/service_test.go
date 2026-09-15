@@ -16,6 +16,8 @@ type stubRepository struct {
 	auditFilter       AuditFilter
 	tokenFilter       DeviceTokenFilter
 	certificateFilter CertificateFilter
+	firmwareFilter    FirmwareVersionFilter
+	deploymentFilter  OTADeploymentFilter
 	err               error
 }
 
@@ -47,6 +49,14 @@ func (stub *stubRepository) ListDeviceTokens(_ context.Context, filter DeviceTok
 }
 func (stub *stubRepository) ListCertificates(_ context.Context, filter CertificateFilter) ([]Certificate, error) {
 	stub.certificateFilter = filter
+	return nil, stub.err
+}
+func (stub *stubRepository) ListFirmwareVersions(_ context.Context, filter FirmwareVersionFilter) ([]FirmwareVersion, error) {
+	stub.firmwareFilter = filter
+	return nil, stub.err
+}
+func (stub *stubRepository) ListOTADeployments(_ context.Context, filter OTADeploymentFilter) ([]OTADeployment, error) {
+	stub.deploymentFilter = filter
 	return nil, stub.err
 }
 
@@ -136,6 +146,20 @@ func TestQueryServiceNormalizesFiltersAndLimits(t *testing.T) {
 	}
 	if repository.deviceFilter.SubjectID != "subject" {
 		t.Fatalf("subject filter was not trimmed: %+v", repository.deviceFilter)
+	}
+	if _, err := service.ListFirmwareVersions(ctx, FirmwareVersionFilter{PID: " feeder-x1 ", Status: " available "}); err != nil {
+		t.Fatalf("ListFirmwareVersions() error = %v", err)
+	}
+	if repository.firmwareFilter.PID != "feeder-x1" || repository.firmwareFilter.Status != "available" ||
+		repository.firmwareFilter.Page.Limit != 50 {
+		t.Fatalf("firmware filter = %+v", repository.firmwareFilter)
+	}
+	if _, err := service.ListOTADeployments(ctx, OTADeploymentFilter{DeviceSN: " " + opsTestDeviceSN + " ", State: " succeeded "}); err != nil {
+		t.Fatalf("ListOTADeployments() error = %v", err)
+	}
+	if repository.deploymentFilter.DeviceSN != opsTestDeviceSN || repository.deploymentFilter.State != "succeeded" ||
+		repository.deploymentFilter.Page.Limit != 50 {
+		t.Fatalf("deployment filter = %+v", repository.deploymentFilter)
 	}
 	if _, err := service.FindDevice(ctx, "   "); !errors.Is(err, ErrInvalidQuery) {
 		t.Fatalf("FindDevice(blank) error = %v, want ErrInvalidQuery", err)

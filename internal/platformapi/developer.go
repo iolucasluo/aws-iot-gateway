@@ -122,8 +122,10 @@ func (server *Server) serveDeveloper(writer http.ResponseWriter, request *http.R
 		server.listProducts(writer, request)
 	case path == "products" && request.Method == http.MethodPost:
 		server.createProduct(writer, request)
-	case strings.HasPrefix(path, "devices/") && request.Method == http.MethodGet:
-		server.getDeveloperDevice(writer, request, strings.TrimPrefix(path, "devices/"))
+	case path == "ota" || strings.HasPrefix(path, "ota/"):
+		server.serveDeveloperOTA(writer, request, strings.TrimPrefix(path, "ota/"))
+	case strings.HasPrefix(path, "devices/"):
+		server.serveDeveloperDevice(writer, request, strings.TrimPrefix(path, "devices/"))
 	default:
 		switch {
 		case strings.HasPrefix(path, "projects/"):

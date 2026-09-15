@@ -24,17 +24,21 @@ const (
 
 // stubOperationsRepository 让 admin 契约测试不依赖数据库。
 type stubOperationsRepository struct {
-	devices         []operations.Device
-	bindings        []operations.Binding
-	activations     []operations.Activation
-	auditLogs       []operations.AuditEntry
-	lastDevice      operations.DeviceFilter
-	lastAudit       operations.AuditFilter
-	lastToken       operations.DeviceTokenFilter
-	lastCertificate operations.CertificateFilter
-	tokens          []operations.DeviceToken
-	certificates    []operations.Certificate
-	failDevices     bool
+	devices          []operations.Device
+	bindings         []operations.Binding
+	activations      []operations.Activation
+	auditLogs        []operations.AuditEntry
+	lastDevice       operations.DeviceFilter
+	lastAudit        operations.AuditFilter
+	lastToken        operations.DeviceTokenFilter
+	lastCertificate  operations.CertificateFilter
+	tokens           []operations.DeviceToken
+	certificates     []operations.Certificate
+	firmwareVersions []operations.FirmwareVersion
+	otaDeployments   []operations.OTADeployment
+	failDevices      bool
+	lastFirmware     operations.FirmwareVersionFilter
+	lastDeployment   operations.OTADeploymentFilter
 }
 
 func (stub *stubOperationsRepository) ListDevices(_ context.Context, filter operations.DeviceFilter) ([]operations.Device, error) {
@@ -86,6 +90,16 @@ func (stub *stubOperationsRepository) ListDeviceTokens(_ context.Context, filter
 func (stub *stubOperationsRepository) ListCertificates(_ context.Context, filter operations.CertificateFilter) ([]operations.Certificate, error) {
 	stub.lastCertificate = filter
 	return stub.certificates, nil
+}
+
+func (stub *stubOperationsRepository) ListFirmwareVersions(_ context.Context, filter operations.FirmwareVersionFilter) ([]operations.FirmwareVersion, error) {
+	stub.lastFirmware = filter
+	return stub.firmwareVersions, nil
+}
+
+func (stub *stubOperationsRepository) ListOTADeployments(_ context.Context, filter operations.OTADeploymentFilter) ([]operations.OTADeployment, error) {
+	stub.lastDeployment = filter
+	return stub.otaDeployments, nil
 }
 
 type adminFixture struct {
@@ -150,6 +164,17 @@ func newAdminFixture(t *testing.T, withOperations bool) adminFixture {
 		certificates: []operations.Certificate{{
 			DeviceSN: opsFixtureDeviceSN, PID: "feeder-x1", Status: "active",
 			CertificateID: "cert-1", CreatedAt: now, UpdatedAt: now,
+		}},
+		firmwareVersions: []operations.FirmwareVersion{{
+			ID: "018f0000-0000-7000-8000-0000000000f6", PID: "feeder-x1",
+			PublishedBy: "50000000-0000-0000-0000-0000000000f1", Version: "1.4.0", FirmwareBuild: 140,
+			SHA256: strings.Repeat("a", 64), FileSize: 1048576, ReleaseStatement: "fix feeder jam",
+			Status: "available", CreatedAt: now, UpdatedAt: now,
+		}},
+		otaDeployments: []operations.OTADeployment{{
+			ID: "018f0000-0000-7000-8000-0000000000f7", DeviceSN: opsFixtureDeviceSN, PID: "feeder-x1",
+			ProjectID: "50000000-0000-0000-0000-0000000000f1", TargetVersion: "1.4.0", TargetBuild: 140,
+			State: "succeeded", CreatedAt: now, UpdatedAt: now, CompletedAt: &now,
 		}},
 	}
 	dependencies := Dependencies{Accounts: accounts, Projects: projects}
@@ -250,6 +275,8 @@ func TestAdminOperationsViewsAreReadOnlyAndScoped(t *testing.T) {
 		"audit-logs":    "/api/v1/admin/audit-logs?operation=POST%20auth.login",
 		"projects":      "/api/v1/admin/projects",
 		"products":      "/api/v1/admin/products",
+		"ota-versions":  "/api/v1/admin/ota/firmware-versions?pid=feeder-x1",
+		"ota-deploys":   "/api/v1/admin/ota/deployments?device_sn=" + opsFixtureDeviceSN,
 	} {
 		recorder := fixture.call(t, http.MethodGet, path, "", token)
 		if recorder.Code != http.StatusOK {
@@ -286,6 +313,47 @@ func TestAdminOperationsViewsRejectBadPagingAndOtherAudiences(t *testing.T) {
 	}
 	if recorder := fixture.call(t, http.MethodGet, "/api/v1/admin/devices", "", "not-a-token"); recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("devices with a bogus token status = %d, want 401", recorder.Code)
+	}
+}
+
+// OTA 的 staff 面是只读投影：写入只走 developer 的项目凭证 + gateway 授权。
+func TestAdminOTAViewsAreReadOnlyProjections(t *testing.T) {
+	t.Parallel()
+	fixture := newAdminFixture(t, true)
+	token := fixture.login(t)
+
+	versions := fixture.call(t, http.MethodGet, "/api/v1/admin/ota/firmware-versions?pid=feeder-x1&status=available", "", token)
+	if versions.Code != http.StatusOK {
+		t.Fatalf("firmware versions status = %d body = %s", versions.Code, versions.Body.String())
+	}
+	if fixture.stub.lastFirmware.PID != "feeder-x1" || fixture.stub.lastFirmware.Status != "available" {
+		t.Fatalf("firmware filter was not applied: %+v", fixture.stub.lastFirmware)
+	}
+	payload := decodeJSON[struct {
+		Items []struct {
+			ID      string `json:"id"`
+			Version string `json:"version"`
+		} `json:"items"`
+	}](t, versions)
+	if len(payload.Items) != 1 || payload.Items[0].Version != "1.4.0" {
+		t.Fatalf("firmware versions = %+v", payload.Items)
+	}
+
+	deployments := fixture.call(t, http.MethodGet,
+		"/api/v1/admin/ota/deployments?device_sn="+opsFixtureDeviceSN+"&state=succeeded", "", token)
+	if deployments.Code != http.StatusOK {
+		t.Fatalf("ota deployments status = %d body = %s", deployments.Code, deployments.Body.String())
+	}
+	if fixture.stub.lastDeployment.DeviceSN != opsFixtureDeviceSN || fixture.stub.lastDeployment.State != "succeeded" {
+		t.Fatalf("deployment filter was not applied: %+v", fixture.stub.lastDeployment)
+	}
+
+	// 平台面没有 admin 的 OTA 写入口：发布/下发只能由项目凭证驱动。
+	if recorder := fixture.call(t, http.MethodPost, "/api/v1/admin/ota/firmware-versions", `{}`, token); recorder.Code != http.StatusNotFound {
+		t.Fatalf("admin OTA write status = %d, want 404", recorder.Code)
+	}
+	if recorder := fixture.call(t, http.MethodGet, "/api/v1/admin/ota/deployments?cursor=!!!", "", token); recorder.Code != http.StatusBadRequest {
+		t.Fatalf("bad cursor status = %d, want 400", recorder.Code)
 	}
 }
 

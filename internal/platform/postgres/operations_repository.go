@@ -263,3 +263,71 @@ func (repository *OperationsRepository) ListCertificates(ctx context.Context, fi
 	}
 	return certificates, nil
 }
+
+func (repository *OperationsRepository) ListFirmwareVersions(ctx context.Context, filter operations.FirmwareVersionFilter) ([]operations.FirmwareVersion, error) {
+	beforeAt, beforeID := keyset(filter.Page.Before)
+	rows, err := repository.pool.Query(ctx, `
+		SELECT id::text, pid, created_by_internal_app_id, version, firmware_build, sha256, file_size,
+		       release_statement, status, available_at, created_at, updated_at
+		FROM ota_firmware_versions
+		WHERE ($1 = '' OR pid = $1)
+		  AND ($2 = '' OR status = $2)
+		  AND ($3::timestamptz IS NULL OR (created_at, id::text) < ($3::timestamptz, $4))
+		ORDER BY created_at DESC, id DESC
+		LIMIT $5
+	`, filter.PID, filter.Status, beforeAt, beforeID, filter.Page.Limit)
+	if err != nil {
+		return nil, fmt.Errorf("list firmware versions: %w", err)
+	}
+	defer rows.Close()
+	versions := make([]operations.FirmwareVersion, 0, filter.Page.Limit)
+	for rows.Next() {
+		var version operations.FirmwareVersion
+		if err := rows.Scan(&version.ID, &version.PID, &version.PublishedBy, &version.Version,
+			&version.FirmwareBuild, &version.SHA256, &version.FileSize, &version.ReleaseStatement,
+			&version.Status, &version.AvailableAt, &version.CreatedAt, &version.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan firmware version: %w", err)
+		}
+		versions = append(versions, version)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list firmware versions: %w", err)
+	}
+	return versions, nil
+}
+
+func (repository *OperationsRepository) ListOTADeployments(ctx context.Context, filter operations.OTADeploymentFilter) ([]operations.OTADeployment, error) {
+	beforeAt, beforeID := keyset(filter.Page.Before)
+	rows, err := repository.pool.Query(ctx, `
+		SELECT p.id::text, d.device_sn, d.pid, p.internal_app_id, p.target_version, p.target_build,
+		       p.state, COALESCE(p.failure_reason, ''), p.created_at, p.updated_at, p.completed_at
+		FROM device_ota_deployments p
+		JOIN device_registry d ON d.id = p.device_registry_id
+		WHERE ($1 = '' OR d.device_sn = $1)
+		  AND ($2 = '' OR d.pid = $2)
+		  AND ($3 = '' OR p.internal_app_id = $3)
+		  AND ($4 = '' OR p.state = $4)
+		  AND ($5::timestamptz IS NULL OR (p.created_at, p.id::text) < ($5::timestamptz, $6))
+		ORDER BY p.created_at DESC, p.id DESC
+		LIMIT $7
+	`, filter.DeviceSN, filter.PID, filter.ProjectID, filter.State, beforeAt, beforeID, filter.Page.Limit)
+	if err != nil {
+		return nil, fmt.Errorf("list ota deployments: %w", err)
+	}
+	defer rows.Close()
+	deployments := make([]operations.OTADeployment, 0, filter.Page.Limit)
+	for rows.Next() {
+		var deployment operations.OTADeployment
+		if err := rows.Scan(&deployment.ID, &deployment.DeviceSN, &deployment.PID, &deployment.ProjectID,
+			&deployment.TargetVersion, &deployment.TargetBuild, &deployment.State,
+			&deployment.FailureReason, &deployment.CreatedAt, &deployment.UpdatedAt,
+			&deployment.CompletedAt); err != nil {
+			return nil, fmt.Errorf("scan ota deployment: %w", err)
+		}
+		deployments = append(deployments, deployment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list ota deployments: %w", err)
+	}
+	return deployments, nil
+}

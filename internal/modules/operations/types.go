@@ -199,3 +199,53 @@ type Certificate struct {
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
+
+// FirmwareVersionFilter 是 OTA 固件版本列表的过滤条件。
+type FirmwareVersionFilter struct {
+	PID    string
+	Status string
+	Page   Page
+}
+
+// FirmwareVersion 是 OTA 固件版本的只读投影。
+//
+// 它刻意不包含 artifact_key / source_url：那是下载凭据材料，
+// 门户只需要元数据；需要下载时由 gateway 的 presigned 流程单独签发。
+type FirmwareVersion struct {
+	ID               string
+	PID              string
+	PublishedBy      string
+	Version          string
+	FirmwareBuild    int64
+	SHA256           string
+	FileSize         int64
+	ReleaseStatement string
+	Status           string
+	AvailableAt      *time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+// OTADeploymentFilter 是单设备 OTA 下发记录列表的过滤条件。
+type OTADeploymentFilter struct {
+	DeviceSN  string
+	PID       string
+	ProjectID string
+	State     string
+	Page      Page
+}
+
+// OTADeployment 是 OTA 下发记录的只读投影。它对应 device_ota_deployments 一行。
+type OTADeployment struct {
+	ID            string
+	DeviceSN      string
+	PID           string
+	ProjectID     string
+	TargetVersion string
+	TargetBuild   int64
+	State         string
+	FailureReason string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	CompletedAt   *time.Time
+}

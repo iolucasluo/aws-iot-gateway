@@ -122,9 +122,18 @@ func run(ctx context.Context, getenv func(string) string) error {
 	if err != nil {
 		return err
 	}
+	// 设备 I/O 与 OTA 经 gateway 内部 API 代理：平台进程不持有 IoT/S3 凭据，
+	// 设备域授权保持只有一份实现。未配置时这些路由返回 503。
+	var gatewayClient *platformapi.GatewayClient
+	if config.GatewayInternalBaseURL != "" {
+		gatewayClient, err = platformapi.NewGatewayClient(config.GatewayInternalBaseURL, projects, nil, time.Now)
+		if err != nil {
+			return fmt.Errorf("configure gateway client: %w", err)
+		}
+	}
 	handler, err := platformapi.New(platformapi.Dependencies{
 		Accounts: accounts, Projects: projects, Audit: auditRecorder,
-		Operations: operationsService, Manufacturing: manufacturingService,
+		Operations: operationsService, Manufacturing: manufacturingService, Gateway: gatewayClient,
 	}, limiter, platformapi.Options{
 		AllowedOrigins:     config.CORSAllowedOrigins,
 		LoginRateLimit:     config.LoginRateLimit,
