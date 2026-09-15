@@ -2,22 +2,25 @@ package manufacturing
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 )
 
 // MemoryRepository 供单元测试与非 DB 环境使用。
 type MemoryRepository struct {
-	mutex        sync.Mutex
-	stations     map[string]Station
-	runs         map[string]Run
-	reports      []StationReport
-	projectScope map[string]ProjectScope
+	mutex         sync.Mutex
+	stations      map[string]Station
+	runs          map[string]Run
+	reports       []StationReport
+	projectScope  map[string]ProjectScope
+	manufacturers map[string]Manufacturer
 }
 
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
 		stations: map[string]Station{}, runs: map[string]Run{}, projectScope: map[string]ProjectScope{},
+		manufacturers: map[string]Manufacturer{},
 	}
 }
 
@@ -180,4 +183,50 @@ func (repository *MemoryRepository) FindProjectScope(_ context.Context, projectI
 		return ProjectScope{}, ErrProjectNotEligible
 	}
 	return scope, nil
+}
+
+func (repository *MemoryRepository) CreateManufacturer(_ context.Context, manufacturer Manufacturer) error {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	for _, existing := range repository.manufacturers {
+		if existing.Code == manufacturer.Code {
+			return fmt.Errorf("%w: manufacturer code already exists", ErrInvalidInput)
+		}
+	}
+	repository.manufacturers[manufacturer.ID] = manufacturer
+	return nil
+}
+
+func (repository *MemoryRepository) FindManufacturerByID(_ context.Context, manufacturerID string) (Manufacturer, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	manufacturer, found := repository.manufacturers[manufacturerID]
+	if !found {
+		return Manufacturer{}, ErrManufacturerNotFound
+	}
+	return manufacturer, nil
+}
+
+func (repository *MemoryRepository) ListManufacturers(_ context.Context, filter ManufacturerFilter) ([]Manufacturer, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	manufacturers := make([]Manufacturer, 0, len(repository.manufacturers))
+	for _, manufacturer := range repository.manufacturers {
+		if filter.Status != "" && manufacturer.Status != filter.Status {
+			continue
+		}
+		manufacturers = append(manufacturers, manufacturer)
+	}
+	sort.Slice(manufacturers, func(left, right int) bool { return manufacturers[left].Code < manufacturers[right].Code })
+	return manufacturers, nil
+}
+
+func (repository *MemoryRepository) UpdateManufacturer(_ context.Context, manufacturer Manufacturer) error {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	if _, found := repository.manufacturers[manufacturer.ID]; !found {
+		return ErrManufacturerNotFound
+	}
+	repository.manufacturers[manufacturer.ID] = manufacturer
+	return nil
 }

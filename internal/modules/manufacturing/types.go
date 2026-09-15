@@ -23,14 +23,15 @@ const (
 )
 
 var (
-	ErrInvalidInput        = errors.New("invalid manufacturing input")
-	ErrForbidden           = errors.New("manufacturing operation forbidden")
-	ErrStationNotFound     = errors.New("production station not found")
-	ErrRunNotFound         = errors.New("production run not found")
-	ErrReportNotFound      = errors.New("production station report not found")
-	ErrRunClosed           = errors.New("production run is closed")
-	ErrProjectNotEligible  = errors.New("project is not an oem project of this manufacturer")
-	ErrProductNotInProject = errors.New("product is not part of the project")
+	ErrInvalidInput         = errors.New("invalid manufacturing input")
+	ErrForbidden            = errors.New("manufacturing operation forbidden")
+	ErrStationNotFound      = errors.New("production station not found")
+	ErrRunNotFound          = errors.New("production run not found")
+	ErrReportNotFound       = errors.New("production station report not found")
+	ErrRunClosed            = errors.New("production run is closed")
+	ErrProjectNotEligible   = errors.New("project is not an oem project of this manufacturer")
+	ErrProductNotInProject  = errors.New("product is not part of the project")
+	ErrManufacturerNotFound = errors.New("manufacturer not found")
 )
 
 // Actor 复用门户账号投影；代工厂操作者必须带 manufacturer 归属。
