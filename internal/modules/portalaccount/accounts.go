@@ -103,13 +103,35 @@ type AccountPatch struct {
 
 // CreateAccount 建立账号并签发一次性邀请 token。
 func (service *Service) CreateAccount(ctx context.Context, actor Actor, input CreateAccountInput) (CreateAccountResult, error) {
+	if err := actor.canCreate(input); err != nil {
+		return CreateAccountResult{}, err
+	}
+	return service.createAccount(ctx, input)
+}
+
+// BootstrapStaffAccount 创建系统里的首个 staff 账号，供一次性初始化 CLI 使用。
+// 只要已经存在任一 staff 账号就拒绝，避免它被当成重复创建管理员的后门。
+func (service *Service) BootstrapStaffAccount(ctx context.Context, email, displayName string) (CreateAccountResult, error) {
+	existing, err := service.repository.ListAccounts(ctx, AccountFilter{Kind: KindStaff, Limit: 1})
+	if err != nil {
+		return CreateAccountResult{}, err
+	}
+	if len(existing) > 0 {
+		return CreateAccountResult{}, fmt.Errorf("%w: a staff account already exists", ErrForbidden)
+	}
+	return service.createAccount(ctx, CreateAccountInput{
+		Kind: KindStaff, Role: RoleSuperAdmin, Email: email, DisplayName: displayName,
+	})
+}
+
+func (service *Service) createAccount(ctx context.Context, input CreateAccountInput) (CreateAccountResult, error) {
 	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
 	input.DisplayName = strings.TrimSpace(input.DisplayName)
 	input.ManufacturerID = strings.TrimSpace(input.ManufacturerID)
 	if !validEmail(input.Email) {
 		return CreateAccountResult{}, fmt.Errorf("%w: invalid email address", ErrInvalidInput)
 	}
-	if err := actor.canCreate(input); err != nil {
+	if err := validateAccountScope(input.Kind, input.Role, input.ManufacturerID); err != nil {
 		return CreateAccountResult{}, err
 	}
 	if input.Kind == KindManufacturer {
@@ -143,6 +165,19 @@ func (service *Service) CreateAccount(ctx context.Context, actor Actor, input Cr
 		return CreateAccountResult{}, err
 	}
 	return CreateAccountResult{Account: account, SetupToken: plaintext}, nil
+}
+
+// GetAccount 返回操作者 scope 内的单个账号。
+// 越过 scope 与不存在都返回 ErrAccountNotFound，不泄露资源存在性。
+func (service *Service) GetAccount(ctx context.Context, actor Actor, accountID string) (Account, error) {
+	target, err := service.repository.FindAccountByID(ctx, accountID)
+	if err != nil {
+		return Account{}, err
+	}
+	if !actor.canManage(target) {
+		return Account{}, ErrAccountNotFound
+	}
+	return target, nil
 }
 
 // ListAccounts 按操作者 scope 返回账号：staff 透传过滤条件，厂商管理员被强制收窄到本厂商。
