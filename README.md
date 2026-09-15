@@ -34,6 +34,11 @@ Gateway 根据 `products.dp_profile_code` 确定协议；多个产品可共享 p
 - KVS 与 S3：提供受 binding 约束的 WebRTC、快照、录像、喂食音频，以及与 media bucket 隔离的 OTA artifact。
 - 局域网媒体：Gateway 只授权并经 MQTT 开关设备的 ONVIF/RTSP 短租约；不代理、
   不拨号 RFC 1918 设备地址，App 在同一 LAN 直连设备。
+- **平台面进程**：`cmd/explorex-platform-api`（默认 `:14081`）与 gateway **同 module/同 DB/同 Redis**，
+  但是独立二进制与独立部署单元；`cmd/explorex-platform-bootstrap` 只用于创建首个 staff 账号并打印
+  一次性 setup token。两者必须共用同一个 `PLATFORM_CREDENTIAL_KEK`：gateway 用它解密 DB 凭证
+  （`projects`/`api_credentials`），平台面用它封装项目凭证与 webhook secret。环境变量示例见
+  `.env.local.example` 与 `deploy/cn-staging/*.env.example`。
 
 隔离的 dev/staging IaC 位于 `deploy/aws-staging/cloudformation/`。内部 API 仍走 API Gateway → VPC Link → private NLB；另一个公开 ALB 的 HTTP listener 只转发精确的 `/api/v1/device-time/bootstrap`，默认拒绝其他 path。两者共用双 API ECS，后台为双 worker ECS、RDS PostgreSQL、ElastiCache Redis、SQS/DLQ、IoT Rule、KVS、S3 和独立 KMS time signer。它不是生产部署基线。
 
@@ -68,6 +73,13 @@ ECS task definition 的 `secrets[].valueFrom` 读取 ARN，不能输出 secret �
 | `POST /api/v1/device-activations/session/prepare-installation` | 设备 | activation code |
 | `POST /api/v1/device-activations/qr/prepare-installation` | 设备 | activation code |
 | `POST /api/v1/device-activations/confirm-installation` | 设备 | activation code + operational-key proof |
+
+**平台面（三门户）契约**：`/api/v1/admin/*`、`/api/v1/developer/*`、`/api/v1/manufacturer/*` 由
+`cmd/explorex-platform-api` 提供，鉴权是不透明 Bearer 会话（audience 与前缀强绑定），不是 HMAC。
+admin 面**只读** OTA（无任何 OTA 写入口）；developer 的设备 I/O 与 OTA 写由平台进程用**该项目自己**
+具备所需权限的凭证签名代理到本进程的 openapi 面，设备 I/O 另附 gateway 签发的 `X-Device-Token`，
+因此平台进程不持有 IoT/S3/KVS 凭据。前端侧的逐字段契约在 `explorex-portals` 仓的
+`docs/api-contract-v1.md`（producer 仍是本仓，字段变化先改本仓实现再同步该文档）。
 
 设备子路由覆盖 detail、shadow、commands、schedules、events、streams、local-media-sessions、snapshots、recordings、feed-audio 和 ota-deployments。Bearer `/v1/activations`、`/v1/devices` 和旧 `/v1/device-activations/{id}/*` 已从 router 删除。完整目标路由和阶段验收快照见根仓 `docs/branches/.archived/wicgeechan/2026-08-17/2026-08-13-internal-aws-api-implementation-plan.md`；当前未完成项见 `docs/branches/iot-flash-develop-internal-aws-follow-ups.md`。
 
