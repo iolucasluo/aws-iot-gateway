@@ -16,6 +16,7 @@ const (
 
 var (
 	ErrUnknownAPIKey               = errors.New("unknown api key")
+	ErrCredentialRevoked           = errors.New("credential is disabled or expired")
 	ErrInvalidSignature            = errors.New("invalid signature")
 	ErrTimestampOutsideWindow      = errors.New("timestamp outside signature window")
 	ErrNonceReplayed               = errors.New("nonce already used")
@@ -48,18 +49,38 @@ type NonceStore interface {
 	Consume(context.Context, string, time.Duration) (bool, error)
 }
 
+// CredentialStore 是 DB 凭证来源（平台面 projects/api_credentials）。
+//
+// 约定：
+//   - 该 api_key 在 DB 中不存在：返回 ErrUnknownAPIKey，允许回退静态来源；
+//   - 存在但已禁用/过期：返回 ErrCredentialRevoked，**不允许回退**；
+//   - 其它错误：来源不可用，验签 fail closed。
+//
+// 这样"DB 里禁用了一个仍然存在于 INTERNAL_APPS_JSON 的 key"不会被静态配置复活。
+type CredentialStore interface {
+	FindCredentialByAPIKey(ctx context.Context, apiKey string) (Credential, error)
+}
+
 type Verifier struct {
 	credentials map[string]Credential
+	stores      []CredentialStore
 	nonces      NonceStore
 	now         func() time.Time
 }
 
-func NewVerifier(credentials []Credential, nonces NonceStore, now func() time.Time) (*Verifier, error) {
+// NewVerifier 组装验签器。credentials 是部署期静态来源（本地开发与应急引导），
+// stores 是 DB 来源；两者至少要有一个，且 DB 来源优先解析。
+func NewVerifier(credentials []Credential, nonces NonceStore, now func() time.Time, stores ...CredentialStore) (*Verifier, error) {
 	if nonces == nil {
 		return nil, fmt.Errorf("nonce store is required")
 	}
 	if now == nil {
 		now = time.Now
+	}
+	for _, store := range stores {
+		if store == nil {
+			return nil, fmt.Errorf("credential store must not be nil")
+		}
 	}
 	byKey := make(map[string]Credential, len(credentials))
 	seenApps := make(map[string]struct{}, len(credentials))
@@ -79,16 +100,43 @@ func NewVerifier(credentials []Credential, nonces NonceStore, now func() time.Ti
 		byKey[credential.APIKey] = credential
 		seenApps[credential.InternalAppID] = struct{}{}
 	}
-	if len(byKey) == 0 {
-		return nil, fmt.Errorf("at least one internal app credential is required")
+	if len(byKey) == 0 && len(stores) == 0 {
+		return nil, fmt.Errorf("at least one internal app credential or credential store is required")
 	}
-	return &Verifier{credentials: byKey, nonces: nonces, now: now}, nil
+	return &Verifier{credentials: byKey, stores: stores, nonces: nonces, now: now}, nil
+}
+
+// resolveCredential 先查 DB 来源，全部未命中才回退静态来源。
+// DB 来源报错时直接返回错误，不做任何回退。
+func (verifier *Verifier) resolveCredential(ctx context.Context, apiKey string) (Credential, error) {
+	for _, store := range verifier.stores {
+		credential, err := store.FindCredentialByAPIKey(ctx, apiKey)
+		if err == nil {
+			if strings.TrimSpace(credential.InternalAppID) == "" || credential.APISecret == "" {
+				return Credential{}, ErrUnknownAPIKey
+			}
+			return credential, nil
+		}
+		if errors.Is(err, ErrCredentialRevoked) {
+			return Credential{}, ErrCredentialRevoked
+		}
+		if !errors.Is(err, ErrUnknownAPIKey) {
+			return Credential{}, err
+		}
+	}
+	if credential, found := verifier.credentials[apiKey]; found {
+		return credential, nil
+	}
+	return Credential{}, ErrUnknownAPIKey
 }
 
 func (verifier *Verifier) Authenticate(ctx context.Context, request SignatureRequest) (Principal, error) {
-	credential, found := verifier.credentials[request.APIKey]
-	if !found {
-		return Principal{}, ErrUnknownAPIKey
+	credential, err := verifier.resolveCredential(ctx, request.APIKey)
+	if err != nil {
+		if errors.Is(err, ErrUnknownAPIKey) || errors.Is(err, ErrCredentialRevoked) {
+			return Principal{}, ErrUnknownAPIKey
+		}
+		return Principal{}, err
 	}
 	requestTime, err := timestampTime(request.Timestamp)
 	if err != nil {

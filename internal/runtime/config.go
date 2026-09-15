@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/internalauth"
 )
 
 var internalAppIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{2,63}$`)
@@ -363,7 +365,7 @@ func validateInternalApps(apps []InternalApp) error {
 		seenPermissions := make(map[string]struct{}, len(app.Permissions))
 		for permissionIndex, permission := range app.Permissions {
 			permission = strings.TrimSpace(permission)
-			if permission != "ota:publish" && permission != "ota:deploy" {
+			if !internalauth.ValidPermission(permission) {
 				return fmt.Errorf("INTERNAL_APPS_JSON contains an invalid permission")
 			}
 			if _, duplicate := seenPermissions[permission]; duplicate {
