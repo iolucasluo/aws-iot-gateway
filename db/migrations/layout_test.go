@@ -16,7 +16,8 @@ func TestMigrationLayoutContainsOnlyCurrentInitialSchema(t *testing.T) {
 	}
 	// 002 是首个真正的顺序增量迁移：001 基线不含运行时身份锚列，而已部署库已登记
 	// 001_initial.sql，runner 按文件名跳过，必须靠新文件补齐，不能原地改 001。
-	want := []string{"001_initial.sql", "002_device_identity.sql"}
+	// 003 起是平台面（账号/项目/凭证/制造质量）：同样只允许顺序 additive 新文件。
+	want := []string{"001_initial.sql", "002_device_identity.sql", "003_platform_accounts.sql"}
 	if got := migrationNames(entries); len(got) != len(want) || fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("migration files = %v, want %v", got, want)
 	}
