@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	redisclient "github.com/redis/go-redis/v9"
 
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/audit"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/portalaccount"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/project"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/credentialcipher"
@@ -27,6 +29,18 @@ func main() {
 	if err := run(context.Background(), os.Getenv); err != nil {
 		log.Fatalf("run platform api: %v", err)
 	}
+}
+
+// newAuditID 生成审计事实 id（UUIDv4 形态，与库内其它 uuid 列一致）。
+func newAuditID() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	value[6] = (value[6] & 0x0f) | 0x40
+	value[8] = (value[8] & 0x3f) | 0x80
+	hexValue := fmt.Sprintf("%x", value)
+	return hexValue[:8] + "-" + hexValue[8:12] + "-" + hexValue[12:16] + "-" + hexValue[16:20] + "-" + hexValue[20:], nil
 }
 
 func run(ctx context.Context, getenv func(string) string) error {
@@ -82,11 +96,21 @@ func run(ctx context.Context, getenv func(string) string) error {
 	if err != nil {
 		return err
 	}
-	handler, err := platformapi.New(accounts, projects, limiter, platformapi.Options{
+	auditRepository, err := gatewaypostgres.NewAuditRepository(pool)
+	if err != nil {
+		return err
+	}
+	auditRecorder, err := audit.NewRecorder(auditRepository, time.Now, newAuditID)
+	if err != nil {
+		return err
+	}
+	handler, err := platformapi.New(accounts, projects, auditRecorder, limiter, platformapi.Options{
 		AllowedOrigins:     config.CORSAllowedOrigins,
 		LoginRateLimit:     config.LoginRateLimit,
 		LoginRateWindow:    config.LoginRateWindow,
 		TrustedProxyHeader: config.TrustedProxyHeader,
+		// 审计失败不改变响应，但必须留下痕迹。
+		AuditErrorHandler: func(err error) { log.Printf("platform audit write failed: %v", err) },
 	})
 	if err != nil {
 		return err

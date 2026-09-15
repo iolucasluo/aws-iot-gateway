@@ -1,6 +1,7 @@
 package platformapi
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"net"
@@ -13,6 +14,20 @@ const (
 	maxRequestIDLength = 128
 	bearerPrefix       = "Bearer "
 )
+
+type requestIDKey struct{}
+
+// withRequestID 把 request id 放进请求上下文，供审计等下游读取；
+// 只放在响应头里会让处理链看不到它。
+func withRequestID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, requestIDKey{}, id)
+}
+
+// requestIDFromContext 返回当前请求的 request id，缺失时返回空串。
+func requestIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(requestIDKey{}).(string)
+	return id
+}
 
 // requestID 复用调用方提供的安全 request id，否则生成一个；
 // 它同时用于审计记录的 request_id。

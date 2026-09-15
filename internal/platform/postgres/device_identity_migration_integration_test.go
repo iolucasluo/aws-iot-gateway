@@ -44,6 +44,22 @@ CREATE TABLE products (
     name varchar(128) NOT NULL,
     status varchar(16) NOT NULL DEFAULT 'active'
 );
+-- audit_logs 同样自最初版就存在：005 会补审计主体列。这里的形状刻意保持"旧"，
+-- 即没有 actor_kind/actor_account_id/actor_label，迁移必须能把它补齐。
+CREATE TABLE audit_logs (
+    id uuid CONSTRAINT audit_logs_pkey PRIMARY KEY,
+    internal_app_id varchar(64),
+    operation varchar(96) NOT NULL,
+    resource_type varchar(64),
+    resource_id varchar(128),
+    request_id varchar(128),
+    outcome varchar(16) NOT NULL
+        CONSTRAINT audit_logs_outcome_check
+        CHECK (outcome IN ('accepted', 'succeeded', 'rejected', 'failed')),
+    error_code varchar(64),
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
 INSERT INTO device_registry (id, device_sn, thing_name, pid, status)
 VALUES ('00000000-0000-4000-8000-0000000000a1',
         'fdr-319fe199e4be7aa2d71958f4a0f8c941',

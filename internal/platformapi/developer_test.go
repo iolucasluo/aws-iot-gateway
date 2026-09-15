@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/audit"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/portalaccount"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/project"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/credentialcipher"
@@ -24,9 +26,32 @@ const (
 	developerDPProfile = "feeder-v3"
 )
 
+type stubAuditRecorder struct {
+	mutex   sync.Mutex
+	entries []audit.Entry
+	fail    error
+}
+
+func (recorder *stubAuditRecorder) Record(_ context.Context, entry audit.Entry) error {
+	recorder.mutex.Lock()
+	defer recorder.mutex.Unlock()
+	if recorder.fail != nil {
+		return recorder.fail
+	}
+	recorder.entries = append(recorder.entries, entry)
+	return nil
+}
+
+func (recorder *stubAuditRecorder) recorded() []audit.Entry {
+	recorder.mutex.Lock()
+	defer recorder.mutex.Unlock()
+	return append([]audit.Entry{}, recorder.entries...)
+}
+
 type developerFixture struct {
 	server     *Server
 	repository *project.MemoryRepository
+	audit      *stubAuditRecorder
 }
 
 func newDeveloperFixture(t *testing.T) developerFixture {
@@ -89,7 +114,8 @@ func newDeveloperFixture(t *testing.T) developerFixture {
 	if err != nil {
 		t.Fatalf("project.NewService() error = %v", err)
 	}
-	server, err := New(accounts, projects, &stubLimiter{allowed: true}, Options{
+	auditRecorder := &stubAuditRecorder{}
+	server, err := New(accounts, projects, auditRecorder, &stubLimiter{allowed: true}, Options{
 		AllowedOrigins:  []string{"https://developer.example.com"},
 		LoginRateLimit:  5,
 		LoginRateWindow: 15 * time.Minute,
@@ -97,7 +123,7 @@ func newDeveloperFixture(t *testing.T) developerFixture {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	return developerFixture{server: server, repository: projectRepository}
+	return developerFixture{server: server, repository: projectRepository, audit: auditRecorder}
 }
 
 func (fixture developerFixture) call(t *testing.T, method, path, body, token string) *httptest.ResponseRecorder {

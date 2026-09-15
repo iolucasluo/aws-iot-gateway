@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/audit"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/portalaccount"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/project"
 )
@@ -32,19 +33,29 @@ type Options struct {
 	LoginRateWindow    time.Duration
 	TrustedProxyHeader string
 	Now                func() time.Time
+	// AuditErrorHandler 接收审计写入失败。审计不可用不应让业务请求失败，
+	// 但必须有人记录它，默认丢弃是明确不接受的。
+	AuditErrorHandler func(error)
+}
+
+// AuditRecorder 是审计写入边界。
+type AuditRecorder interface {
+	Record(ctx context.Context, entry audit.Entry) error
 }
 
 // Server 是平台面 HTTP 入口。它只服务门户前缀，不注册任何设备侧路由。
 type Server struct {
 	accounts *portalaccount.Service
 	projects *project.Service
+	audit    AuditRecorder
 	limiter  LoginLimiter
 	options  Options
 	cors     corsPolicy
 }
 
-// New 组装平台 API。projects 为 nil 时项目/产品/凭证路由返回 503，不会静默降级。
-func New(accounts *portalaccount.Service, projects *project.Service, limiter LoginLimiter, options Options) (*Server, error) {
+// New 组装平台 API。projects 为 nil 时项目/产品/凭证路由返回 503，不会静默降级；
+// audit 为 nil 时不写审计（仅限测试与本地开发，部署必须注入）。
+func New(accounts *portalaccount.Service, projects *project.Service, auditRecorder AuditRecorder, limiter LoginLimiter, options Options) (*Server, error) {
 	if accounts == nil {
 		return nil, errors.New("platform api requires an account service")
 	}
@@ -61,13 +72,15 @@ func New(accounts *portalaccount.Service, projects *project.Service, limiter Log
 		options.Now = time.Now
 	}
 	return &Server{
-		accounts: accounts, projects: projects, limiter: limiter, options: options,
+		accounts: accounts, projects: projects, audit: auditRecorder, limiter: limiter, options: options,
 		cors: newCORSPolicy(options.AllowedOrigins),
 	}, nil
 }
 
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	writer.Header().Set(requestIDHeader, requestID(request))
+	requestID := requestID(request)
+	writer.Header().Set(requestIDHeader, requestID)
+	request = request.WithContext(withRequestID(request.Context(), requestID))
 	if server.cors.apply(writer, request) {
 		return
 	}
@@ -128,17 +141,28 @@ func (server *Server) servePortal(writer http.ResponseWriter, request *http.Requ
 }
 
 func (server *Server) serveResources(writer http.ResponseWriter, request *http.Request, audience portalaccount.Audience, path string) {
-	switch audience {
-	case portalaccount.AudienceDeveloper:
-		// 只有依赖项目域的门户才需要它；staff 的账号治理不因此降级。
-		if server.projects == nil {
-			writeError(writer, http.StatusServiceUnavailable, "projects_unavailable", "project services are unavailable")
+	// 只有依赖项目域的门户才需要它；staff 的账号治理不因此降级。
+	if audience == portalaccount.AudienceDeveloper && server.projects == nil {
+		writeError(writer, http.StatusServiceUnavailable, "projects_unavailable", "project services are unavailable")
+		return
+	}
+	dispatch := func(target http.ResponseWriter, incoming *http.Request) {
+		if audience == portalaccount.AudienceDeveloper {
+			server.serveDeveloper(target, incoming, path)
 			return
 		}
-		server.serveDeveloper(writer, request, path)
-	default:
-		server.serveAdminResources(writer, request, path)
+		server.serveAdminResources(target, incoming, path)
 	}
+	if server.audit == nil || !isWriteMethod(request.Method) {
+		dispatch(writer, request)
+		return
+	}
+	// 写操作才需要捕获状态与主体；holder 让已鉴权账号在响应结束后仍然可见。
+	holder := &actorHolder{}
+	captured := &statusRecorder{ResponseWriter: writer, status: http.StatusOK}
+	audited := request.WithContext(context.WithValue(request.Context(), actorHolderKey{}, holder))
+	dispatch(captured, audited)
+	server.recordPortalWrite(audited, audience, path, holder, captured.status)
 }
 
 // serveAdminResources 处理 staff 专属资源。会话面已在 servePortal 处理。
@@ -278,9 +302,11 @@ func (server *Server) login(writer http.ResponseWriter, request *http.Request, a
 	}
 	result, err := server.accounts.Login(request.Context(), audience, email, body.Password)
 	if err != nil {
+		server.recordLogin(request.Context(), request, audience, email, portalaccount.Account{}, false)
 		writeAccountError(writer, err)
 		return
 	}
+	server.recordLogin(request.Context(), request, audience, email, result.Account, true)
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"token":      result.Token,
 		"expires_at": result.ExpiresAt.UTC().Format(timeLayout),
@@ -310,6 +336,11 @@ func (server *Server) setPassword(writer http.ResponseWriter, request *http.Requ
 	}
 	account, err := server.accounts.SetPassword(request.Context(), body.Token, body.NewPassword)
 	if err != nil {
+		server.recordAudit(request.Context(), audit.Entry{
+			ActorKind: audit.ActorSystem, Operation: "POST auth.set_password",
+			RequestID: requestIDFromContext(request.Context()), Outcome: audit.OutcomeRejected,
+			Metadata: map[string]any{"audience": string(audience)},
+		})
 		writeAccountError(writer, err)
 		return
 	}
@@ -317,6 +348,11 @@ func (server *Server) setPassword(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusUnauthorized, "unauthenticated", "setup token does not belong to this portal")
 		return
 	}
+	server.recordAudit(request.Context(), audit.Entry{
+		ActorKind: audit.ActorPortalAccount, ActorAccountID: account.ID, ActorLabel: account.Email,
+		Operation: "POST auth.set_password", RequestID: requestIDFromContext(request.Context()),
+		Outcome: audit.OutcomeSucceeded, Metadata: map[string]any{"audience": string(audience)},
+	})
 	writeJSON(writer, http.StatusOK, map[string]any{"status": "password_set", "account": newAccountResponse(account)})
 }
 
@@ -337,6 +373,10 @@ func (server *Server) authenticated(
 	if err != nil {
 		writeAccountError(writer, err)
 		return
+	}
+	if holder, ok := request.Context().Value(actorHolderKey{}).(*actorHolder); ok {
+		holder.account = account
+		holder.set = true
 	}
 	handle(request.Context(), account, session)
 }

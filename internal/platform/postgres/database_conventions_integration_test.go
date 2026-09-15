@@ -199,7 +199,10 @@ func TestApplyMigrationsRecordsOnlyCurrentInitialSchema(t *testing.T) {
 	}
 	// 002 是首个顺序增量迁移（设备身份锚列），003 起是平台面（账号/项目/凭证）；
 	// 空库必须按序应用全部当前迁移文件。
-	want := []string{"001_initial.sql", "002_device_identity.sql", "003_platform_accounts.sql", "004_platform_projects.sql"}
+	want := []string{
+		"001_initial.sql", "002_device_identity.sql", "003_platform_accounts.sql",
+		"004_platform_projects.sql", "005_platform_audit_webhooks.sql",
+	}
 	if fmt.Sprint(appliedNames) != fmt.Sprint(want) {
 		t.Fatalf("applied migrations = %v, want %v", appliedNames, want)
 	}
