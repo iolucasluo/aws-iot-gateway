@@ -2,29 +2,38 @@ package project
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
+
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/portalaccount"
 )
 
 // MemoryRepository 是不依赖 PostgreSQL 的实现，供单元测试与本地开发使用。
 // 它复制真实实现必须保证的唯一性语义，不复制 SQL 细节。
 type MemoryRepository struct {
-	mutex         sync.Mutex
-	projects      map[string]Project
-	projectItems  map[string][]string
-	products      map[string]string // productID -> pid
-	credentials   map[string]Credential
-	manufacturers map[string]struct{}
+	mutex          sync.Mutex
+	projects       map[string]Project
+	projectItems   map[string][]string
+	products       map[string]string // productID -> pid（仅登记既有目录产品）
+	productCatalog map[string]Product
+	credentials    map[string]Credential
+	manufacturers  map[string]struct{}
+	dpProfiles     map[string]DPProfile
+	portalAccounts map[string]portalaccount.Account
 }
 
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
-		projects:      map[string]Project{},
-		projectItems:  map[string][]string{},
-		products:      map[string]string{},
-		credentials:   map[string]Credential{},
-		manufacturers: map[string]struct{}{},
+		projects:       map[string]Project{},
+		projectItems:   map[string][]string{},
+		products:       map[string]string{},
+		productCatalog: map[string]Product{},
+		credentials:    map[string]Credential{},
+		manufacturers:  map[string]struct{}{},
+		dpProfiles:     map[string]DPProfile{},
+		portalAccounts: map[string]portalaccount.Account{},
 	}
 }
 
@@ -226,5 +235,102 @@ func (repository *MemoryRepository) TouchCredentialUsed(_ context.Context, crede
 	moment := at
 	credential.LastUsedAt = &moment
 	repository.credentials[credentialID] = credential
+	return nil
+}
+
+// AddDPProfile 与 AddPortalAccount 供测试与本地开发登记既有事实源。
+func (repository *MemoryRepository) AddDPProfile(code, name string) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	repository.dpProfiles[code] = DPProfile{Code: code, Name: name}
+}
+
+func (repository *MemoryRepository) AddPortalAccount(account portalaccount.Account) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	repository.portalAccounts[account.ID] = account
+}
+
+func (repository *MemoryRepository) FindPortalAccount(_ context.Context, accountID string) (portalaccount.Account, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	account, found := repository.portalAccounts[accountID]
+	if !found {
+		return portalaccount.Account{}, ErrOwnerNotFound
+	}
+	return account, nil
+}
+
+func (repository *MemoryRepository) ActiveDPProfileExists(_ context.Context, code string) (bool, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	_, found := repository.dpProfiles[code]
+	return found, nil
+}
+
+func (repository *MemoryRepository) ListActiveDPProfiles(_ context.Context) ([]DPProfile, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	profiles := make([]DPProfile, 0, len(repository.dpProfiles))
+	for _, profile := range repository.dpProfiles {
+		profiles = append(profiles, profile)
+	}
+	sort.Slice(profiles, func(left, right int) bool { return profiles[left].Code < profiles[right].Code })
+	return profiles, nil
+}
+
+func (repository *MemoryRepository) CreateProduct(_ context.Context, product Product) error {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	for _, existing := range repository.productCatalog {
+		if existing.PID == product.PID {
+			return fmt.Errorf("%w: pid already exists", ErrInvalidInput)
+		}
+	}
+	repository.productCatalog[product.ID] = product
+	return nil
+}
+
+func (repository *MemoryRepository) FindProductByPID(_ context.Context, pid string) (Product, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	for _, product := range repository.productCatalog {
+		if product.PID == pid {
+			return product, nil
+		}
+	}
+	return Product{}, ErrProductNotFound
+}
+
+func (repository *MemoryRepository) ListProducts(_ context.Context, filter ProductFilter) ([]Product, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	products := make([]Product, 0, len(repository.productCatalog))
+	for _, product := range repository.productCatalog {
+		if filter.OwnerAccountID != "" && product.OwnerAccountID != filter.OwnerAccountID {
+			continue
+		}
+		if filter.Status != "" && product.Status != filter.Status {
+			continue
+		}
+		if filter.PID != "" && product.PID != filter.PID {
+			continue
+		}
+		products = append(products, product)
+	}
+	sort.Slice(products, func(left, right int) bool { return products[left].PID < products[right].PID })
+	if filter.Limit > 0 && len(products) > filter.Limit {
+		products = products[:filter.Limit]
+	}
+	return products, nil
+}
+
+func (repository *MemoryRepository) UpdateProduct(_ context.Context, product Product) error {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	if _, found := repository.productCatalog[product.ID]; !found {
+		return ErrProductNotFound
+	}
+	repository.productCatalog[product.ID] = product
 	return nil
 }

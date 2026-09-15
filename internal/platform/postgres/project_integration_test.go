@@ -258,3 +258,87 @@ func TestCredentialRepositoryRoundTripAndConstraints(t *testing.T) {
 		t.Fatalf("UpdateCredential(unknown) error = %v, want ErrCredentialNotFound", err)
 	}
 }
+
+func TestProductRepositoryRoundTripAndProfileAdmission(t *testing.T) {
+	ctx := context.Background()
+	repository, pool := newProjectIntegrationRepository(t)
+	seedProjectOwner(t, ctx, pool)
+	applyProductSeeds(t, ctx, pool)
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+
+	// seed 已发布 feeder-x1 使用的 profile；用它证明 active 判定来自真实 dp_profiles。
+	profiles, err := repository.ListActiveDPProfiles(ctx)
+	if err != nil || len(profiles) == 0 {
+		t.Fatalf("ListActiveDPProfiles() = %d, err = %v; want the seeded contract profiles", len(profiles), err)
+	}
+	active, err := repository.ActiveDPProfileExists(ctx, profiles[0].Code)
+	if err != nil || !active {
+		t.Fatalf("ActiveDPProfileExists(%s) = %v, %v; want true", profiles[0].Code, active, err)
+	}
+	if unknown, err := repository.ActiveDPProfileExists(ctx, "ghost-v1"); err != nil || unknown {
+		t.Fatalf("ActiveDPProfileExists(ghost-v1) = %v, %v; want false", unknown, err)
+	}
+
+	account, err := repository.FindPortalAccount(ctx, integrationProjectOwnerID)
+	if err != nil || account.Kind != portalaccount.KindDeveloper {
+		t.Fatalf("FindPortalAccount() = %+v, err = %v", account.Kind, err)
+	}
+	if _, err := repository.FindPortalAccount(ctx, "10000000-0000-0000-0000-0000000000ff"); !errors.Is(err, project.ErrOwnerNotFound) {
+		t.Fatalf("FindPortalAccount(unknown) error = %v, want ErrOwnerNotFound", err)
+	}
+
+	product := project.Product{
+		ID: "30000000-0000-0000-0000-0000000000d1", PID: "feeder-x2", DPProfileCode: profiles[0].Code,
+		Name: "Feeder X2", Status: project.StatusActive, Capabilities: []string{"webrtc.v1", "ota.app.v1"},
+		OwnerAccountID: integrationProjectOwnerID, Category: "feeder", CreatedAt: now, UpdatedAt: now,
+	}
+	if err := repository.CreateProduct(ctx, product); err != nil {
+		t.Fatalf("CreateProduct() error = %v", err)
+	}
+	// pid 唯一。
+	if err := repository.CreateProduct(ctx, project.Product{
+		ID: "30000000-0000-0000-0000-0000000000d2", PID: "feeder-x2", DPProfileCode: profiles[0].Code,
+		Name: "Duplicate", Status: project.StatusActive, CreatedAt: now, UpdatedAt: now,
+	}); !errors.Is(err, project.ErrInvalidInput) {
+		t.Fatalf("CreateProduct(duplicate pid) error = %v, want ErrInvalidInput", err)
+	}
+
+	loaded, err := repository.FindProductByPID(ctx, "feeder-x2")
+	if err != nil {
+		t.Fatalf("FindProductByPID() error = %v", err)
+	}
+	if loaded.OwnerAccountID != integrationProjectOwnerID || loaded.Category != "feeder" ||
+		len(loaded.Capabilities) != 2 || loaded.Capabilities[0] != "webrtc.v1" {
+		t.Fatalf("loaded product = %+v", loaded)
+	}
+	if _, err := repository.FindProductByPID(ctx, "ghost-x1"); !errors.Is(err, project.ErrProductNotFound) {
+		t.Fatalf("FindProductByPID(unknown) error = %v, want ErrProductNotFound", err)
+	}
+
+	owned, err := repository.ListProducts(ctx, project.ProductFilter{OwnerAccountID: integrationProjectOwnerID})
+	if err != nil || len(owned) != 1 || owned[0].PID != "feeder-x2" {
+		t.Fatalf("ListProducts(owner) = %+v, err = %v", owned, err)
+	}
+	// seed 的公共目录产品没有 owner，因此不会出现在按归属过滤的结果里。
+	all, err := repository.ListProducts(ctx, project.ProductFilter{})
+	if err != nil || len(all) != 4 {
+		t.Fatalf("ListProducts(all) = %d, err = %v; want 4 (3 seeded + 1 created)", len(all), err)
+	}
+
+	loaded.Name = "Feeder X2 Pro"
+	loaded.Capabilities = []string{"webrtc.v1"}
+	loaded.Status = project.StatusDisabled
+	loaded.OwnerAccountID = ""
+	loaded.UpdatedAt = now.Add(time.Hour)
+	if err := repository.UpdateProduct(ctx, loaded); err != nil {
+		t.Fatalf("UpdateProduct() error = %v", err)
+	}
+	updated, err := repository.FindProductByPID(ctx, "feeder-x2")
+	if err != nil || updated.Name != "Feeder X2 Pro" || updated.Status != project.StatusDisabled ||
+		updated.OwnerAccountID != "" || len(updated.Capabilities) != 1 {
+		t.Fatalf("updated product = %+v, err = %v", updated, err)
+	}
+	if err := repository.UpdateProduct(ctx, project.Product{ID: "30000000-0000-0000-0000-0000000000ff"}); !errors.Is(err, project.ErrProductNotFound) {
+		t.Fatalf("UpdateProduct(unknown) error = %v, want ErrProductNotFound", err)
+	}
+}

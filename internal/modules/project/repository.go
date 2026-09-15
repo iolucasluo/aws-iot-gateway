@@ -3,6 +3,8 @@ package project
 import (
 	"context"
 	"time"
+
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/portalaccount"
 )
 
 // Repository 是项目域的持久化边界。
@@ -19,6 +21,14 @@ type Repository interface {
 	ListProjectPIDs(ctx context.Context, projectID string) ([]string, error)
 
 	ManufacturerExists(ctx context.Context, manufacturerID string) (bool, error)
+	FindPortalAccount(ctx context.Context, accountID string) (portalaccount.Account, error)
+
+	CreateProduct(ctx context.Context, product Product) error
+	FindProductByPID(ctx context.Context, pid string) (Product, error)
+	ListProducts(ctx context.Context, filter ProductFilter) ([]Product, error)
+	UpdateProduct(ctx context.Context, product Product) error
+	ActiveDPProfileExists(ctx context.Context, code string) (bool, error)
+	ListActiveDPProfiles(ctx context.Context) ([]DPProfile, error)
 
 	CreateCredential(ctx context.Context, credential Credential) error
 	FindCredentialByID(ctx context.Context, credentialID string) (Credential, error)

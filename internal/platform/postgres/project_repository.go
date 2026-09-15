@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/portalaccount"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/project"
 )
 
@@ -295,4 +297,174 @@ func isUniqueViolation(err error) bool {
 func isForeignKeyViolation(err error) bool {
 	var postgresError *pgconn.PgError
 	return errors.As(err, &postgresError) && postgresError.Code == "23503"
+}
+
+const productColumns = `
+	id::text, pid, COALESCE(dp_profile_code, ''), name, status, capabilities,
+	COALESCE(owner_account_id::text, ''), COALESCE(category, ''), created_at, updated_at
+`
+
+func (repository *ProjectRepository) FindPortalAccount(ctx context.Context, accountID string) (portalaccount.Account, error) {
+	var account portalaccount.Account
+	var kind string
+	err := repository.pool.QueryRow(ctx, `
+		SELECT id::text, kind, role, email, COALESCE(password_hash, ''), COALESCE(display_name, ''),
+		       COALESCE(manufacturer_id::text, ''), status, last_login_at, created_at, updated_at
+		FROM portal_accounts WHERE id=$1
+	`, accountID).Scan(&account.ID, &kind, &account.Role, &account.Email, &account.PasswordHash,
+		&account.DisplayName, &account.ManufacturerID, &account.Status, &account.LastLoginAt,
+		&account.CreatedAt, &account.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return portalaccount.Account{}, project.ErrOwnerNotFound
+	}
+	if err != nil {
+		return portalaccount.Account{}, fmt.Errorf("find portal account: %w", err)
+	}
+	account.Kind = portalaccount.AccountKind(kind)
+	return account, nil
+}
+
+func (repository *ProjectRepository) ActiveDPProfileExists(ctx context.Context, code string) (bool, error) {
+	var exists bool
+	if err := repository.pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM dp_profiles WHERE code=$1 AND status='active')
+	`, code).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check dp profile existence: %w", err)
+	}
+	return exists, nil
+}
+
+func (repository *ProjectRepository) ListActiveDPProfiles(ctx context.Context) ([]project.DPProfile, error) {
+	rows, err := repository.pool.Query(ctx, `
+		SELECT code, name FROM dp_profiles WHERE status='active' ORDER BY code ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list active dp profiles: %w", err)
+	}
+	defer rows.Close()
+	profiles := make([]project.DPProfile, 0, 4)
+	for rows.Next() {
+		var profile project.DPProfile
+		if err := rows.Scan(&profile.Code, &profile.Name); err != nil {
+			return nil, fmt.Errorf("scan dp profile: %w", err)
+		}
+		profiles = append(profiles, profile)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list active dp profiles: %w", err)
+	}
+	return profiles, nil
+}
+
+func (repository *ProjectRepository) CreateProduct(ctx context.Context, product project.Product) error {
+	capabilities, err := encodeCapabilities(product.Capabilities)
+	if err != nil {
+		return err
+	}
+	_, err = repository.pool.Exec(ctx, `
+		INSERT INTO products (
+			id, pid, dp_profile_code, name, status, capabilities, owner_account_id, category, created_at, updated_at
+		) VALUES ($1,$2,NULLIF($3,''),$4,$5,$6,NULLIF($7,'')::uuid,NULLIF($8,''),$9,$10)
+	`, product.ID, product.PID, product.DPProfileCode, product.Name, product.Status, capabilities,
+		product.OwnerAccountID, product.Category, product.CreatedAt, product.UpdatedAt)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("%w: pid already exists", project.ErrInvalidInput)
+		}
+		return fmt.Errorf("create product: %w", err)
+	}
+	return nil
+}
+
+func (repository *ProjectRepository) FindProductByPID(ctx context.Context, pid string) (project.Product, error) {
+	return scanProduct(repository.pool.QueryRow(ctx, `
+		SELECT `+productColumns+` FROM products WHERE pid=$1
+	`, pid))
+}
+
+func (repository *ProjectRepository) ListProducts(ctx context.Context, filter project.ProductFilter) ([]project.Product, error) {
+	limit := filter.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 200
+	}
+	rows, err := repository.pool.Query(ctx, `
+		SELECT `+productColumns+`
+		FROM products
+		WHERE ($1='' OR owner_account_id=$1::uuid)
+		  AND ($2='' OR status=$2)
+		  AND ($3='' OR pid=$3)
+		ORDER BY pid ASC
+		LIMIT $4
+	`, filter.OwnerAccountID, filter.Status, filter.PID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list products: %w", err)
+	}
+	defer rows.Close()
+	products := make([]project.Product, 0, limit)
+	for rows.Next() {
+		product, err := scanProduct(rows)
+		if err != nil {
+			return nil, err
+		}
+		products = append(products, product)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list products: %w", err)
+	}
+	return products, nil
+}
+
+func (repository *ProjectRepository) UpdateProduct(ctx context.Context, product project.Product) error {
+	capabilities, err := encodeCapabilities(product.Capabilities)
+	if err != nil {
+		return err
+	}
+	tag, err := repository.pool.Exec(ctx, `
+		UPDATE products
+		SET name=$2, status=$3, capabilities=$4, owner_account_id=NULLIF($5,'')::uuid,
+		    category=NULLIF($6,''), updated_at=$7
+		WHERE id=$1
+	`, product.ID, product.Name, product.Status, capabilities, product.OwnerAccountID,
+		product.Category, product.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("update product: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return project.ErrProductNotFound
+	}
+	return nil
+}
+
+// encodeCapabilities 保证列内容始终是 JSON 数组：null 会违反 products_capabilities_check。
+func encodeCapabilities(capabilities []string) ([]byte, error) {
+	if capabilities == nil {
+		capabilities = []string{}
+	}
+	encoded, err := json.Marshal(capabilities)
+	if err != nil {
+		return nil, fmt.Errorf("encode product capabilities: %w", err)
+	}
+	return encoded, nil
+}
+
+func scanProduct(row pgx.Row) (project.Product, error) {
+	var product project.Product
+	var capabilities []byte
+	err := row.Scan(&product.ID, &product.PID, &product.DPProfileCode, &product.Name, &product.Status,
+		&capabilities, &product.OwnerAccountID, &product.Category, &product.CreatedAt, &product.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return project.Product{}, project.ErrProductNotFound
+	}
+	if err != nil {
+		return project.Product{}, fmt.Errorf("scan product: %w", err)
+	}
+	if len(capabilities) > 0 {
+		if err := json.Unmarshal(capabilities, &product.Capabilities); err != nil {
+			return project.Product{}, fmt.Errorf("decode product capabilities: %w", err)
+		}
+	}
+	if product.Capabilities == nil {
+		product.Capabilities = []string{}
+	}
+	return product, nil
 }
