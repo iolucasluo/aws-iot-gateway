@@ -13,7 +13,7 @@ type Repository interface {
 	ListProjects(ctx context.Context, filter ProjectFilter) ([]Project, error)
 	UpdateProject(ctx context.Context, project Project) error
 
-	AddProjectProduct(ctx context.Context, projectID, productID string, at time.Time) error
+	AddProjectProduct(ctx context.Context, id, projectID, productID string, at time.Time) error
 	RemoveProjectProduct(ctx context.Context, projectID, productID string) error
 	ListProjectProductIDs(ctx context.Context, projectID string) ([]string, error)
 	ListProjectPIDs(ctx context.Context, projectID string) ([]string, error)

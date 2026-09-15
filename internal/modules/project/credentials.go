@@ -96,11 +96,14 @@ func (service *Service) DisableCredential(ctx context.Context, actor Actor, cred
 	return credential, nil
 }
 
-// AuthenticateCredential 实现 internalauth.CredentialStore。
+// FindCredentialByAPIKey 实现 internalauth.CredentialStore。
 //
 // 主体 id 取 project_id，而不是凭证行 id：这样轮换凭证不会丢失设备归属。
 // 项目被停用时其全部凭证立即失效；无法解密的密文按来源不可用 fail closed。
-func (service *Service) AuthenticateCredential(ctx context.Context, apiKey string) (internalauth.Credential, error) {
+//
+// 三种结果被刻意区分：不存在 → ErrUnknownAPIKey（允许回退静态来源）；
+// 存在但不可用 → ErrCredentialRevoked（不回退）；其它错误 → 传播（fail closed）。
+func (service *Service) FindCredentialByAPIKey(ctx context.Context, apiKey string) (internalauth.Credential, error) {
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
 		return internalauth.Credential{}, internalauth.ErrUnknownAPIKey
@@ -136,6 +139,7 @@ func (service *Service) AuthenticateCredential(ctx context.Context, apiKey strin
 	}
 	return internalauth.Credential{
 		InternalAppID: target.ID,
+		ProjectID:     target.ID,
 		APIKey:        credential.APIKey,
 		APISecret:     secret,
 		Permissions:   append([]string(nil), credential.Permissions...),

@@ -17,6 +17,7 @@ import (
 	devicemodule "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/device"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/media"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/ota"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/project"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/timebootstrap"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/domesticca"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/explorexsignal"
@@ -37,6 +38,7 @@ func runDomesticGateway(
 	database *pgxpool.Pool,
 	redis *redisclient.Client,
 	verifier *internalauth.Verifier,
+	projectService *project.Service,
 ) error {
 	compositionFile, err := os.Open(config.ProviderCompositionPath)
 	if err != nil {
@@ -204,17 +206,21 @@ func runDomesticGateway(
 	if err != nil {
 		return err
 	}
+	dependencies := httpapi.Dependencies{
+		Binding: bindingService, Media: streamService, Assets: assetService,
+		Device: deviceService, OTA: otaService,
+		TimeBootstrap: timeService, TimeBootstrapLimiter: rateLimiter,
+		DeviceRuntime: httpapi.DeviceRuntimeConfig{
+			ProviderMode: "domestic-dev", Endpoint: config.DomesticMQTTEndpoint,
+			TopicPrefix: config.DomesticMQTTTopicPrefix,
+		},
+	}
+	if projectService != nil {
+		dependencies.ProjectScope = projectService
+	}
 	server := &http.Server{
-		Addr: config.ListenAddress,
-		Handler: httpapi.NewInternalAPI(activationService, verifier, httpapi.Dependencies{
-			Binding: bindingService, Media: streamService, Assets: assetService,
-			Device: deviceService, OTA: otaService,
-			TimeBootstrap: timeService, TimeBootstrapLimiter: rateLimiter,
-			DeviceRuntime: httpapi.DeviceRuntimeConfig{
-				ProviderMode: "domestic-dev", Endpoint: config.DomesticMQTTEndpoint,
-				TopicPrefix: config.DomesticMQTTTopicPrefix,
-			},
-		}),
+		Addr:              config.ListenAddress,
+		Handler:           httpapi.NewInternalAPI(activationService, verifier, dependencies),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

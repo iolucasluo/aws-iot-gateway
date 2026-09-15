@@ -28,12 +28,16 @@ type Credential struct {
 	APIKey        string
 	APISecret     string
 	Permissions   []string
+	// ProjectID 只在 DB 来源（平台面 api_credentials）非空；
+	// 静态 INTERNAL_APPS_JSON 来源为空，表示该主体没有项目作用域。
+	ProjectID string
 }
 
 type Principal struct {
 	InternalAppID string
 	APIKey        string
 	Permissions   []string
+	ProjectID     string
 }
 
 func (principal Principal) HasPermission(permission string) bool {
@@ -157,7 +161,7 @@ func (verifier *Verifier) Authenticate(ctx context.Context, request SignatureReq
 		return Principal{}, ErrNonceReplayed
 	}
 	return Principal{InternalAppID: credential.InternalAppID, APIKey: credential.APIKey,
-		Permissions: append([]string(nil), credential.Permissions...)}, nil
+		Permissions: append([]string(nil), credential.Permissions...), ProjectID: credential.ProjectID}, nil
 }
 
 func timestampTime(value string) (time.Time, error) {

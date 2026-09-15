@@ -240,7 +240,7 @@ func TestCredentialLifecycleKeepsOwnershipOnTheProject(t *testing.T) {
 	}
 
 	// 验签主体必须是 project id，而不是凭证行 id。
-	principal, err := service.AuthenticateCredential(ctx, issued.Credential.APIKey)
+	principal, err := service.FindCredentialByAPIKey(ctx, issued.Credential.APIKey)
 	if err != nil {
 		t.Fatalf("AuthenticateCredential() error = %v", err)
 	}
@@ -263,10 +263,10 @@ func TestCredentialLifecycleKeepsOwnershipOnTheProject(t *testing.T) {
 	if rotated.Credential.APIKey == issued.Credential.APIKey || rotated.APISecret == issued.APISecret {
 		t.Fatal("RotateCredential() reused key material")
 	}
-	if _, err := service.AuthenticateCredential(ctx, issued.Credential.APIKey); !errors.Is(err, internalauth.ErrCredentialRevoked) {
+	if _, err := service.FindCredentialByAPIKey(ctx, issued.Credential.APIKey); !errors.Is(err, internalauth.ErrCredentialRevoked) {
 		t.Fatalf("AuthenticateCredential(old key) error = %v, want ErrCredentialRevoked", err)
 	}
-	rotatedPrincipal, err := service.AuthenticateCredential(ctx, rotated.Credential.APIKey)
+	rotatedPrincipal, err := service.FindCredentialByAPIKey(ctx, rotated.Credential.APIKey)
 	if err != nil || rotatedPrincipal.InternalAppID != created.ID {
 		t.Fatalf("AuthenticateCredential(rotated) = %+v, err = %v", rotatedPrincipal.InternalAppID, err)
 	}
@@ -275,7 +275,7 @@ func TestCredentialLifecycleKeepsOwnershipOnTheProject(t *testing.T) {
 	if _, err := service.UpdateProject(ctx, owner, created.ID, ProjectPatch{Status: stringPointer(StatusDisabled)}); err != nil {
 		t.Fatalf("UpdateProject() error = %v", err)
 	}
-	if _, err := service.AuthenticateCredential(ctx, rotated.Credential.APIKey); !errors.Is(err, internalauth.ErrCredentialRevoked) {
+	if _, err := service.FindCredentialByAPIKey(ctx, rotated.Credential.APIKey); !errors.Is(err, internalauth.ErrCredentialRevoked) {
 		t.Fatalf("AuthenticateCredential(disabled project) error = %v, want ErrCredentialRevoked", err)
 	}
 	_ = repository
@@ -295,10 +295,10 @@ func TestAuthenticateCredentialFailureModes(t *testing.T) {
 		t.Fatalf("CreateCredential() error = %v", err)
 	}
 
-	if _, err := service.AuthenticateCredential(ctx, ""); !errors.Is(err, internalauth.ErrUnknownAPIKey) {
+	if _, err := service.FindCredentialByAPIKey(ctx, ""); !errors.Is(err, internalauth.ErrUnknownAPIKey) {
 		t.Fatalf("AuthenticateCredential(empty) error = %v, want ErrUnknownAPIKey", err)
 	}
-	if _, err := service.AuthenticateCredential(ctx, "ak_unknown"); !errors.Is(err, internalauth.ErrUnknownAPIKey) {
+	if _, err := service.FindCredentialByAPIKey(ctx, "ak_unknown"); !errors.Is(err, internalauth.ErrUnknownAPIKey) {
 		t.Fatalf("AuthenticateCredential(unknown) error = %v, want ErrUnknownAPIKey", err)
 	}
 
@@ -308,14 +308,14 @@ func TestAuthenticateCredentialFailureModes(t *testing.T) {
 	if err := repository.UpdateCredential(ctx, broken); err != nil {
 		t.Fatalf("UpdateCredential() error = %v", err)
 	}
-	if _, err := service.AuthenticateCredential(ctx, issued.Credential.APIKey); err == nil {
+	if _, err := service.FindCredentialByAPIKey(ctx, issued.Credential.APIKey); err == nil {
 		t.Fatal("AuthenticateCredential(broken ciphertext) succeeded, want a failure")
 	}
 
 	if _, err := service.DisableCredential(ctx, owner, issued.Credential.ID); err != nil {
 		t.Fatalf("DisableCredential() error = %v", err)
 	}
-	if _, err := service.AuthenticateCredential(ctx, issued.Credential.APIKey); !errors.Is(err, internalauth.ErrCredentialRevoked) {
+	if _, err := service.FindCredentialByAPIKey(ctx, issued.Credential.APIKey); !errors.Is(err, internalauth.ErrCredentialRevoked) {
 		t.Fatalf("AuthenticateCredential(disabled) error = %v, want ErrCredentialRevoked", err)
 	}
 	if _, err := service.DisableCredential(ctx, owner, "40000000-0000-0000-0000-0000000000ff"); !errors.Is(err, ErrCredentialNotFound) {

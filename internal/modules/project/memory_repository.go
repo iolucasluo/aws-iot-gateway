@@ -102,7 +102,7 @@ func (repository *MemoryRepository) UpdateProject(_ context.Context, project Pro
 	return nil
 }
 
-func (repository *MemoryRepository) AddProjectProduct(_ context.Context, projectID, productID string, _ time.Time) error {
+func (repository *MemoryRepository) AddProjectProduct(_ context.Context, _, projectID, productID string, _ time.Time) error {
 	repository.mutex.Lock()
 	defer repository.mutex.Unlock()
 	if _, found := repository.projects[projectID]; !found {

@@ -206,7 +206,11 @@ func (service *Service) AttachProduct(ctx context.Context, actor Actor, projectI
 	if productID == "" {
 		return Project{}, fmt.Errorf("%w: product id is required", ErrInvalidInput)
 	}
-	if err := service.repository.AddProjectProduct(ctx, projectID, productID, service.now().UTC()); err != nil {
+	attachmentID, err := randomUUID()
+	if err != nil {
+		return Project{}, fmt.Errorf("generate project product id: %w", err)
+	}
+	if err := service.repository.AddProjectProduct(ctx, attachmentID, projectID, productID, service.now().UTC()); err != nil {
 		return Project{}, err
 	}
 	return target, nil
