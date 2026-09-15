@@ -32,6 +32,7 @@ var (
 	ErrCredentialDisabled   = errors.New("credential is disabled or expired")
 	ErrDuplicateProduct     = errors.New("product is already attached to the project")
 	ErrOwnerNotFound        = errors.New("product owner account not found")
+	ErrWebhookNotFound      = errors.New("project webhook not found")
 )
 
 // Project 是凭证与设备归属的锚点；它不是 tenant。

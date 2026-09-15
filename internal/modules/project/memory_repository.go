@@ -22,6 +22,7 @@ type MemoryRepository struct {
 	manufacturers  map[string]struct{}
 	dpProfiles     map[string]DPProfile
 	portalAccounts map[string]portalaccount.Account
+	webhooks       map[string]Webhook
 }
 
 func NewMemoryRepository() *MemoryRepository {
@@ -34,6 +35,7 @@ func NewMemoryRepository() *MemoryRepository {
 		manufacturers:  map[string]struct{}{},
 		dpProfiles:     map[string]DPProfile{},
 		portalAccounts: map[string]portalaccount.Account{},
+		webhooks:       map[string]Webhook{},
 	}
 }
 
@@ -350,5 +352,88 @@ func (repository *MemoryRepository) UpdateProduct(_ context.Context, product Pro
 		return ErrProductNotFound
 	}
 	repository.productCatalog[product.ID] = product
+	return nil
+}
+
+func (repository *MemoryRepository) CreateWebhook(_ context.Context, webhook Webhook) error {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	if _, found := repository.projects[webhook.ProjectID]; !found {
+		return ErrProjectNotFound
+	}
+	if _, found := repository.webhooks[webhook.ID]; found {
+		return ErrInvalidInput
+	}
+	// 与生产一致：一个项目同时只能有一个 active 回调。
+	if webhook.Status == StatusActive {
+		for _, existing := range repository.webhooks {
+			if existing.ProjectID == webhook.ProjectID && existing.Status == StatusActive {
+				return fmt.Errorf("%w: an active webhook already exists for this project", ErrInvalidInput)
+			}
+		}
+	}
+	repository.webhooks[webhook.ID] = webhook
+	return nil
+}
+
+func (repository *MemoryRepository) FindWebhookByID(_ context.Context, webhookID string) (Webhook, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	webhook, found := repository.webhooks[webhookID]
+	if !found {
+		return Webhook{}, ErrWebhookNotFound
+	}
+	return webhook, nil
+}
+
+func (repository *MemoryRepository) FindActiveWebhookByProject(_ context.Context, projectID string) (Webhook, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	for _, webhook := range repository.webhooks {
+		if webhook.ProjectID == projectID && webhook.Status == StatusActive {
+			return webhook, nil
+		}
+	}
+	return Webhook{}, ErrWebhookNotFound
+}
+
+func (repository *MemoryRepository) ListWebhooks(_ context.Context, projectID string) ([]Webhook, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	webhooks := make([]Webhook, 0, 2)
+	for _, webhook := range repository.webhooks {
+		if webhook.ProjectID != projectID {
+			continue
+		}
+		webhooks = append(webhooks, webhook)
+	}
+	sort.Slice(webhooks, func(left, right int) bool { return webhooks[left].CreatedAt.Before(webhooks[right].CreatedAt) })
+	return webhooks, nil
+}
+
+func (repository *MemoryRepository) UpdateWebhook(_ context.Context, webhook Webhook) error {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	if _, found := repository.webhooks[webhook.ID]; !found {
+		return ErrWebhookNotFound
+	}
+	if webhook.Status == StatusActive {
+		for id, existing := range repository.webhooks {
+			if id != webhook.ID && existing.ProjectID == webhook.ProjectID && existing.Status == StatusActive {
+				return fmt.Errorf("%w: an active webhook already exists for this project", ErrInvalidInput)
+			}
+		}
+	}
+	repository.webhooks[webhook.ID] = webhook
+	return nil
+}
+
+func (repository *MemoryRepository) DeleteWebhook(_ context.Context, webhookID string) error {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	if _, found := repository.webhooks[webhookID]; !found {
+		return ErrWebhookNotFound
+	}
+	delete(repository.webhooks, webhookID)
 	return nil
 }

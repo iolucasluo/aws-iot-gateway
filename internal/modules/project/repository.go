@@ -30,6 +30,13 @@ type Repository interface {
 	ActiveDPProfileExists(ctx context.Context, code string) (bool, error)
 	ListActiveDPProfiles(ctx context.Context) ([]DPProfile, error)
 
+	CreateWebhook(ctx context.Context, webhook Webhook) error
+	FindWebhookByID(ctx context.Context, webhookID string) (Webhook, error)
+	FindActiveWebhookByProject(ctx context.Context, projectID string) (Webhook, error)
+	ListWebhooks(ctx context.Context, projectID string) ([]Webhook, error)
+	UpdateWebhook(ctx context.Context, webhook Webhook) error
+	DeleteWebhook(ctx context.Context, webhookID string) error
+
 	CreateCredential(ctx context.Context, credential Credential) error
 	FindCredentialByID(ctx context.Context, credentialID string) (Credential, error)
 	FindCredentialByAPIKey(ctx context.Context, apiKey string) (Credential, error)

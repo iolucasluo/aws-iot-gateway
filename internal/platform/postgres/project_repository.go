@@ -468,3 +468,101 @@ func scanProduct(row pgx.Row) (project.Product, error) {
 	}
 	return product, nil
 }
+
+const webhookColumns = `
+	id::text, project_id::text, callback_url, secret_ciphertext, kek_id, event_types, status, created_at, updated_at
+`
+
+func (repository *ProjectRepository) CreateWebhook(ctx context.Context, webhook project.Webhook) error {
+	_, err := repository.pool.Exec(ctx, `
+		INSERT INTO project_webhooks (
+			id, project_id, callback_url, secret_ciphertext, kek_id, event_types, status, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,COALESCE($6::text[], '{}'::text[]),$7,$8,$9)
+	`, webhook.ID, webhook.ProjectID, webhook.CallbackURL, webhook.SecretCiphertext, webhook.KEKID,
+		webhook.EventTypes, webhook.Status, webhook.CreatedAt, webhook.UpdatedAt)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("%w: an active webhook already exists for this project", project.ErrInvalidInput)
+		}
+		return fmt.Errorf("create project webhook: %w", err)
+	}
+	return nil
+}
+
+func (repository *ProjectRepository) FindWebhookByID(ctx context.Context, webhookID string) (project.Webhook, error) {
+	return scanWebhook(repository.pool.QueryRow(ctx, `
+		SELECT `+webhookColumns+` FROM project_webhooks WHERE id=$1
+	`, webhookID))
+}
+
+func (repository *ProjectRepository) FindActiveWebhookByProject(ctx context.Context, projectID string) (project.Webhook, error) {
+	return scanWebhook(repository.pool.QueryRow(ctx, `
+		SELECT `+webhookColumns+` FROM project_webhooks
+		WHERE project_id=$1 AND status='active'
+	`, projectID))
+}
+
+func (repository *ProjectRepository) ListWebhooks(ctx context.Context, projectID string) ([]project.Webhook, error) {
+	rows, err := repository.pool.Query(ctx, `
+		SELECT `+webhookColumns+` FROM project_webhooks WHERE project_id=$1
+		ORDER BY created_at ASC, id ASC
+	`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("list project webhooks: %w", err)
+	}
+	defer rows.Close()
+	webhooks := make([]project.Webhook, 0, 2)
+	for rows.Next() {
+		webhook, err := scanWebhook(rows)
+		if err != nil {
+			return nil, err
+		}
+		webhooks = append(webhooks, webhook)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list project webhooks: %w", err)
+	}
+	return webhooks, nil
+}
+
+func (repository *ProjectRepository) UpdateWebhook(ctx context.Context, webhook project.Webhook) error {
+	tag, err := repository.pool.Exec(ctx, `
+		UPDATE project_webhooks
+		SET callback_url=$2, event_types=COALESCE($3::text[], '{}'::text[]), status=$4, updated_at=$5
+		WHERE id=$1
+	`, webhook.ID, webhook.CallbackURL, webhook.EventTypes, webhook.Status, webhook.UpdatedAt)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return fmt.Errorf("%w: an active webhook already exists for this project", project.ErrInvalidInput)
+		}
+		return fmt.Errorf("update project webhook: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return project.ErrWebhookNotFound
+	}
+	return nil
+}
+
+func (repository *ProjectRepository) DeleteWebhook(ctx context.Context, webhookID string) error {
+	tag, err := repository.pool.Exec(ctx, `DELETE FROM project_webhooks WHERE id=$1`, webhookID)
+	if err != nil {
+		return fmt.Errorf("delete project webhook: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return project.ErrWebhookNotFound
+	}
+	return nil
+}
+
+func scanWebhook(row pgx.Row) (project.Webhook, error) {
+	var webhook project.Webhook
+	err := row.Scan(&webhook.ID, &webhook.ProjectID, &webhook.CallbackURL, &webhook.SecretCiphertext,
+		&webhook.KEKID, &webhook.EventTypes, &webhook.Status, &webhook.CreatedAt, &webhook.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return project.Webhook{}, project.ErrWebhookNotFound
+	}
+	if err != nil {
+		return project.Webhook{}, fmt.Errorf("scan project webhook: %w", err)
+	}
+	return webhook, nil
+}

@@ -26,6 +26,8 @@ func writeProjectError(writer http.ResponseWriter, err error) {
 		writeError(writer, http.StatusForbidden, "forbidden", "operation is not allowed")
 	case errors.Is(err, project.ErrCredentialNotFound):
 		writeError(writer, http.StatusNotFound, "not_found", "credential not found")
+	case errors.Is(err, project.ErrWebhookNotFound):
+		writeError(writer, http.StatusNotFound, "not_found", "webhook not found")
 	case errors.Is(err, project.ErrDuplicateProduct):
 		writeError(writer, http.StatusConflict, "product_already_attached", "product is already attached to the project")
 	case errors.Is(err, project.ErrInvalidInput):
@@ -126,6 +128,8 @@ func (server *Server) serveDeveloper(writer http.ResponseWriter, request *http.R
 			server.serveDeveloperProject(writer, request, strings.TrimPrefix(path, "projects/"))
 		case strings.HasPrefix(path, "credentials/"):
 			server.serveDeveloperCredential(writer, request, strings.TrimPrefix(path, "credentials/"))
+		case strings.HasPrefix(path, "webhooks/"):
+			server.serveDeveloperWebhook(writer, request, strings.TrimPrefix(path, "webhooks/"))
 		case strings.HasPrefix(path, "products/"):
 			server.serveDeveloperProduct(writer, request, strings.TrimPrefix(path, "products/"))
 		default:
@@ -207,6 +211,10 @@ func (server *Server) serveDeveloperProject(writer http.ResponseWriter, request 
 			}
 			writeJSON(writer, http.StatusOK, map[string]any{"project": newProjectResponse(value)})
 		})
+	case sub == "webhooks" && request.Method == http.MethodGet:
+		server.listProjectWebhooks(writer, request, projectID)
+	case sub == "webhooks" && request.Method == http.MethodPost:
+		server.createProjectWebhook(writer, request, projectID)
 	case sub == "credentials" && request.Method == http.MethodGet:
 		server.withDeveloperActor(writer, request, func(ctx context.Context, actor project.Actor) {
 			credentials, err := server.projects().ListCredentials(ctx, actor, projectID)
