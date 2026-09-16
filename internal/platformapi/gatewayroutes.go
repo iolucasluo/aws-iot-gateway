@@ -285,6 +285,8 @@ func (server *Server) serveDeveloperDevice(writer http.ResponseWriter, request *
 	switch {
 	case !hasSub && request.Method == http.MethodGet:
 		server.getDeveloperDevice(writer, request, deviceSN)
+	case (sub == "unbind" || sub == "recommission") && request.Method == http.MethodPost:
+		server.proxyDeviceLifecycle(writer, request, portalaccount.AudienceDeveloper, deviceSN, sub)
 	case sub == "status" && request.Method == http.MethodGet:
 		server.proxyDeviceStatus(writer, request, deviceSN)
 	case sub == "commands" && request.Method == http.MethodPost:
@@ -320,4 +322,52 @@ func (server *Server) serveDeveloperOTA(writer http.ResponseWriter, request *htt
 	default:
 		writeError(writer, http.StatusNotFound, "not_found", "endpoint not found")
 	}
+}
+
+// proxyDeviceLifecycle reuses the device-domain lifecycle; the portal never
+// mutates bindings itself and never accepts a client-supplied reset scope.
+func (server *Server) proxyDeviceLifecycle(writer http.ResponseWriter, request *http.Request, audience portalaccount.Audience, deviceSN, action string) {
+	if !server.requireGateway(writer) || !server.requireOperations(writer) || !server.requireProjects(writer) {
+		return
+	}
+	server.authenticated(writer, request, audience, func(ctx context.Context, account portalaccount.Account, _ portalaccount.Session) {
+		var body *struct{}
+		decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, maxRequestBodyBytes))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&body); err != nil || body == nil {
+			writeError(writer, http.StatusBadRequest, "invalid_request", "request body must be an empty object")
+			return
+		}
+		if err := decoder.Decode(new(any)); err != io.EOF {
+			writeError(writer, http.StatusBadRequest, "invalid_request", "request body must contain one object")
+			return
+		}
+		actor := portalaccount.ActorFromAccount(account)
+		device, err := server.operations().FindDevice(ctx, deviceSN)
+		if err != nil || device.BindingProjectID == "" {
+			writeError(writer, http.StatusNotFound, "not_found", "device not found")
+			return
+		}
+		projectID := device.BindingProjectID
+		if _, err := server.projects().GetProject(ctx, actor, projectID); err != nil {
+			writeError(writer, http.StatusNotFound, "not_found", "device not found")
+			return
+		}
+		// Check operate permission before issuing any gateway device token.
+		if _, _, err := server.projects().ProjectAPISecret(ctx, projectID, "devices:operate"); err != nil {
+			writeGatewayResponse(writer, Response{}, err)
+			return
+		}
+		token, err := server.dependencies.Gateway.DeviceToken(ctx, projectID, deviceSN)
+		if err != nil {
+			writeGatewayResponse(writer, Response{}, err)
+			return
+		}
+		payload := []byte(`{}`)
+		if action == "recommission" {
+			payload = []byte(`{"reset_scope":"runtime"}`)
+		}
+		response, err := server.dependencies.Gateway.Call(ctx, projectID, "devices:operate", http.MethodPost, "/api/v1/openapi/devices/"+action+"/"+url.PathEscape(token), nil, payload, "")
+		writeGatewayResponse(writer, response, err)
+	})
 }

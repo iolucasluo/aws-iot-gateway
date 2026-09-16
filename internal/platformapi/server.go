@@ -205,8 +205,16 @@ func (server *Server) serveResources(writer http.ResponseWriter, request *http.R
 
 // serveAdminResources 处理 staff 专属资源。会话面已在 servePortal 处理。
 func (server *Server) serveAdminResources(writer http.ResponseWriter, request *http.Request, path string) {
-	// 只读运维视图与治理视图：全部要求 admin audience 会话。
+	// 运维、治理视图与项目设备解绑：全部要求 admin audience 会话。
 	switch {
+	case strings.HasPrefix(path, "devices/") && request.Method == http.MethodPost:
+		sn, action, ok := strings.Cut(strings.TrimPrefix(path, "devices/"), "/")
+		if !ok || sn == "" || (action != "unbind" && action != "recommission") {
+			writeError(writer, http.StatusNotFound, "not_found", "endpoint not found")
+			return
+		}
+		server.proxyDeviceLifecycle(writer, request, portalaccount.AudienceAdmin, sn, action)
+		return
 	case path == "devices" && request.Method == http.MethodGet:
 		server.listDevices(writer, request)
 		return

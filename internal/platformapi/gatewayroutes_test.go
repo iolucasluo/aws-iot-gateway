@@ -310,3 +310,107 @@ func TestDeveloperDeviceProxyWithoutGatewayClientIsUnavailable(t *testing.T) {
 		t.Fatalf("status without gateway client = %d body = %s, want 503", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestPortalDeviceLifecycle(t *testing.T) {
+	for _, audience := range []string{"admin", "developer"} {
+		for _, action := range []string{"unbind", "recommission"} {
+			t.Run(audience+"/"+action, func(t *testing.T) {
+				f := newGatewayProxyFixture(t, nil)
+				f.createProjectWithDevice(t, []string{"devices:read", "devices:operate"})
+				token := f.token
+				if audience == "admin" {
+					r := f.call(t, http.MethodPost, "/api/v1/admin/auth/login", `{"email":"staff-portal@example.com","password":"`+developerPassword+`"}`, "")
+					token = decodeJSON[struct {
+						Token string `json:"token"`
+					}](t, r).Token
+				}
+				r := f.call(t, http.MethodPost, "/api/v1/"+audience+"/devices/"+opsFixtureDeviceSN+"/"+action, `{}`, token)
+				if r.Code != 200 {
+					t.Fatalf("status %d: %s", r.Code, r.Body.String())
+				}
+				calls := f.stub.recorded()
+				if len(calls) != 2 {
+					t.Fatalf("calls=%d", len(calls))
+				}
+				if calls[1].Path != "/api/v1/openapi/devices/"+action+"/device-token-from-gateway" || calls[1].Signature == "" {
+					t.Fatal("wrong or unsigned lifecycle path")
+				}
+				if action == "recommission" && string(calls[1].Body) != `{"reset_scope":"runtime"}` {
+					t.Fatalf("unsafe reset scope: %s", calls[1].Body)
+				}
+			})
+		}
+	}
+}
+
+func TestPortalLifecycleRefusesUnsafeOrUnauthorizedRequests(t *testing.T) {
+	for _, tc := range []struct {
+		name, body        string
+		permission        []string
+		stranger, unbound bool
+		want              int
+	}{
+		{"null body", `null`, []string{"devices:read", "devices:operate"}, false, false, 400},
+		{"trailing body", `{} {"reset_scope":"all"}`, []string{"devices:read", "devices:operate"}, false, false, 400},
+		{"all scope", `{"reset_scope":"all"}`, []string{"devices:read", "devices:operate"}, false, false, 400},
+		{"no operate", `{}`, []string{"devices:read"}, false, false, 409},
+		{"no read", `{}`, []string{"devices:operate"}, false, false, 409},
+		{"other owner", `{}`, []string{"devices:read", "devices:operate"}, true, false, 404},
+		{"no project binding", `{}`, []string{"devices:read", "devices:operate"}, false, true, 404},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newGatewayProxyFixture(t, nil)
+			f.createProjectWithDevice(t, tc.permission)
+			token := f.token
+			if tc.stranger {
+				token = f.login(t, developerTwoEmail)
+			}
+			if tc.unbound {
+				f.ops.devices[0].BindingProjectID = ""
+			}
+			r := f.call(t, http.MethodPost, "/api/v1/developer/devices/"+opsFixtureDeviceSN+"/recommission", tc.body, token)
+			if r.Code != tc.want {
+				t.Fatalf("status=%d want=%d", r.Code, tc.want)
+			}
+			if len(f.stub.recorded()) != 0 {
+				t.Fatal("rejected request reached gateway")
+			}
+		})
+	}
+}
+
+func TestPortalLifecyclePreservesGatewayFailureAndAudienceIsolation(t *testing.T) {
+	for _, audience := range []string{"admin", "developer"} {
+		t.Run(audience, func(t *testing.T) {
+			f := newGatewayProxyFixture(t, func(path string) (int, string) {
+				if strings.HasSuffix(path, "/token") {
+					return 200, `{"device_token":"device-token-from-gateway"}`
+				}
+				return 409, `{"error_code":"device_recommission_unavailable","message":"device did not acknowledge"}`
+			})
+			projectID := f.createProjectWithDevice(t, []string{"devices:read", "devices:operate"})
+			staff := f.call(t, http.MethodPost, "/api/v1/admin/auth/login", `{"email":"staff-portal@example.com","password":"`+developerPassword+`"}`, "")
+			staffToken := decodeJSON[struct {
+				Token string `json:"token"`
+			}](t, staff).Token
+			token, wrong := f.token, staffToken
+			if audience == "admin" {
+				token, wrong = staffToken, f.token
+			}
+			path := "/api/v1/" + audience + "/devices/" + opsFixtureDeviceSN + "/recommission"
+			if r := f.call(t, http.MethodPost, path, `{}`, wrong); r.Code != 401 {
+				t.Fatalf("wrong audience=%d", r.Code)
+			}
+			if len(f.stub.recorded()) != 0 {
+				t.Fatal("wrong audience reached gateway")
+			}
+			r := f.call(t, http.MethodPost, path, `{}`, token)
+			if r.Code != 409 || !strings.Contains(r.Body.String(), "device_recommission_unavailable") {
+				t.Fatalf("failure changed: %d %s", r.Code, r.Body.String())
+			}
+			if f.ops.devices[0].BindingProjectID != projectID {
+				t.Fatal("portal changed binding on failed ACK")
+			}
+		})
+	}
+}

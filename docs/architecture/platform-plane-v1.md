@@ -98,8 +98,8 @@
 
 统一约定：`Authorization: Bearer <token>`；错误体沿用 `{"error_code","message","error"}`；列表统一 `?limit=`（默认 50，上限 200），响应 `{"items":[...]}`；不透明 `?cursor=`（编码 `(created_at,id)`）只用于高基数列表（设备、事件、审计、投递记录，P3 起），账号/项目/产品等有界列表 v1 不提供 cursor；写操作落审计（P3 接入）；`Idempotency-Key` 可选支持于凭证创建/轮换与 OTA deployment 创建。
 
-- **`/api/v1/admin/*`**（audience=admin）：`auth/{login,set-password,logout,me,password}`；`accounts*`（含 `password-reset`）；`manufacturers*`；`products*`；`projects*`（只读 + 状态）；`credentials`（只读 + disable）；`devices`（只读）、`devices/{device_sn}/force-unbind`；`bindings`、`device-tokens`、`activations`、`certificates`；`ota/firmware-versions`、`ota/deployments`；`factory-test-reports`、`audit-logs`、`hook-audit`。
-- **`/api/v1/developer/*`**（audience=developer）：`auth/*`；`projects*` 与 `projects/{id}/products`；`products*`；`dp-profiles`（active 只读）；`projects/{id}/credentials` 与 `credentials/{id}/{rotate,disable}`；`projects/{id}/devices`、`devices/{device_sn}`、`.../status`、`.../commands`；`projects/{id}/webhooks` 与投递记录；`ota/firmware-versions`（含 `complete`）、`devices/{device_sn}/ota-deployments`；`manufacturers`（只读目录）。
+- **`/api/v1/admin/*`**（audience=admin）：`auth/{login,set-password,logout,me,password}`；`accounts*`（含 `password-reset`）；`manufacturers*`；`products*`；`projects*`（只读 + 状态）；`credentials`（只读 + disable）；`devices`（只读投影）、`devices/{device_sn}/{unbind,recommission}`（项目凭证代理）；`bindings`、`device-tokens`、`activations`、`certificates`；`ota/firmware-versions`、`ota/deployments`；`factory-test-reports`、`audit-logs`、`hook-audit`。
+- **`/api/v1/developer/*`**（audience=developer）：`auth/*`；`projects*` 与 `projects/{id}/products`；`products*`；`dp-profiles`（active 只读）；`projects/{id}/credentials` 与 `credentials/{id}/{rotate,disable}`；`projects/{id}/devices`、`devices/{device_sn}`、`.../status`、`.../commands`、`.../{unbind,recommission}`；`projects/{id}/webhooks` 与投递记录；`ota/firmware-versions`（含 `complete`）、`devices/{device_sn}/ota-deployments`；`manufacturers`（只读目录）。
 - **`/api/v1/manufacturer/*`**（audience=manufacturer）：`auth/{login,set-password,logout,me,password}`；`projects`（scope）；`production-runs*`（含 `close`）；`stations*`；`production-runs/{id}/station-reports`；`test-reports`；`devices`（scope，只读）；`workers*`（仅 role=admin）。
 
 **产品创建规则**：`pid` 必须匹配 `^[a-z0-9][a-z0-9-]{1,62}$` 且唯一；`dp_profile_code` 必须存在且 active；开发者只能改自己 `owner_account_id` 的产品，staff 可改任意并把 owner 置空（公共目录产品）。DP 定义仍由 reviewed contract seed 发布，**门户不提供 DP CRUD**。
@@ -134,3 +134,7 @@ IDevID、RMA、OTA campaign/批量发布/定时/自动重试、设备证书轮�
 - AWS staging 公开 ALB 现有 listener/证书是否允许新增平台路径（部署前用 `aws-deploy` 核对）。
 - 平台的 KEK 轮换流程（v1 只记录 `kek_id`）。
 - 三个门户前端的仓库形态与发布形态在根仓分支日志中记录，不在本设计内展开。
+
+### 门户设备解绑边界
+
+admin/staff 和所属 developer 均可操作项目绑定设备；平台先校验项目归属和 `devices:operate` 凭证，再用 `devices:read` 获取 token，沿既有 HMAC gateway 设备域执行。无项目绑定、跨项目、缺权限均 fail closed，不直接修改绑定。两种入口只接受空对象：`unbind` 保留设备本地配置、立即撤销云端绑定与运行凭据；`recommission` 固定 runtime，设备成功 ACK 后才释放绑定，保留用户数据。客户端不能请求 all 重置。详细请求/响应与 UI 确认要求见门户 `docs/api-contract-v1.md`。本地代理/组件测试不构成真机 ACK 验收。
