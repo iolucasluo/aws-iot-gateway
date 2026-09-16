@@ -2,7 +2,7 @@
 // 只服务于平台面本地端到端验证（test/tool/platform_plane_e2e.sh）：
 //
 //   - 复用真实的 internalauth 验签与 DB 凭证来源（project.Service 作为 CredentialStore）；
-//   - 复用真实的项目 scope（device-products 收窄）与 OTA 只读目录；
+//   - 复用真实的项目 scope（device-products 收窄）与 OTA 发布/目录（上传存储为本机测试替身）；
 //   - 不连接 AWS 与国内 provider，因此不需要任何云凭据。
 //
 // 它不是可部署组件：Dockerfile 不构建它，默认只监听回环地址。
@@ -12,6 +12,7 @@
 //	serve     默认；起 HTTP 面
 //	prepare   建隔离 schema（SMOKE_SCHEMA）+ 应用迁移后退出
 //	seed-ota  向隔离 schema 写一版 available 固件（SMOKE_OTA_PID / SMOKE_OTA_PROJECT）
+//	verify-ota 比较指定版本落库的签名材料（SMOKE_OTA_ID / SMOKE_OTA_STATEMENT / SMOKE_OTA_SIGNATURE）
 //	drop      删除 SMOKE_SCHEMA（CASCADE）
 package main
 
@@ -40,13 +41,14 @@ import (
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/credentialcipher"
 	gatewaypostgres "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/postgres"
 	redisstore "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/redis"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/smokeartifacts"
 	gatewayruntime "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/runtime"
 )
 
 var schemaPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,40}$`)
 
 func main() {
-	mode := flag.String("mode", "serve", "serve | prepare | seed-ota | drop")
+	mode := flag.String("mode", "serve", "serve | prepare | seed-ota | verify-ota | drop")
 	flag.Parse()
 	if err := run(context.Background(), os.Getenv, *mode); err != nil {
 		log.Fatalf("platform plane smoke gateway: %v", err)
@@ -87,6 +89,16 @@ func run(ctx context.Context, getenv func(string) string, mode string) error {
 		return nil
 	case "prepare":
 		return gatewaypostgres.ApplyMigrations(ctx, pool)
+	case "verify-ota":
+		var matches bool
+		err := pool.QueryRow(ctx, `SELECT release_statement = $2 AND signature = $3 FROM ota_firmware_versions WHERE id = $1`, getenv("SMOKE_OTA_ID"), getenv("SMOKE_OTA_STATEMENT"), getenv("SMOKE_OTA_SIGNATURE")).Scan(&matches)
+		if err != nil {
+			return fmt.Errorf("verify stored OTA metadata: %w", err)
+		}
+		if !matches {
+			return fmt.Errorf("stored OTA signing metadata changed")
+		}
+		return nil
 	case "seed-ota":
 		return seedOTAFirmwareVersion(ctx, pool, getenv)
 	case "serve":
@@ -137,8 +149,10 @@ func run(ctx context.Context, getenv func(string) string, mode string) error {
 	if err != nil {
 		return err
 	}
-	// artifacts/commands 为空：本入口只提供只读目录，写路径由真实 gateway 负责。
-	otaService := ota.NewService(otaRepository, nil, nil, environment, nil, nil, time.Now)
+	// 临时回环上传替身；真实 OTA 状态机/校验继续复用，设备命令仍不支持。
+	artifacts := smokeartifacts.New()
+	defer artifacts.Close()
+	otaService := ota.NewService(otaRepository, artifacts, nil, environment, nil, nil, time.Now)
 
 	handler := httpapi.NewInternalAPI(activation.NewService(), verifier, httpapi.Dependencies{
 		OTA: otaService, ProjectScope: projectService,
