@@ -472,3 +472,32 @@ func TestGetPTZStatusRejectsMalformedDeviceACK(t *testing.T) {
 		})
 	}
 }
+
+func TestStreamICECredentialsOnlyReachMQTT(t *testing.T) {
+	publisher := &publisherStub{}
+	repository := &commandRepositoryStub{}
+	service := NewService(publisher, ackWaiterStub{}, repository,
+		"aws-iot-gateway-staging", func() (string, error) { return "session-ice", nil })
+	_, err := service.SendCommands(context.Background(), "demo", "device", "fdr-1", []CommandInput{{
+		Code:         "stream",
+		Value:        json.RawMessage(`{"type":"webrtc","start":1,"ice_servers":[{"urls":"turn:host:3478","username":"user-test","credential":"password-test"}],"realtime":{"device_config":{"wss_url":"ws://host/path?ticket=device-test"}}}`),
+		RedactFields: []string{"ice_servers", "realtime"},
+	}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"password-test", "device-test"} {
+		if !bytes.Contains(publisher.payload, []byte(secret)) {
+			t.Fatal("MQTT configuration missing")
+		}
+	}
+	persisted, err := json.Marshal(repository.commands[0].Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"ice_servers", "password-test", "realtime", "device-test"} {
+		if bytes.Contains(persisted, []byte(field)) {
+			t.Fatal("ephemeral ICE/signaling data persisted")
+		}
+	}
+}

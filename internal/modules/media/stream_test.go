@@ -114,7 +114,7 @@ func TestCreateRealtimeStreamUsesProviderSessionAndRedactsViewerTicketFromDevice
 		SessionID: "session-1", ProviderInstance: "realtime.cn_staging", Protocol: "explorex-signal-v1",
 		ClientConfig: map[string]any{
 			"wss_url":       "wss://rtc.example/viewer?ticket=viewer-secret",
-			"ice_servers":   []any{map[string]any{"urls": []any{"turn:rtc.example:3478"}}},
+			"ice_servers":   []any{map[string]any{"urls": []any{"stun:rtc.example:3478", "turn:rtc.example:3478?transport=udp", "turn:rtc.example:3478?transport=tcp"}, "username": "turn-user", "credential": "turn-test-only"}},
 			"device_config": map[string]any{"wss_url": "wss://rtc.example/device?ticket=device-secret"},
 		},
 		Capabilities: map[string]any{"protocols": []any{"explorex-signal-v1"}},
@@ -152,6 +152,21 @@ func TestCreateRealtimeStreamUsesProviderSessionAndRedactsViewerTicketFromDevice
 	deviceConfig, ok := realtimeCommand["device_config"].(map[string]any)
 	if !ok || deviceConfig["wss_url"] != "wss://rtc.example/device?ticket=device-secret" {
 		t.Fatalf("device config = %#v", realtimeCommand)
+	}
+	ice, ok := command["ice_servers"].([]any)
+	if !ok || len(ice) != 1 {
+		t.Fatalf("device command missing ICE servers")
+	}
+	entry, ok := ice[0].(map[string]any)
+	if !ok || entry["username"] != "turn-user" || entry["credential"] != "turn-test-only" {
+		t.Fatal("device TURN credentials were not forwarded")
+	}
+	if len(deviceConfig) != 1 {
+		t.Fatal("legacy strict device_config shape changed")
+	}
+	redacted := strings.Join(commander.input.RedactFields, ",")
+	if !strings.Contains(redacted, "ice_servers") || !strings.Contains(redacted, "realtime") {
+		t.Fatal("ephemeral realtime credentials must not be persisted")
 	}
 	if err := service.Delete(context.Background(), "demo-local", "device-1", "binding-1", "fdr-1", "session-1"); err != nil {
 		t.Fatalf("Delete() error = %v", err)
@@ -307,5 +322,68 @@ func TestCreateStreamReturnsStrictPlaybackCapabilityGrant(t *testing.T) {
 	if result.PlaybackControl == nil || result.PlaybackControl.Contract != "sd-playback.v1" ||
 		len(result.PlaybackControl.Ops) != 8 || result.PlaybackControl.MaxConcurrentSessions != 1 {
 		t.Fatalf("playback capability = %#v", result.PlaybackControl)
+	}
+}
+
+func TestValidateDeviceICEServers(t *testing.T) {
+	tests := []struct {
+		name    string
+		servers []ICEServer
+		valid   bool
+	}{
+		{"legacy-empty", nil, true},
+		{"stun", []ICEServer{{URLs: "stun:host:3478"}}, true},
+		{"turn-udp-tcp", []ICEServer{{URLs: []any{"turn:host:3478?transport=udp", "turn:host:3478?transport=tcp"}, Username: "u", Credential: "p"}}, true},
+		{"secure-turn", []ICEServer{{URLs: "turns:host:5349", Username: "u", Credential: strings.Repeat("a", 256)}}, true},
+		{"four-urls", []ICEServer{{URLs: []string{"stun:a", "stun:b", "stun:c", "stun:d"}}}, true},
+		{"five-urls", []ICEServer{{URLs: []string{"stun:a", "stun:b", "stun:c", "stun:d", "stun:e"}}}, false},
+		{"empty-urls", []ICEServer{{URLs: []any{}}}, false},
+		{"nil-urls", []ICEServer{{}}, false},
+		{"wrong-type", []ICEServer{{URLs: []any{42}}}, false},
+		{"wrong-scheme", []ICEServer{{URLs: "https://host"}}, false},
+		{"empty-address", []ICEServer{{URLs: "stun:"}}, false},
+		{"space-in-uri", []ICEServer{{URLs: "stun: host"}}, false},
+		{"long-uri", []ICEServer{{URLs: "stun:" + strings.Repeat("a", 252)}}, false},
+		{"turn-no-credential", []ICEServer{{URLs: "turn:host", Username: "u"}}, false},
+		{"turn-no-username", []ICEServer{{URLs: "turn:host", Credential: "p"}}, false},
+		{"long-credential", []ICEServer{{URLs: "turn:host", Username: "u", Credential: strings.Repeat("a", 257)}}, false},
+		{"escaped-credential", []ICEServer{{URLs: "turn:host", Username: "u", Credential: "p\\q"}}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDeviceICEServers(tt.servers)
+			if (err == nil) != tt.valid {
+				t.Fatalf("valid=%v error=%v", tt.valid, err)
+			}
+		})
+	}
+}
+
+func TestCreateRealtimeStreamRejectsInvalidICEBeforeCommand(t *testing.T) {
+	realtime := &realtimeStub{descriptor: provider.RealtimeSessionDescriptor{
+		SessionID: "s", ProviderInstance: "realtime.cn_staging", Protocol: "explorex-signal-v1",
+		ClientConfig: map[string]any{
+			"wss_url": "ws://host/viewer", "device_config": map[string]any{"wss_url": "ws://host/device"},
+			"ice_servers": []any{map[string]any{"urls": "turn:host:3478"}},
+		},
+	}}
+	commander := &commanderStub{}
+	service := NewRealtimeStreamService(realtime, "realtime.cn_staging", commander, &streamRepositoryStub{}, func() (string, error) { return "r", nil }, nil)
+	_, err := service.Create(context.Background(), "demo", "device", "binding", "fdr-1", StreamCapabilities{VideoReceive: true, DataChannels: []string{}})
+	if !errors.Is(err, ErrStreamRejected) || commander.dpCalls != 0 || len(realtime.closed) != 1 {
+		t.Fatalf("invalid ICE must reject before MQTT and close session: err=%v calls=%d closed=%d", err, commander.dpCalls, len(realtime.closed))
+	}
+}
+
+func TestParseICEServersKeepsEmptyWireArray(t *testing.T) {
+	for _, input := range []any{nil, []ICEServer(nil), []any{}} {
+		servers, err := parseICEServers(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(servers)
+		if err != nil || string(encoded) != "[]" {
+			t.Fatalf("empty ICE must be array: %s %v", encoded, err)
+		}
 	}
 }

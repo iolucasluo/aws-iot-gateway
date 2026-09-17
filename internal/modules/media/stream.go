@@ -208,6 +208,9 @@ func (service *StreamService) create(
 		// remains only the idempotency key used during PrepareSession.
 		viewerID = realtimeSessionID
 		iceServers, err = parseICEServers(realtimeSession.ClientConfig["ice_servers"])
+		if err == nil {
+			err = validateDeviceICEServers(iceServers)
+		}
 		if err != nil {
 			_ = service.realtime.CloseSession(ctx, provider.RealtimeSessionRef{ID: realtimeSessionID, ProviderInstance: providerName})
 			return StreamResult{}, ErrStreamRejected
@@ -224,6 +227,7 @@ func (service *StreamService) create(
 		}
 		providerName, signalingURL, iceServers, expiresAt, channelRef = playback.Provider, playback.WSSURL, playback.ICEServers, playback.ExpiresAt, channel.ExternalRef
 	}
+	var redactFields []string
 	valuePayload := map[string]any{
 		"type": "webrtc", "start": 1, "viewer_client_id": viewerID,
 		"requested_capabilities": requested,
@@ -234,6 +238,10 @@ func (service *StreamService) create(
 			_ = service.realtime.CloseSession(ctx, provider.RealtimeSessionRef{ID: realtimeSessionID, ProviderInstance: providerName})
 			return StreamResult{}, ErrStreamRejected
 		}
+		// Keep the legacy strict device_config unchanged. Old firmware ignores
+		// this optional top-level field; new peers use the same ICE service as viewers.
+		valuePayload["ice_servers"] = iceServers
+		redactFields = []string{"ice_servers", "realtime"}
 		valuePayload["realtime"] = map[string]any{
 			"session_id": realtimeSessionID, "provider_instance": providerName,
 			"protocol": protocol, "device_config": deviceConfig,
@@ -241,7 +249,7 @@ func (service *StreamService) create(
 	}
 	value, _ := json.Marshal(valuePayload)
 	commandResult, err := service.commander.SendDPCommands(ctx, internalAppID, deviceID, deviceSN,
-		[]device.CommandInput{{Code: "stream", Value: value}}, true)
+		[]device.CommandInput{{Code: "stream", Value: value, RedactFields: redactFields}}, true)
 	if err != nil {
 		if service.realtime != nil {
 			_ = service.realtime.CloseSession(ctx, provider.RealtimeSessionRef{ID: realtimeSessionID, ProviderInstance: providerName})
@@ -392,7 +400,72 @@ func parseICEServers(value any) ([]ICEServer, error) {
 	if err := json.Unmarshal(encoded, &servers); err != nil {
 		return nil, err
 	}
+	if servers == nil {
+		servers = []ICEServer{}
+	}
 	return servers, nil
+}
+
+// Match the constrained device parser. Reject unsupported provider configuration
+// before MQTT publish, without including credentials in errors or persistence.
+func validateDeviceICEServers(servers []ICEServer) error {
+	total := 0
+	validText := func(value string) bool {
+		if len(value) > 256 {
+			return false
+		}
+		for _, ch := range value {
+			if ch < 32 || ch > 126 || ch == '\\' || ch == '"' {
+				return false
+			}
+		}
+		return true
+	}
+	for _, server := range servers {
+		if !validText(server.Username) || !validText(server.Credential) {
+			return ErrStreamRejected
+		}
+		var urls []string
+		switch value := server.URLs.(type) {
+		case string:
+			urls = []string{value}
+		case []string:
+			urls = value
+		case []any:
+			for _, entry := range value {
+				url, ok := entry.(string)
+				if !ok {
+					return ErrStreamRejected
+				}
+				urls = append(urls, url)
+			}
+		default:
+			return ErrStreamRejected
+		}
+		if len(urls) == 0 {
+			return ErrStreamRejected
+		}
+		for _, url := range urls {
+			scheme, address, ok := strings.Cut(url, ":")
+			if !ok || address == "" || !validText(url) || strings.Contains(url, " ") {
+				return ErrStreamRejected
+			}
+			switch scheme {
+			case "stun", "stuns":
+			case "turn", "turns":
+				if server.Username == "" || server.Credential == "" {
+					return ErrStreamRejected
+				}
+			default:
+				return ErrStreamRejected
+			}
+			total++
+			if total > 4 {
+				return ErrStreamRejected
+			}
+		}
+	}
+	return nil
 }
 
 func validateRequestedCapabilities(capabilities StreamCapabilities) error {

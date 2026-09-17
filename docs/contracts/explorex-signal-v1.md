@@ -130,3 +130,23 @@ Signaling → viewer：
 - 日志只允许记录 provider instance、request id、session 状态和错误类别，不记录 SDP、完整 URL、token 或 TURN credential。
 - DELL LAN 已验收 strict HTTP/WebSocket contract、App 协议分流、真实 signaling service、Anyka 视频 HIL 和 peer 断开清理。
 - coturn 仅完成进程/端口形状；真实 TURN 公网可达性、生产 TLS、性能与长稳留到国内云验收。
+
+## 5. 设备 ICE 配置（2026-09-17）
+
+国内 Gateway 将 provider 已签发给 Viewer 的同一 `ice_servers` 列表，作为设备
+`stream(start=1)` 命令的**顶层可选字段**下发（与 `realtime` 同级）。不向严格的
+`realtime.device_config` 增加字段，保留其只有 `wss_url` 的形状，避免旧固件拒绝启动。
+
+- 新固件缺字段或收到空数组时保持旧 LAN/direct 行为；旧固件忽略该顶层字段。
+- 每个 server 的 `urls` 接受一个字符串或非空字符串数组；合计最多 4 个 URL。
+- 支持 `stun:`、`stuns:`、`turn:`、`turns:`；URI 非空且不能含空格。
+- URI、username、credential 各不超过 256 bytes；本阶段仅接受无需 JSON 转义的
+  可打印 ASCII 值（拒绝双引号、反斜杠与控制字符）。TURN 必须有非空 username/credential。
+- Gateway 在发送前校验；设备拒绝重复字段、未知 server 字段、错误类型、越界和无凭据 TURN，
+  不静默截断、不把显式非法值降级为“没有配置”。
+- `ice_servers` 和含 ticket 的 `realtime` 通过既有 `RedactFields` 从命令/ACK 持久化移除，
+  仅在 MQTT 运输及运行内存使用。设备日志只记录 server 数量，不记录 URI 或凭据。
+- App 响应和 AWS KVS 分支保持不变；无需数据库迁移，也不更改服务端 TURN 账号/端口。
+
+设备解析 → SDK ICE 配置映射、mixed-version 消息形状和持久化脱敏有 host/Go 回归；
+真实移动网络及 relay 媒体通路必须另行 HIL 验证，不能把容器健康作为通过证据。
