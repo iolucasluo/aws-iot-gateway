@@ -14,15 +14,31 @@ import (
 )
 
 func TestOTAUploadRetainsSignedHeadersAndForbidsOverwrite(t *testing.T) {
-	fake := &fakeAPI{presignResult: &oss.PresignResult{URL: "https://signed.example/ota", SignedHeaders: map[string]string{"x-oss-forbid-overwrite": "true", "x-oss-test-header": "signed"}}}
+	// 真实 SDK 的 SignedHeaders 使用其规范大小写；这里必须与线上观测一致，否则发现不了重复键。
+	fake := &fakeAPI{presignResult: &oss.PresignResult{URL: "https://signed.example/ota", SignedHeaders: map[string]string{"X-Oss-Forbid-Overwrite": "true", "x-oss-test-header": "signed"}}}
 	client := newClient(fake, fake, "test-bucket")
 	target, err := client.PrepareUpload(context.Background(), "ota/release.tar.gz", 7, strings.Repeat("a", 64), 15*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
 	req := fake.presignInput.(*oss.PutObjectRequest)
-	if oss.ToString(req.ForbidOverwrite) != "true" || target.Headers["x-oss-forbid-overwrite"] != "true" || target.Headers["x-oss-test-header"] != "signed" {
-		t.Fatal("signed upload headers were lost")
+	if oss.ToString(req.ForbidOverwrite) != "true" {
+		t.Fatal("presign did not forbid overwrite")
+	}
+	// 客户端会把这些头原样交给 fetch；大小写不同的同名键会被合并成 "true, true"，
+	// 使 OSS V4 签名不匹配（403 SignatureDoesNotMatch）。
+	seen := map[string]string{}
+	for name, value := range target.Headers {
+		lowered := strings.ToLower(name)
+		if previous, ok := seen[lowered]; ok {
+			t.Fatalf("duplicate case-insensitive header %q: %q vs %q", lowered, previous, value)
+		}
+		seen[lowered] = value
+	}
+	for header, want := range map[string]string{"content-type": "application/gzip", "content-length": "7", "x-oss-forbid-overwrite": "true", "x-oss-test-header": "signed"} {
+		if seen[header] != want {
+			t.Fatalf("upload header %q = %q, want %q", header, seen[header], want)
+		}
 	}
 	if target.Method != "PUT" || target.Headers["Content-Length"] != "7" {
 		t.Fatal("upload metadata mismatch")

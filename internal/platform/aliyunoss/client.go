@@ -124,11 +124,25 @@ func (client *Client) PrepareUpload(ctx context.Context, key string, size int64,
 	if result == nil || result.URL == "" {
 		return ota.UploadTarget{}, fmt.Errorf("presign OTA upload: empty result")
 	}
-	headers := map[string]string{"Content-Type": "application/gzip", "Content-Length": fmt.Sprintf("%d", size), "x-oss-forbid-overwrite": "true"}
+	headers := make(map[string]string, len(result.SignedHeaders)+2)
 	for name, value := range result.SignedHeaders {
 		headers[name] = value
 	}
+	setHeaderIfAbsent(headers, "Content-Type", "application/gzip")
+	setHeaderIfAbsent(headers, "Content-Length", fmt.Sprintf("%d", size))
 	return ota.UploadTarget{URL: result.URL, Method: "PUT", Headers: headers, ExpiresAt: time.Now().UTC().Add(ttl)}, nil
+}
+
+// setHeaderIfAbsent 按大小写不敏感补齐默认上传头。SignedHeaders 沿用 OSS SDK 自己的规范大小写
+// （例如 X-Oss-Forbid-Overwrite），若再写入另一套小写键，客户端把 map 原样交给 fetch 时会被合并成
+// "true, true"，与预签名计算结果不一致，上传返回 403 SignatureDoesNotMatch。
+func setHeaderIfAbsent(headers map[string]string, name, value string) {
+	for existing := range headers {
+		if strings.EqualFold(existing, name) {
+			return
+		}
+	}
+	headers[name] = value
 }
 
 func (client *Client) Verify(ctx context.Context, key string, size int64, checksum string) error {
