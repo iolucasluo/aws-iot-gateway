@@ -141,7 +141,6 @@ func TestActivationPersistsProfileAndRechecksDisabledSelection(t *testing.T) {
 		ActivationID:     created.ID,
 		DeviceInternalID: "30000000-0000-0000-0000-000000000001",
 		DeviceSN:         "profile-device",
-		SNSource:         activation.SNSourceDevice,
 		CSRPEM:           "fixture-csr",
 	}); !errors.Is(err, activation.ErrDPProfileUnavailable) {
 		t.Fatalf("prepare disabled profile: %v", err)

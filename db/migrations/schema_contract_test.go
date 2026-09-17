@@ -85,8 +85,6 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 		"updated_at timestamptz NOT NULL DEFAULT now()",
 		"COMMENT ON TABLE device_schedules",
 		"chip_uid bytea",
-		"sn_source varchar(16) NOT NULL DEFAULT 'generated'",
-		"CONSTRAINT device_registry_sn_source_check",
 		"CREATE UNIQUE INDEX uniq_device_registry_chip_uid",
 		"ON device_registry (chip_uid) WHERE chip_uid IS NOT NULL",
 		"COMMENT ON TABLE device_registry",
@@ -108,6 +106,7 @@ func TestInitialSchemaFollowsExplorexDatabaseConventionsWithoutPlatformDomain(t 
 		"rma",
 		"ota_campaigns",
 		"ALTER TABLE ",
+		"sn_source",
 	} {
 		if strings.Contains(strings.ToLower(initial), strings.ToLower(forbidden)) {
 			t.Errorf("squashed initial schema contains forbidden legacy/platform fragment %q", forbidden)

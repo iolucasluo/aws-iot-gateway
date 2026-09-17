@@ -118,6 +118,20 @@ signaling 重启会断开观看，需重新进入视频；不能承诺零中断�
 不要启动国内不使用的 AWS event-worker、匿名 MQTT 或 MinIO。显式 `--no-deps` 不会执行 seed；
 需要 schema/seed 变化则退出 image-only 流程，另行审查和授权。
 
+平台面与三门户随同一 release 更新，但仍是**逐服务**执行，不整体 `up`：
+
+- 需要加载四个镜像：`CN_STAGING_GATEWAY_IMAGE`（同时提供 `explorex-platform-api`）、
+  `CN_STAGING_ADMIN_CONSOLE_IMAGE`、`CN_STAGING_DEVELOPER_PORTAL_IMAGE`、
+  `CN_STAGING_MANUFACTURER_PORTAL_IMAGE`；记录每个 image ID 与 tar SHA-256。
+- 首次启用平台面时先放置 `config/platform.env`（0600，与 `gateway.env` 共用同一个
+  `PLATFORM_CREDENTIAL_KEK`）。KEK 一旦用于写入凭证就不可更换，否则既有项目凭证无法解密。
+- 顺序：`gateway-api`（若同时更新）→ `explorex-platform-api` → 三个门户。
+  平台面依赖 gateway 的 openapi 面。
+- 平台面首次启动会应用 003–007 纯新增迁移。若操作范围不允许 schema 变化，必须先退出
+  image-only 流程单独审查，不能靠 `--no-deps` 回避。
+- 验收：`explorex-platform-api` 容器健康 + 门户容器健康 + 经门户 `/healthz` 200；
+  业务验收按 `explorex-portals/docs/api-contract-v1.md` 的会话/项目/凭证链路。
+
 DELL single-node 使用 project `explorex-cn-single-node` 和前两份 Compose，保持独立端口；
 本地 build 与公网验证不是同一验收，不能套用 cloud 的 project 或路径。
 

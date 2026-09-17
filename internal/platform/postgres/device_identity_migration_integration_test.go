@@ -8,7 +8,19 @@ import (
 // baselineWithoutDeviceIdentity 是 664fdfa 之前的 device_registry / device_activations 基线。
 // 已部署库登记过 001_initial.sql，runner 按文件名跳过，因此只能靠 002 顺序增量补齐身份列。
 // 这里内嵌最小基线，避免测试依赖 Git 历史中的旧文件内容。
+//
+// set_updated_at() 也必须出现在基线里：它自最初版 001 起就由每个业务表的 trg_*_updated_at
+// 依赖，任何真实登记过 001 的库都有它；而 003 起的顺序增量会继续复用它。
 const baselineWithoutDeviceIdentity = `
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $body$
+BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+END;
+$body$;
 CREATE TABLE device_registry (
     id uuid CONSTRAINT device_registry_pkey PRIMARY KEY,
     device_sn varchar(64) NOT NULL CONSTRAINT device_registry_device_sn_key UNIQUE,
@@ -25,13 +37,36 @@ CREATE TABLE device_activations (
     status varchar(24) NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()
 );
+-- products 也属于最初版 001：004 会给它补归属列，因此基线必须包含它。
+CREATE TABLE products (
+    id uuid CONSTRAINT products_pkey PRIMARY KEY,
+    pid varchar(64) NOT NULL CONSTRAINT products_pid_key UNIQUE,
+    name varchar(128) NOT NULL,
+    status varchar(16) NOT NULL DEFAULT 'active'
+);
+-- audit_logs 同样自最初版就存在：005 会补审计主体列。这里的形状刻意保持"旧"，
+-- 即没有 actor_kind/actor_account_id/actor_label，迁移必须能把它补齐。
+CREATE TABLE audit_logs (
+    id uuid CONSTRAINT audit_logs_pkey PRIMARY KEY,
+    internal_app_id varchar(64),
+    operation varchar(96) NOT NULL,
+    resource_type varchar(64),
+    resource_id varchar(128),
+    request_id varchar(128),
+    outcome varchar(16) NOT NULL
+        CONSTRAINT audit_logs_outcome_check
+        CHECK (outcome IN ('accepted', 'succeeded', 'rejected', 'failed')),
+    error_code varchar(64),
+    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
 INSERT INTO device_registry (id, device_sn, thing_name, pid, status)
 VALUES ('00000000-0000-4000-8000-0000000000a1',
         'fdr-319fe199e4be7aa2d71958f4a0f8c941',
         'fdr-319fe199e4be7aa2d71958f4a0f8c941', 'feeder-x1', 'active');
 `
 
-// 已登记 001 的旧库必须能靠 002 增量补齐身份列，且既有行保留、sn_source 取历史正确的默认值。
+// 已登记 001 的旧库必须能靠顺序增量补齐身份列，既有行保留，且冗余的 sn_source 被移除。
 func TestDeviceIdentityMigrationUpgradesRegisteredBaseline(t *testing.T) {
 	ctx := context.Background()
 	pool := newIsolatedMigrationPool(t, ctx)
@@ -63,16 +98,13 @@ func TestDeviceIdentityMigrationUpgradesRegisteredBaseline(t *testing.T) {
 		t.Fatalf("ApplyMigrations() error = %v", err)
 	}
 
-	var sn, snSource string
+	var sn string
 	var chipUID *[]byte
 	if err := pool.QueryRow(ctx, `
-		SELECT device_sn, sn_source, chip_uid FROM device_registry
+		SELECT device_sn, chip_uid FROM device_registry
 		WHERE device_sn = 'fdr-319fe199e4be7aa2d71958f4a0f8c941'
-	`).Scan(&sn, &snSource, &chipUID); err != nil {
+	`).Scan(&sn, &chipUID); err != nil {
 		t.Fatalf("read migrated row: %v", err)
-	}
-	if snSource != "generated" {
-		t.Fatalf("existing row sn_source = %q, want historical default generated", snSource)
 	}
 	if chipUID != nil {
 		t.Fatalf("existing row chip_uid = %v, want NULL until a device reports its UID", *chipUID)
@@ -81,15 +113,21 @@ func TestDeviceIdentityMigrationUpgradesRegisteredBaseline(t *testing.T) {
 		t.Fatalf("existing device_sn changed: %q", sn)
 	}
 
-	// 新列此时可用；唯一索引与 CHECK 也必须真实生效。
+	// 迁移后只保留 chip_uid；sn_source 已移除，唯一索引必须真实生效。
 	if _, err := pool.Exec(ctx,
-		`UPDATE device_registry SET chip_uid=$1, sn_source='device' WHERE device_sn=$2`,
+		`UPDATE device_registry SET chip_uid=$1 WHERE device_sn=$2`,
 		[]byte{0x01, 0x02, 0x03}, sn); err != nil {
-		t.Fatalf("new identity columns are not writable after migration: %v", err)
+		t.Fatalf("chip_uid is not writable after migration: %v", err)
 	}
-	if _, err := pool.Exec(ctx,
-		`UPDATE device_registry SET sn_source='unknown' WHERE device_sn=$1`, sn); err == nil {
-		t.Fatal("sn_source CHECK constraint is missing after migration")
+	var snSourceCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'device_registry' AND column_name = 'sn_source'
+	`).Scan(&snSourceCount); err != nil {
+		t.Fatalf("inspect sn_source after migration: %v", err)
+	}
+	if snSourceCount != 0 {
+		t.Fatal("sn_source must be removed after migration")
 	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO device_registry (id, device_sn, thing_name, pid, status, chip_uid)
@@ -113,7 +151,6 @@ func TestDeviceIdentityMigrationMatchesFreshBaseline(t *testing.T) {
 	}
 	for _, column := range []struct{ table, name, dataType string }{
 		{"device_registry", "chip_uid", "bytea"},
-		{"device_registry", "sn_source", "character varying"},
 		{"device_activations", "requested_device_sn", "character varying"},
 		{"device_activations", "requested_chip_uid", "bytea"},
 	} {
@@ -138,5 +175,16 @@ func TestDeviceIdentityMigrationMatchesFreshBaseline(t *testing.T) {
 	}
 	if indexDef == "" {
 		t.Fatal("uniq_device_registry_chip_uid has an empty definition")
+	}
+	// 设备身份只用 device_sn 表达：fresh schema 不得再出现 sn_source。
+	var snSourceCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'device_registry' AND column_name = 'sn_source'
+	`).Scan(&snSourceCount); err != nil {
+		t.Fatal(err)
+	}
+	if snSourceCount != 0 {
+		t.Fatal("fresh schema still has device_registry.sn_source")
 	}
 }

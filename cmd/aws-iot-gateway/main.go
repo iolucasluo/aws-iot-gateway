@@ -24,10 +24,12 @@ import (
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/events"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/media"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/ota"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/project"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/timebootstrap"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awskms"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awskvs"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/awss3"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/credentialcipher"
 	gatewayffmpeg "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/ffmpeg"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/localsigner"
 	gatewaypostgres "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/postgres"
@@ -73,13 +75,31 @@ func main() {
 			Permissions: app.Permissions,
 		})
 	}
-	verifier, err := internalauth.NewVerifier(credentials, nonceStore, time.Now)
+	// 平台面 DB 凭证来源：只有显式配置 KEK 时才启用；未配置时保持纯静态 INTERNAL_APPS_JSON 行为。
+	var projectService *project.Service
+	credentialStores := make([]internalauth.CredentialStore, 0, 1)
+	if config.CredentialKEK != "" {
+		credentialCipher, err := credentialcipher.NewFromBase64(config.CredentialKEK, config.CredentialKEKID)
+		if err != nil {
+			log.Fatalf("configure credential cipher: %v", err)
+		}
+		projectRepository, err := gatewaypostgres.NewProjectRepository(database)
+		if err != nil {
+			log.Fatalf("configure project repository: %v", err)
+		}
+		projectService, err = project.NewService(projectRepository, credentialCipher, time.Now)
+		if err != nil {
+			log.Fatalf("configure project service: %v", err)
+		}
+		credentialStores = append(credentialStores, projectService)
+	}
+	verifier, err := internalauth.NewVerifier(credentials, nonceStore, time.Now, credentialStores...)
 	if err != nil {
 		log.Fatalf("configure internal app authentication: %v", err)
 	}
 	if err := gatewayruntime.RequireAWSDataPlane(config); err != nil {
 		if config.ProviderMode == "domestic-dev" {
-			if err := runDomesticGateway(ctx, config, database, redis, verifier); err != nil {
+			if err := runDomesticGateway(ctx, config, database, redis, verifier, projectService); err != nil {
 				log.Fatalf("start domestic development gateway: %v", err)
 			}
 			return
@@ -248,18 +268,23 @@ func main() {
 		log.Fatalf("configure local recording reconciliation worker: %v", err)
 	}
 	go runLocalReconciliationWorker(ctx, localReconciliationWorker)
+	dependencies := httpapi.Dependencies{
+		Binding: bindingService, Device: deviceService, Events: events.NewQueryService(eventRepository),
+		Media: streamService, LocalMedia: localMediaService, Assets: assetService, OTA: otaService,
+		TimeBootstrap: timeService, TimeBootstrapLimiter: rateLimiter,
+		DeviceRuntime: httpapi.DeviceRuntimeConfig{
+			AWSRegion: config.AWSRegion, CredentialEndpoint: config.IoTCredentialEndpoint,
+			RoleAlias: config.IoTRoleAlias, TopicPrefix: config.IoTTopicPrefix,
+			ShadowName: config.IoTShadowName, KVSChannelPrefix: config.KVSChannelPrefix,
+		},
+	}
+	// 注意：不能让 typed-nil 的 *project.Service 进入接口字段，否则 != nil 判断会骗过运行时。
+	if projectService != nil {
+		dependencies.ProjectScope = projectService
+	}
 	server := &http.Server{
-		Addr: config.ListenAddress,
-		Handler: httpapi.NewInternalAPI(service, verifier, httpapi.Dependencies{
-			Binding: bindingService, Device: deviceService, Events: events.NewQueryService(eventRepository),
-			Media: streamService, LocalMedia: localMediaService, Assets: assetService, OTA: otaService,
-			TimeBootstrap: timeService, TimeBootstrapLimiter: rateLimiter,
-			DeviceRuntime: httpapi.DeviceRuntimeConfig{
-				AWSRegion: config.AWSRegion, CredentialEndpoint: config.IoTCredentialEndpoint,
-				RoleAlias: config.IoTRoleAlias, TopicPrefix: config.IoTTopicPrefix,
-				ShadowName: config.IoTShadowName, KVSChannelPrefix: config.KVSChannelPrefix,
-			},
-		}),
+		Addr:              config.ListenAddress,
+		Handler:           httpapi.NewInternalAPI(service, verifier, dependencies),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

@@ -16,7 +16,13 @@ func TestMigrationLayoutContainsOnlyCurrentInitialSchema(t *testing.T) {
 	}
 	// 002 是首个真正的顺序增量迁移：001 基线不含运行时身份锚列，而已部署库已登记
 	// 001_initial.sql，runner 按文件名跳过，必须靠新文件补齐，不能原地改 001。
-	want := []string{"001_initial.sql", "002_device_identity.sql"}
+	// 003 起是平台面（账号/项目/凭证/制造质量）：同样只允许顺序 additive 新文件。
+	want := []string{
+		"001_initial.sql", "002_device_identity.sql", "003_platform_accounts.sql",
+		"004_platform_projects.sql", "005_platform_audit_webhooks.sql",
+		"006_project_webhooks_single_active.sql", "007_platform_manufacturing.sql",
+		"008_drop_sn_source.sql",
+	}
 	if got := migrationNames(entries); len(got) != len(want) || fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("migration files = %v, want %v", got, want)
 	}
@@ -29,13 +35,10 @@ func TestDeviceIdentityMigrationIsAdditiveAndIdempotent(t *testing.T) {
 	migration := readMigration(t, "002_device_identity.sql")
 	for _, fragment := range []string{
 		"ALTER TABLE device_registry ADD COLUMN IF NOT EXISTS chip_uid bytea",
-		"ADD COLUMN IF NOT EXISTS sn_source varchar(16) NOT NULL DEFAULT 'generated'",
 		"CREATE UNIQUE INDEX IF NOT EXISTS uniq_device_registry_chip_uid",
 		"ALTER TABLE device_activations ADD COLUMN IF NOT EXISTS requested_device_sn varchar(64)",
 		"ALTER TABLE device_activations ADD COLUMN IF NOT EXISTS requested_chip_uid bytea",
-		"device_registry_sn_source_check",
 		"device_activations_requested_device_sn_check",
-		"CHECK (sn_source IN ('caller', 'device', 'generated'))",
 	} {
 		requireMigrationContains(t, migration, fragment)
 	}
@@ -43,6 +46,22 @@ func TestDeviceIdentityMigrationIsAdditiveAndIdempotent(t *testing.T) {
 		if strings.Contains(migration, forbidden) {
 			t.Errorf("device identity migration must stay additive, found %q", forbidden)
 		}
+	}
+}
+
+// 008 移除 device_sn 的并行来源语义：设备身份只用 device_sn 表达，sn_source 是冗余派生态。
+func TestDropSNSourceMigrationRemovesColumnIdempotently(t *testing.T) {
+	t.Parallel()
+
+	migration := readMigration(t, "008_drop_sn_source.sql")
+	for _, fragment := range []string{
+		"DROP CONSTRAINT IF EXISTS device_registry_sn_source_check",
+		"DROP COLUMN IF EXISTS sn_source",
+	} {
+		requireMigrationContains(t, migration, fragment)
+	}
+	if strings.Contains(migration, "ADD COLUMN") {
+		t.Error("008 must only remove the redundant sn_source column, not add columns")
 	}
 }
 

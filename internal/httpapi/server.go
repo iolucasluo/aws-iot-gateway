@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/events"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/media"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/ota"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/project"
 )
 
 type server struct {
@@ -32,6 +34,7 @@ type server struct {
 	timeBootstrap TimeBootstrapService
 	bootstrapRate TimeBootstrapLimiter
 	deviceRuntime DeviceRuntimeConfig
+	projectScope  ProjectProductScope
 }
 
 type DeviceRuntimeConfig struct {
@@ -47,6 +50,12 @@ type DeviceRuntimeConfig struct {
 
 var sha256HexPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
+// ProjectProductScope 提供 DB 凭证主体的产品可见集合。
+// 静态 INTERNAL_APPS_JSON 主体没有项目作用域，因此不受它约束。
+type ProjectProductScope interface {
+	ScopeForPrincipal(ctx context.Context, projectID string) (project.Scope, error)
+}
+
 type Dependencies struct {
 	Binding              *binding.Service
 	Device               *devicemodule.Service
@@ -58,6 +67,7 @@ type Dependencies struct {
 	TimeBootstrap        TimeBootstrapService
 	TimeBootstrapLimiter TimeBootstrapLimiter
 	DeviceRuntime        DeviceRuntimeConfig
+	ProjectScope         ProjectProductScope
 }
 
 func NewInternalAPI(service *activation.Service, verifier *internalauth.Verifier, dependencies ...Dependencies) http.Handler {
@@ -72,6 +82,7 @@ func NewInternalAPI(service *activation.Service, verifier *internalauth.Verifier
 		ota:           dependency.OTA,
 		timeBootstrap: dependency.TimeBootstrap, bootstrapRate: dependency.TimeBootstrapLimiter,
 		deviceRuntime: dependency.DeviceRuntime,
+		projectScope:  dependency.ProjectScope,
 	}
 }
 
@@ -844,6 +855,35 @@ func (s server) listActiveProducts(writer http.ResponseWriter, request *http.Req
 	if err != nil {
 		writeActivationError(writer, err)
 		return
+	}
+	// DB 凭证主体（平台面项目）只能看到自己项目白名单内的产品；
+	// 静态 INTERNAL_APPS_JSON 主体保持全局目录，避免影响既有消费者。
+	principal, ok := InternalAppPrincipal(request.Context())
+	if !ok {
+		writeError(writer, http.StatusInternalServerError, "principal_missing", "internal app principal is unavailable")
+		return
+	}
+	if principal.ProjectID != "" {
+		if s.projectScope == nil {
+			writeError(writer, http.StatusServiceUnavailable, "project_scope_unavailable", "project scope is unavailable")
+			return
+		}
+		scope, err := s.projectScope.ScopeForPrincipal(request.Context(), principal.ProjectID)
+		if err != nil {
+			writeError(writer, http.StatusServiceUnavailable, "project_scope_unavailable", "project scope is unavailable")
+			return
+		}
+		allowed := make(map[string]struct{}, len(scope.AllowedPIDs))
+		for _, pid := range scope.AllowedPIDs {
+			allowed[pid] = struct{}{}
+		}
+		filtered := make([]activation.Product, 0, len(products))
+		for _, product := range products {
+			if _, ok := allowed[product.PID]; ok {
+				filtered = append(filtered, product)
+			}
+		}
+		products = filtered
 	}
 	writeJSON(writer, http.StatusOK, struct {
 		Products []activation.Product `json:"products"`

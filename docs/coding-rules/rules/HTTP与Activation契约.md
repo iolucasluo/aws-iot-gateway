@@ -5,8 +5,11 @@
 - `GET /healthz` 无认证，只证明进程存活。
 - `/api/v1/openapi/*` 全部使用 `ExploreX-OpenAPI-HMAC-v1`；`openapi` 仅为 LivPet 路径兼容。
 - 设备安装端点位于 `/api/v1/device-activations/*`，使用短时一次性 activation code 和 operational-key installation proof。
-- Bearer `/v1/*`、开发者 JWT、登录、Project/Product/credential CRUD 均不存在。`GET /api/v1/openapi/device-products`
-  是 HMAC 保护的只读激活目录，不是产品管理 API。
+- 本文件只覆盖设备侧与 `/api/v1/openapi/*` 的认证域。门户会话（`/api/v1/{admin,developer,manufacturer}/*`）
+  由独立的 platform 进程提供，使用 Bearer 不透明会话 token，不属于本认证域；见
+  [Platform Plane v1](../../architecture/platform-plane-v1.md)。
+- Bearer `/v1/*` 与开发者 JWT 不存在。`GET /api/v1/openapi/device-products` 是 HMAC 保护的激活目录，不是产品管理 API；
+  对 DB 凭证主体它只返回该项目 `project_products` 内的 active 产品。
 
 HMAC 必须绑定 api key、20 位 timestamp、nonce、method、canonical path/query 和精确 body hash。Redis 原子消费 nonce；缺失 replay storage 时返回 503。签名 body 上限 1 MiB，JSON handler 可以设置更窄上限。
 

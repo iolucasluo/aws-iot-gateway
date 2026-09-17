@@ -21,7 +21,6 @@ type memoryDeviceRow struct {
 	DeviceSN string
 	PID      string
 	ChipUID  string // hex；空表示未知
-	SNSource string
 }
 
 func NewMemoryRepository() *MemoryRepository {
@@ -161,8 +160,7 @@ func (repository *MemoryRepository) reserveDeviceRow(reservation Reservation, pi
 			if row.PID != pid {
 				return nil, ErrDeviceIdentityConflict
 			}
-			if reservation.SNSource != SNSourceGenerated && reservation.DeviceSN != "" &&
-				row.DeviceSN != reservation.DeviceSN {
+			if !reservation.DeviceSNGenerated && row.DeviceSN != reservation.DeviceSN {
 				return nil, ErrDeviceIdentityConflict
 			}
 			return row, nil
@@ -187,7 +185,7 @@ func (repository *MemoryRepository) reserveDeviceRow(reservation Reservation, pi
 	}
 	row := &memoryDeviceRow{
 		ID: reservation.DeviceInternalID, DeviceSN: reservation.DeviceSN,
-		PID: pid, ChipUID: chipUID, SNSource: reservation.SNSource,
+		PID: pid, ChipUID: chipUID,
 	}
 	repository.devices[row.ID] = row
 	return row, nil

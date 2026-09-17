@@ -74,11 +74,11 @@ func TestActivationReusesDeviceRegistryRowForSameChipUID(t *testing.T) {
 		t.Fatal(err)
 	}
 	var rows int
-	var rowSN, snSource string
+	var rowSN string
 	if err := pool.QueryRow(ctx, `
-		SELECT count(*), COALESCE(max(device_sn), ''), COALESCE(max(sn_source), '')
+		SELECT count(*), COALESCE(max(device_sn), '')
 		FROM device_registry WHERE chip_uid=$1
-	`, chipUID).Scan(&rows, &rowSN, &snSource); err != nil {
+	`, chipUID).Scan(&rows, &rowSN); err != nil {
 		t.Fatal(err)
 	}
 	if rows != 1 {
@@ -86,9 +86,6 @@ func TestActivationReusesDeviceRegistryRowForSameChipUID(t *testing.T) {
 	}
 	if rowSN != firstInstallation.DeviceID {
 		t.Fatalf("registry device sn = %q, want %q", rowSN, firstInstallation.DeviceID)
-	}
-	if snSource != activation.SNSourceGenerated {
-		t.Fatalf("registry sn_source = %q, want %q", snSource, activation.SNSourceGenerated)
 	}
 }
 

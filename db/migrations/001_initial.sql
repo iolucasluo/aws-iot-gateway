@@ -83,9 +83,6 @@ CREATE TABLE device_registry (
     certificate_arn text,
     aws_iot_endpoint text,
     chip_uid bytea,
-    sn_source varchar(16) NOT NULL DEFAULT 'generated'
-        CONSTRAINT device_registry_sn_source_check
-        CHECK (sn_source IN ('caller', 'device', 'generated')),
     status varchar(24) NOT NULL
         CONSTRAINT device_registry_status_check
         CHECK (status IN ('provisioning', 'active', 'revoked', 'reset')),

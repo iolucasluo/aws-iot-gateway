@@ -8,6 +8,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/internalauth"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/platform/credentialcipher"
 )
 
 var internalAppIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{2,63}$`)
@@ -67,6 +70,10 @@ type Config struct {
 	InternalApps                       []InternalApp
 	DirectACKSubscriberEnabled         bool
 	OTADeviceDownloadBaseURL           string
+	// CredentialKEK 非空时启用平台面 DB 凭证来源（projects/api_credentials）。
+	// 为空表示只用 INTERNAL_APPS_JSON 静态来源（本地开发与应急引导）。
+	CredentialKEK   string
+	CredentialKEKID string
 }
 
 func LoadConfig(getenv func(string) string) (Config, error) {
@@ -114,6 +121,8 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		DomesticRealtimeAuthorizationToken: strings.TrimSpace(getenv("DOMESTIC_REALTIME_AUTH_TOKEN")),
 		DirectACKSubscriberEnabled:         directACKSubscriberEnabled,
 		OTADeviceDownloadBaseURL:           strings.TrimSpace(getenv("OTA_DEVICE_DOWNLOAD_BASE_URL")),
+		CredentialKEK:                      strings.TrimSpace(getenv("PLATFORM_CREDENTIAL_KEK")),
+		CredentialKEKID:                    valueOr(getenv("PLATFORM_CREDENTIAL_KEK_ID"), "kek-v1"),
 	}
 	if !validEnvironment(config.Environment) {
 		return Config{}, fmt.Errorf("GATEWAY_ENVIRONMENT must be development, staging, or production")
@@ -256,6 +265,12 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if err := validateServiceURL("REDIS_URL", config.RedisURL, "redis", "rediss"); err != nil {
 		return Config{}, err
 	}
+	// 配置了 KEK 就意味着启用平台面 DB 凭证来源，必须在启动前证明它能用。
+	if config.CredentialKEK != "" {
+		if _, err := credentialcipher.NewFromBase64(config.CredentialKEK, config.CredentialKEKID); err != nil {
+			return Config{}, fmt.Errorf("PLATFORM_CREDENTIAL_KEK is invalid: %w", err)
+		}
+	}
 	appsJSON := strings.TrimSpace(getenv("INTERNAL_APPS_JSON"))
 	if appsJSON == "" {
 		return Config{}, fmt.Errorf("INTERNAL_APPS_JSON is required")
@@ -363,7 +378,7 @@ func validateInternalApps(apps []InternalApp) error {
 		seenPermissions := make(map[string]struct{}, len(app.Permissions))
 		for permissionIndex, permission := range app.Permissions {
 			permission = strings.TrimSpace(permission)
-			if permission != "ota:publish" && permission != "ota:deploy" {
+			if !internalauth.ValidPermission(permission) {
 				return fmt.Errorf("INTERNAL_APPS_JSON contains an invalid permission")
 			}
 			if _, duplicate := seenPermissions[permission]; duplicate {

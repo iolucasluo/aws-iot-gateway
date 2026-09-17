@@ -144,9 +144,10 @@ func (service *Service) Prepare(ctx context.Context, input PrepareInput) (Instal
 		return Installation{}, err
 	}
 	// 身份来源优先级：创建 activation 的调用方 → 设备上报 → 兜底生成。
-	deviceSN, chipUID, snSource := resolveDeviceIdentity(
+	deviceSN, chipUID := resolveDeviceIdentity(
 		record.Activation.RequestedDeviceSN, record.Activation.RequestedChipUID, reportedDeviceSN, reportedChipUID)
-	if deviceSN == "" {
+	deviceSNGenerated := deviceSN == ""
+	if deviceSNGenerated {
 		generated, err := randomDeviceSN()
 		if err != nil {
 			return Installation{}, fmt.Errorf("generate device sn: %w", err)
@@ -154,12 +155,12 @@ func (service *Service) Prepare(ctx context.Context, input PrepareInput) (Instal
 		deviceSN = generated
 	}
 	record, err = service.repository.ReservePreparation(ctx, Reservation{
-		ActivationID:     input.ActivationID,
-		DeviceInternalID: deviceInternalID,
-		DeviceSN:         deviceSN,
-		ChipUID:          chipUID,
-		SNSource:         snSource,
-		CSRPEM:           input.CSRPEM,
+		ActivationID:      input.ActivationID,
+		DeviceInternalID:  deviceInternalID,
+		DeviceSN:          deviceSN,
+		DeviceSNGenerated: deviceSNGenerated,
+		ChipUID:           chipUID,
+		CSRPEM:            input.CSRPEM,
 	})
 	if err != nil {
 		return Installation{}, err

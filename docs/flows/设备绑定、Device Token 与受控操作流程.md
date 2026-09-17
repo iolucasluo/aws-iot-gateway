@@ -7,8 +7,10 @@
 
 ## 目标与非目标
 
-Gateway 允许多个预配置的内部 App 使用同一服务，但它们不是 tenant，也没有开发者登录、自助建 App、
-Project 或 Product API。`INTERNAL_APPS_JSON` 中的 `api_key → internal_app_id` 映射是部署时受控配置。
+Gateway 允许多个内部 App 使用同一服务，但它们不是 tenant。凭证权威源是平台面的 `api_credentials`（归属
+project），`INTERNAL_APPS_JSON` 保留为本地开发与应急的第二来源；无论来源，主体 id 都只用于归属与作用域，
+不构成 tenant 隔离。门户登录与 Project/Product 管理属于平台面，见
+[Platform Plane v1](../architecture/platform-plane-v1.md)，本流程不展开。
 
 设备只能有一条**全局** active binding；更换到另一个 Internal App 前必须显式释放现有 binding。一个
 `binding_external_user_id` 只是可信 Internal App backend 从自己的登录会话派生的用户标识，Gateway 不拥有
