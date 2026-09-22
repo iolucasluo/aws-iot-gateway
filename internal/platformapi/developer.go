@@ -29,6 +29,8 @@ func writeProjectError(writer http.ResponseWriter, err error) {
 		writeError(writer, http.StatusNotFound, "not_found", "credential not found")
 	case errors.Is(err, project.ErrWebhookNotFound):
 		writeError(writer, http.StatusNotFound, "not_found", "webhook not found")
+	case errors.Is(err, project.ErrDPDefinitionNotFound):
+		writeError(writer, http.StatusNotFound, "not_found", "dp definition not found")
 	case errors.Is(err, project.ErrDuplicateProduct):
 		writeError(writer, http.StatusConflict, "product_already_attached", "product is already attached to the project")
 	case errors.Is(err, project.ErrInvalidInput):
