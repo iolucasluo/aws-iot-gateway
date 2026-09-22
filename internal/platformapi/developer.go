@@ -438,11 +438,11 @@ func (server *Server) listDPDefinitions(writer http.ResponseWriter, request *htt
 func (server *Server) createDPDefinition(writer http.ResponseWriter, request *http.Request) {
 	server.withDeveloperActor(writer, request, func(ctx context.Context, actor project.Actor) {
 		var body struct {
-			Code           string   `json:"code"`
-			Type           string   `json:"type"`
-			Direction      string   `json:"direction"`
-			Spec           []byte   `json:"spec"`
-			DPProfileCodes []string `json:"dp_profile_codes"`
+			Code           string          `json:"code"`
+			Type           string          `json:"type"`
+			Direction      string          `json:"direction"`
+			Spec           json.RawMessage `json:"spec"`
+			DPProfileCodes []string        `json:"dp_profile_codes"`
 		}
 		if !decodeBody(writer, request, &body) {
 			return

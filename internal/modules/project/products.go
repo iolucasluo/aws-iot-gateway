@@ -2,6 +2,7 @@ package project
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -15,6 +16,7 @@ var (
 	productPIDPattern        = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
 	productCapabilityPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,63}$`)
 	productCategoryPattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+	uuidPattern              = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 )
 
 const maxProductCapabilities = 32
@@ -240,7 +242,11 @@ func (service *Service) DeleteDPDefinition(ctx context.Context, actor Actor, id 
 	if !isDeveloper(actor) {
 		return ErrForbidden
 	}
-	return service.repository.DeleteDPDefinition(ctx, strings.TrimSpace(id), actor.AccountID)
+	id = strings.TrimSpace(id)
+	if !uuidPattern.MatchString(id) {
+		return ErrDPDefinitionNotFound
+	}
+	return service.repository.DeleteDPDefinition(ctx, id, actor.AccountID)
 }
 
 // DPProfile 是 DP 合同的只读投影。
@@ -255,8 +261,8 @@ type DPDefinition struct {
 	Code           string
 	Type           string
 	Direction      string
-	Spec           []byte // JSON，可为空
-	OwnerAccountID string // 空 = 公共
+	Spec           json.RawMessage // JSON，可为空
+	OwnerAccountID string          // 空 = 公共
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
@@ -266,7 +272,7 @@ type CreateDPDefinitionInput struct {
 	Code           string
 	Type           string
 	Direction      string
-	Spec           []byte
+	Spec           json.RawMessage
 	DPProfileCodes []string // 挂载到哪些 profile
 }
 
