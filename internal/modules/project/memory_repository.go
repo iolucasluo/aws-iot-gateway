@@ -113,6 +113,27 @@ func (repository *MemoryRepository) UpdateProject(_ context.Context, project Pro
 	return nil
 }
 
+func (repository *MemoryRepository) DeleteProject(_ context.Context, projectID string) error {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	if _, found := repository.projects[projectID]; !found {
+		return ErrProjectNotFound
+	}
+	delete(repository.projects, projectID)
+	delete(repository.projectItems, projectID)
+	for id, cred := range repository.credentials {
+		if cred.ProjectID == projectID {
+			delete(repository.credentials, id)
+		}
+	}
+	for id, wh := range repository.webhooks {
+		if wh.ProjectID == projectID {
+			delete(repository.webhooks, id)
+		}
+	}
+	return nil
+}
+
 func (repository *MemoryRepository) AddProjectProduct(_ context.Context, _, projectID, productID string, _ time.Time) error {
 	repository.mutex.Lock()
 	defer repository.mutex.Unlock()

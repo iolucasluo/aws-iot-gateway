@@ -14,6 +14,7 @@ type Repository interface {
 	FindProjectByID(ctx context.Context, projectID string) (Project, error)
 	ListProjects(ctx context.Context, filter ProjectFilter) ([]Project, error)
 	UpdateProject(ctx context.Context, project Project) error
+	DeleteProject(ctx context.Context, projectID string) error
 
 	AddProjectProduct(ctx context.Context, id, projectID, productID string, at time.Time) error
 	RemoveProjectProduct(ctx context.Context, projectID, productID string) error

@@ -93,6 +93,30 @@ func (repository *ProjectRepository) UpdateProject(ctx context.Context, value pr
 	return nil
 }
 
+// DeleteProject 永久删除项目：api_credentials 是 RESTRICT FK，必须先删；
+// project_products / project_webhooks 是 CASCADE，由数据库级联。
+func (repository *ProjectRepository) DeleteProject(ctx context.Context, projectID string) error {
+	tx, err := repository.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin delete project: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `DELETE FROM api_credentials WHERE project_id=$1`, projectID); err != nil {
+		return fmt.Errorf("delete project credentials: %w", err)
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM projects WHERE id=$1`, projectID)
+	if err != nil {
+		return fmt.Errorf("delete project: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return project.ErrProjectNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit delete project: %w", err)
+	}
+	return nil
+}
+
 func (repository *ProjectRepository) AddProjectProduct(ctx context.Context, id, projectID, productID string, at time.Time) error {
 	_, err := repository.pool.Exec(ctx, `
 		INSERT INTO project_products (id, project_id, product_id, created_at, updated_at)

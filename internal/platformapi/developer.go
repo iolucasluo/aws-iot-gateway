@@ -177,6 +177,14 @@ func (server *Server) serveDeveloperProject(writer http.ResponseWriter, request 
 			}
 			writeJSON(writer, http.StatusOK, map[string]any{"project": newProjectResponse(value)})
 		})
+	case !hasSub && request.Method == http.MethodDelete:
+		server.withDeveloperActor(writer, request, func(ctx context.Context, actor project.Actor) {
+			if err := server.projects().DeleteProject(ctx, actor, projectID); err != nil {
+				writeProjectError(writer, err)
+				return
+			}
+			writeJSON(writer, http.StatusOK, map[string]string{"status": "deleted"})
+		})
 	case sub == "products" && request.Method == http.MethodGet:
 		server.withDeveloperActor(writer, request, func(ctx context.Context, actor project.Actor) {
 			productIDs, pids, err := server.projects().ListProjectProducts(ctx, actor, projectID)

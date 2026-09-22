@@ -193,6 +193,18 @@ func (service *Service) UpdateProject(ctx context.Context, actor Actor, projectI
 	return target, nil
 }
 
+// DeleteProject 永久删除项目及其凭证、产品挂载与 webhook。
+func (service *Service) DeleteProject(ctx context.Context, actor Actor, projectID string) error {
+	target, err := service.repository.FindProjectByID(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if !canWriteProject(actor, target) {
+		return ErrForbidden
+	}
+	return service.repository.DeleteProject(ctx, projectID)
+}
+
 // AttachProduct 把产品加入项目白名单。
 func (service *Service) AttachProduct(ctx context.Context, actor Actor, projectID, productID string) (Project, error) {
 	target, err := service.repository.FindProjectByID(ctx, projectID)
