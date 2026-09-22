@@ -15,6 +15,7 @@ import (
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/internalauth"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/binding"
 	devicemodule "gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/device"
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/events"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/media"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/ota"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/project"
@@ -209,6 +210,7 @@ func runDomesticGateway(
 	dependencies := httpapi.Dependencies{
 		Binding: bindingService, Media: streamService, Assets: assetService,
 		Device: deviceService, OTA: otaService,
+		Events: events.NewQueryService(eventRepository),
 		TimeBootstrap: timeService, TimeBootstrapLimiter: rateLimiter,
 		DeviceRuntime: httpapi.DeviceRuntimeConfig{
 			ProviderMode: "domestic-dev", Endpoint: config.DomesticMQTTEndpoint,
