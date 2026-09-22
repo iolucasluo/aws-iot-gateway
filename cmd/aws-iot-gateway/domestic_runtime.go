@@ -215,7 +215,7 @@ func runDomesticGateway(
 	dependencies := httpapi.Dependencies{
 		Binding: bindingService, Media: streamService, Assets: assetService,
 		Device: deviceService, OTA: otaService,
-		Events: events.NewQueryService(eventRepository),
+		Events:        events.NewQueryService(eventRepository),
 		TimeBootstrap: timeService, TimeBootstrapLimiter: rateLimiter,
 		DeviceRuntime: httpapi.DeviceRuntimeConfig{
 			ProviderMode: "domestic-dev", Endpoint: config.DomesticMQTTEndpoint,

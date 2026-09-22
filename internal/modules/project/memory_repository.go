@@ -21,8 +21,8 @@ type MemoryRepository struct {
 	credentials    map[string]Credential
 	manufacturers  map[string]struct{}
 	dpProfiles     map[string]DPProfile
-	dpDefinitions  map[string]DPDefinition          // id -> definition
-	dpMembers      map[string]map[string]struct{}   // profileCode -> set of definitionIDs
+	dpDefinitions  map[string]DPDefinition        // id -> definition
+	dpMembers      map[string]map[string]struct{} // profileCode -> set of definitionIDs
 	portalAccounts map[string]portalaccount.Account
 	webhooks       map[string]Webhook
 }

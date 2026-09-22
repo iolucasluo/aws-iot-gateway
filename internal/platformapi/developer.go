@@ -423,7 +423,7 @@ func (server *Server) listDPDefinitions(writer http.ResponseWriter, request *htt
 			item := map[string]any{
 				"id": d.ID, "code": d.Code, "type": d.Type, "direction": d.Direction,
 				"owner_account_id": d.OwnerAccountID,
-				"created_at": d.CreatedAt.UTC().Format(timeLayout),
+				"created_at":       d.CreatedAt.UTC().Format(timeLayout),
 			}
 			if len(d.Spec) > 0 {
 				var spec any
@@ -460,7 +460,7 @@ func (server *Server) createDPDefinition(writer http.ResponseWriter, request *ht
 		writeJSON(writer, http.StatusCreated, map[string]any{"dp_definition": map[string]any{
 			"id": def.ID, "code": def.Code, "type": def.Type, "direction": def.Direction,
 			"owner_account_id": def.OwnerAccountID,
-			"created_at": def.CreatedAt.UTC().Format(timeLayout),
+			"created_at":       def.CreatedAt.UTC().Format(timeLayout),
 		}})
 	})
 }
