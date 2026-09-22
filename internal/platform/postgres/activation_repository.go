@@ -380,7 +380,11 @@ func (repository *ActivationRepository) ListDevices(ctx context.Context, interna
 		       d.presence_online, d.last_seen_at
 		FROM device_bindings b
 		JOIN device_registry d ON d.id=b.device_registry_id
-		JOIN device_activations a ON a.device_registry_id=d.id AND a.status='activated'
+		JOIN LATERAL (
+			SELECT la.id FROM device_activations la
+			WHERE la.device_registry_id=d.id AND la.status='activated'
+			ORDER BY la.updated_at DESC, la.id DESC LIMIT 1
+		) a ON true
 		WHERE b.internal_app_id=$1 AND ($2='' OR b.binding_external_user_id=$2) AND b.status='active'
 		ORDER BY d.device_sn
 	`, internalAppID, externalUserID)
