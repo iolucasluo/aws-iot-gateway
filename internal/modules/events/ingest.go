@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -58,22 +59,68 @@ type IngestRepository interface {
 	PresenceRepository
 }
 
+// EventCursor 是事件列表的 keyset 分页位置；零值表示从头开始。
+type EventCursor struct {
+	ReceivedAt time.Time
+	ID         string
+}
+
+func (cursor EventCursor) Zero() bool {
+	return cursor.ReceivedAt.IsZero() || cursor.ID == ""
+}
+
+// EncodeEventCursor 生成不透明分页游标（接收时间 unix nano + 事件 id）。
+func EncodeEventCursor(event Event) string {
+	return strconv.FormatInt(event.ReceivedAt.UnixNano(), 10) + "_" + event.ID
+}
+
+// ErrInvalidCursor 表示分页游标格式非法，属于客户端输入错误。
+var ErrInvalidCursor = fmt.Errorf("invalid event cursor")
+
+// ParseEventCursor 解析并校验分页游标；空串表示从头开始。
+func ParseEventCursor(raw string) (EventCursor, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return EventCursor{}, nil
+	}
+	stamp, id, found := strings.Cut(raw, "_")
+	nanos, err := strconv.ParseInt(stamp, 10, 64)
+	if !found || err != nil || id == "" || nanos <= 0 {
+		return EventCursor{}, ErrInvalidCursor
+	}
+	return EventCursor{ReceivedAt: time.Unix(0, nanos).UTC(), ID: id}, nil
+}
+
 type EventReader interface {
-	List(context.Context, string, string, int) ([]Event, error)
+	List(context.Context, string, string, int, EventCursor) ([]Event, error)
 }
 
 type QueryService struct{ reader EventReader }
 
 func NewQueryService(reader EventReader) *QueryService { return &QueryService{reader: reader} }
 
-func (service *QueryService) List(ctx context.Context, deviceID, eventType string, limit int) ([]Event, error) {
+// List 返回一页事件与下一页游标；游标为空串表示没有更多数据。
+func (service *QueryService) List(ctx context.Context, deviceID, eventType string, limit int, rawCursor string) ([]Event, string, error) {
 	if service == nil || service.reader == nil || strings.TrimSpace(deviceID) == "" || limit < 0 {
-		return nil, fmt.Errorf("invalid event query")
+		return nil, "", fmt.Errorf("invalid event query")
 	}
 	if limit == 0 || limit > 100 {
 		limit = 50
 	}
-	return service.reader.List(ctx, deviceID, strings.TrimSpace(eventType), limit)
+	cursor, err := ParseEventCursor(rawCursor)
+	if err != nil {
+		return nil, "", err
+	}
+	items, err := service.reader.List(ctx, deviceID, strings.TrimSpace(eventType), limit+1, cursor)
+	if err != nil {
+		return nil, "", err
+	}
+	next := ""
+	if len(items) > limit {
+		items = items[:limit]
+		next = EncodeEventCursor(items[len(items)-1])
+	}
+	return items, next, nil
 }
 
 type IngestService struct {

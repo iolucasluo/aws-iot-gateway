@@ -390,15 +390,22 @@ func buildWebhookPayload(deliveryID string, event events.Event, pid string) (map
 	return payload, webhookEventType
 }
 
-func (repository *EventRepository) List(ctx context.Context, deviceID, eventType string, limit int) ([]events.Event, error) {
+func (repository *EventRepository) List(ctx context.Context, deviceID, eventType string, limit int, cursor events.EventCursor) ([]events.Event, error) {
+	var beforeTime *time.Time
+	var beforeID *string
+	if !cursor.Zero() {
+		beforeTime = &cursor.ReceivedAt
+		beforeID = &cursor.ID
+	}
 	rows, err := repository.pool.Query(ctx, `
 		SELECT e.id::text, d.device_sn, e.event_type, e.boot_id, e.event_seq,
 		       e.monotonic_ms, COALESCE(e.time_quality,''), COALESCE(e.time_source,''),
 		       e.occurred_at, e.received_at, e.data
 		FROM device_events e JOIN device_registry d ON d.id=e.device_registry_id
 		WHERE e.device_registry_id=$1 AND ($2='' OR e.event_type=$2)
+		  AND ($4::timestamptz IS NULL OR (e.received_at, e.id) < ($4::timestamptz, $5::uuid))
 		ORDER BY e.received_at DESC, e.id DESC LIMIT $3
-	`, deviceID, eventType, limit)
+	`, deviceID, eventType, limit, beforeTime, beforeID)
 	if err != nil {
 		return nil, fmt.Errorf("list device events: %w", err)
 	}

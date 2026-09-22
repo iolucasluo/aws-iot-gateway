@@ -354,12 +354,16 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 			}
 			limit = parsed
 		}
-		items, err := s.events.List(request.Context(), ownedBinding.DeviceID, request.URL.Query().Get("type"), limit)
+		items, nextCursor, err := s.events.List(request.Context(), ownedBinding.DeviceID, request.URL.Query().Get("type"), limit, request.URL.Query().Get("cursor"))
 		if err != nil {
+			if errors.Is(err, events.ErrInvalidCursor) {
+				writeError(writer, http.StatusBadRequest, "invalid_request", "cursor is invalid")
+				return true
+			}
 			writeError(writer, http.StatusInternalServerError, "internal_error", "device events could not be loaded")
 			return true
 		}
-		writeJSON(writer, http.StatusOK, map[string]any{"events": items})
+		writeJSON(writer, http.StatusOK, map[string]any{"events": items, "next_cursor": nextCursor})
 		return true
 	case "streams":
 		if s.media == nil {
