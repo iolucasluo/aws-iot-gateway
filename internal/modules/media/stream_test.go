@@ -168,6 +168,10 @@ func TestCreateRealtimeStreamUsesProviderSessionAndRedactsViewerTicketFromDevice
 	if !strings.Contains(redacted, "ice_servers") || !strings.Contains(redacted, "realtime") {
 		t.Fatal("ephemeral realtime credentials must not be persisted")
 	}
+	// 网关注入字段必须登记出调用方合同范围，否则 DP 校验会拒绝推流。
+	if trusted := strings.Join(commander.input.TrustedFields, ","); trusted != "ice_servers,realtime" {
+		t.Fatalf("realtime command must declare gateway-injected DP fields, got %q", trusted)
+	}
 	if err := service.Delete(context.Background(), "demo-local", "device-1", "binding-1", "fdr-1", "session-1"); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}

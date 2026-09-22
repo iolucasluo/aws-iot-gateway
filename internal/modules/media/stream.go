@@ -227,7 +227,7 @@ func (service *StreamService) create(
 		}
 		providerName, signalingURL, iceServers, expiresAt, channelRef = playback.Provider, playback.WSSURL, playback.ICEServers, playback.ExpiresAt, channel.ExternalRef
 	}
-	var redactFields []string
+	var redactFields, trustedFields []string
 	valuePayload := map[string]any{
 		"type": "webrtc", "start": 1, "viewer_client_id": viewerID,
 		"requested_capabilities": requested,
@@ -242,6 +242,7 @@ func (service *StreamService) create(
 		// this optional top-level field; new peers use the same ICE service as viewers.
 		valuePayload["ice_servers"] = iceServers
 		redactFields = []string{"ice_servers", "realtime"}
+		trustedFields = []string{"ice_servers", "realtime"}
 		valuePayload["realtime"] = map[string]any{
 			"session_id": realtimeSessionID, "provider_instance": providerName,
 			"protocol": protocol, "device_config": deviceConfig,
@@ -249,7 +250,7 @@ func (service *StreamService) create(
 	}
 	value, _ := json.Marshal(valuePayload)
 	commandResult, err := service.commander.SendDPCommands(ctx, internalAppID, deviceID, deviceSN,
-		[]device.CommandInput{{Code: "stream", Value: value, RedactFields: redactFields}}, true)
+		[]device.CommandInput{{Code: "stream", Value: value, RedactFields: redactFields, TrustedFields: trustedFields}}, true)
 	if err != nil {
 		if service.realtime != nil {
 			_ = service.realtime.CloseSession(ctx, provider.RealtimeSessionRef{ID: realtimeSessionID, ProviderInstance: providerName})

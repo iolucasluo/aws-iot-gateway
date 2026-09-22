@@ -64,11 +64,32 @@ func ValidateCommands(definitions []DPDefinition, commands []CommandInput) error
 		default:
 			return fmt.Errorf("%w: %w (%s)", ErrInvalidInput, ErrDPReadOnly, code)
 		}
-		if err := validateDPValue(definition, command.Value); err != nil {
+		if err := validateDPValue(definition, command.contractValue()); err != nil {
 			return fmt.Errorf("%w: %w (%s): %v", ErrInvalidInput, ErrDPInvalidValue, code, err)
 		}
 	}
 	return nil
+}
+
+// contractValue returns the subset of Value the caller is held to: the product
+// DP contract describes what a caller may write, not what the gateway appends.
+// Malformed JSON is left untouched so validateDPValue reports it as usual.
+func (command CommandInput) contractValue() json.RawMessage {
+	if len(command.TrustedFields) == 0 || len(command.Value) == 0 {
+		return command.Value
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(command.Value, &object) != nil {
+		return command.Value
+	}
+	for _, field := range command.TrustedFields {
+		delete(object, field)
+	}
+	contract, err := json.Marshal(object)
+	if err != nil {
+		return command.Value
+	}
+	return contract
 }
 
 func isControlledDP(code string) bool {

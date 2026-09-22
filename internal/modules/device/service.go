@@ -33,6 +33,9 @@ type CommandInput struct {
 	Value        json.RawMessage `json:"value"`
 	CommandID    string          `json:"command_id,omitempty"`
 	RedactFields []string        `json:"-"`
+	// TrustedFields names gateway-minted entries in Value that the caller-facing
+	// DP contract does not declare. Only internal services may set it.
+	TrustedFields []string `json:"-"`
 }
 
 type Command struct {
