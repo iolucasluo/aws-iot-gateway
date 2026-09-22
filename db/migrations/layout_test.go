@@ -21,7 +21,7 @@ func TestMigrationLayoutContainsOnlyCurrentInitialSchema(t *testing.T) {
 		"001_initial.sql", "002_device_identity.sql", "003_platform_accounts.sql",
 		"004_platform_projects.sql", "005_platform_audit_webhooks.sql",
 		"006_project_webhooks_single_active.sql", "007_platform_manufacturing.sql",
-		"008_drop_sn_source.sql",
+		"008_drop_sn_source.sql", "009_dp_definitions_owner.sql",
 	}
 	if got := migrationNames(entries); len(got) != len(want) || fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("migration files = %v, want %v", got, want)
