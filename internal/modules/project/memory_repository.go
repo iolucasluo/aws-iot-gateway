@@ -327,7 +327,9 @@ func (repository *MemoryRepository) ListProducts(_ context.Context, filter Produ
 	defer repository.mutex.Unlock()
 	products := make([]Product, 0, len(repository.productCatalog))
 	for _, product := range repository.productCatalog {
-		if filter.OwnerAccountID != "" && product.OwnerAccountID != filter.OwnerAccountID {
+		if filter.OwnerAccountID != "" &&
+			product.OwnerAccountID != filter.OwnerAccountID &&
+			!(filter.IncludeGlobal && product.OwnerAccountID == "") {
 			continue
 		}
 		if filter.Status != "" && product.Status != filter.Status {

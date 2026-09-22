@@ -124,8 +124,8 @@ func TestProductScopeAndOwnershipRules(t *testing.T) {
 	}
 
 	mine, err := service.ListProducts(ctx, owner, ProductFilter{})
-	if err != nil || len(mine) != 1 || mine[0].PID != "feeder-x2" {
-		t.Fatalf("ListProducts(developer) = %+v, err = %v", mine, err)
+	if err != nil || len(mine) != 2 || mine[0].PID != "feeder-x2" || mine[1].PID != "minion-cam-x2" {
+		t.Fatalf("ListProducts(developer) = %+v, err = %v; want own + catalog", mine, err)
 	}
 	all, err := service.ListProducts(ctx, staffActor(), ProductFilter{})
 	if err != nil || len(all) != 3 {

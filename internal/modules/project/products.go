@@ -99,12 +99,14 @@ func (service *Service) CreateProduct(ctx context.Context, actor Actor, input Cr
 	return product, nil
 }
 
-// ListProducts 按操作者 scope 返回产品：staff 透传过滤条件，developer 只看自己的。
+// ListProducts 按操作者 scope 返回产品：staff 透传过滤条件，developer 看自己
+// 的产品与平台公共目录产品（公共产品用于项目挂载，不开放改动）。
 func (service *Service) ListProducts(ctx context.Context, actor Actor, filter ProductFilter) ([]Product, error) {
 	switch {
 	case isStaff(actor):
 	case isDeveloper(actor):
 		filter.OwnerAccountID = actor.AccountID
+		filter.IncludeGlobal = true
 	default:
 		return nil, ErrForbidden
 	}

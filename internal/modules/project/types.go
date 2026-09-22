@@ -121,6 +121,9 @@ type ProductFilter struct {
 	Status         string
 	PID            string
 	Limit          int
+	// IncludeGlobal 为 true 时把公共目录产品（owner 为空）一并返回，
+	// 供开发者在项目里挂载平台共享产品。
+	IncludeGlobal bool
 }
 
 // CreateProductInput 是创建产品的请求。OwnerAccountID 为空表示公共目录产品（仅 staff 可建）。

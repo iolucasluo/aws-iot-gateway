@@ -390,12 +390,12 @@ func (repository *ProjectRepository) ListProducts(ctx context.Context, filter pr
 	rows, err := repository.pool.Query(ctx, `
 		SELECT `+productColumns+`
 		FROM products
-		WHERE ($1='' OR owner_account_id=$1::uuid)
+		WHERE (($1='' AND NOT $5) OR owner_account_id=$1::uuid OR ($5 AND owner_account_id IS NULL))
 		  AND ($2='' OR status=$2)
 		  AND ($3='' OR pid=$3)
 		ORDER BY pid ASC
 		LIMIT $4
-	`, filter.OwnerAccountID, filter.Status, filter.PID, limit)
+	`, filter.OwnerAccountID, filter.Status, filter.PID, limit, filter.IncludeGlobal)
 	if err != nil {
 		return nil, fmt.Errorf("list products: %w", err)
 	}
