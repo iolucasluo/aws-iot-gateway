@@ -31,6 +31,10 @@ type Repository interface {
 	ActiveDPProfileExists(ctx context.Context, code string) (bool, error)
 	ListActiveDPProfiles(ctx context.Context) ([]DPProfile, error)
 
+	ListDPDefinitionsForProfile(ctx context.Context, profileCode, ownerAccountID string) ([]DPDefinition, error)
+	CreateDPDefinition(ctx context.Context, def DPDefinition, profileCodes []string) error
+	DeleteDPDefinition(ctx context.Context, id, ownerAccountID string) error
+
 	CreateWebhook(ctx context.Context, webhook Webhook) error
 	FindWebhookByID(ctx context.Context, webhookID string) (Webhook, error)
 	FindActiveWebhookByProject(ctx context.Context, projectID string) (Webhook, error)

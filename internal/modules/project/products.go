@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/portalaccount"
 )
@@ -187,10 +188,86 @@ func (service *Service) ListActiveDPProfiles(ctx context.Context) ([]DPProfile, 
 	return service.repository.ListActiveDPProfiles(ctx)
 }
 
+// ListDPDefinitionsForProfile 返回指定 profile 下的公共 DP + 当前开发者的自定义 DP。
+func (service *Service) ListDPDefinitionsForProfile(ctx context.Context, actor Actor, profileCode string) ([]DPDefinition, error) {
+	if !isDeveloper(actor) && !isStaff(actor) {
+		return nil, ErrForbidden
+	}
+	return service.repository.ListDPDefinitionsForProfile(ctx, strings.TrimSpace(profileCode), actor.AccountID)
+}
+
+// CreateDPDefinition 创建开发者自定义 DP 并挂载到指定 profile。
+func (service *Service) CreateDPDefinition(ctx context.Context, actor Actor, input CreateDPDefinitionInput) (DPDefinition, error) {
+	if !isDeveloper(actor) {
+		return DPDefinition{}, ErrForbidden
+	}
+	input.Code = strings.TrimSpace(input.Code)
+	input.Type = strings.TrimSpace(input.Type)
+	input.Direction = strings.TrimSpace(input.Direction)
+	if input.Code == "" || input.Type == "" || input.Direction == "" {
+		return DPDefinition{}, fmt.Errorf("%w: code, type and direction are required", ErrInvalidInput)
+	}
+	if len(input.DPProfileCodes) == 0 {
+		return DPDefinition{}, fmt.Errorf("%w: at least one dp_profile_code is required", ErrInvalidInput)
+	}
+	for _, code := range input.DPProfileCodes {
+		exists, err := service.repository.ActiveDPProfileExists(ctx, strings.TrimSpace(code))
+		if err != nil {
+			return DPDefinition{}, err
+		}
+		if !exists {
+			return DPDefinition{}, fmt.Errorf("%w: dp profile %q not found or inactive", ErrInvalidInput, code)
+		}
+	}
+	id, err := randomUUID()
+	if err != nil {
+		return DPDefinition{}, fmt.Errorf("generate dp definition id: %w", err)
+	}
+	now := service.now().UTC()
+	def := DPDefinition{
+		ID: id, Code: input.Code, Type: input.Type, Direction: input.Direction,
+		Spec: input.Spec, OwnerAccountID: actor.AccountID,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := service.repository.CreateDPDefinition(ctx, def, input.DPProfileCodes); err != nil {
+		return DPDefinition{}, err
+	}
+	return def, nil
+}
+
+// DeleteDPDefinition 删除开发者自己的自定义 DP（公共 DP 不可删）。
+func (service *Service) DeleteDPDefinition(ctx context.Context, actor Actor, id string) error {
+	if !isDeveloper(actor) {
+		return ErrForbidden
+	}
+	return service.repository.DeleteDPDefinition(ctx, strings.TrimSpace(id), actor.AccountID)
+}
+
 // DPProfile 是 DP 合同的只读投影。
 type DPProfile struct {
 	Code string
 	Name string
+}
+
+// DPDefinition 是 DP 定义的门户投影（含 owner 归属）。
+type DPDefinition struct {
+	ID             string
+	Code           string
+	Type           string
+	Direction      string
+	Spec           []byte // JSON，可为空
+	OwnerAccountID string // 空 = 公共
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// CreateDPDefinitionInput 是开发者创建自定义 DP 的请求。
+type CreateDPDefinitionInput struct {
+	Code           string
+	Type           string
+	Direction      string
+	Spec           []byte
+	DPProfileCodes []string // 挂载到哪些 profile
 }
 
 // EnsureOwnerIsDeveloper 在把产品归属给账号前确认它是 developer，

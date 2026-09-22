@@ -380,6 +380,91 @@ func (repository *ProjectRepository) ListActiveDPProfiles(ctx context.Context) (
 	return profiles, nil
 }
 
+func (repository *ProjectRepository) ListDPDefinitionsForProfile(ctx context.Context, profileCode, ownerAccountID string) ([]project.DPDefinition, error) {
+	rows, err := repository.pool.Query(ctx, `
+		SELECT d.id::text, d.code, d.type, d.direction, COALESCE(d.spec,'[]'::jsonb)::text,
+		       COALESCE(d.owner_account_id::text,''), d.created_at, d.updated_at
+		FROM dp_profile_members m
+		JOIN dp_definitions d ON d.id = m.dp_definition_id
+		WHERE m.dp_profile_code = $1
+		  AND (d.owner_account_id IS NULL OR d.owner_account_id::text = $2)
+		ORDER BY d.code ASC
+	`, profileCode, ownerAccountID)
+	if err != nil {
+		return nil, fmt.Errorf("list dp definitions: %w", err)
+	}
+	defer rows.Close()
+	defs := make([]project.DPDefinition, 0)
+	for rows.Next() {
+		var d project.DPDefinition
+		var specStr string
+		if err := rows.Scan(&d.ID, &d.Code, &d.Type, &d.Direction, &specStr, &d.OwnerAccountID, &d.CreatedAt, &d.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan dp definition: %w", err)
+		}
+		if specStr != "" && specStr != "[]" {
+			d.Spec = []byte(specStr)
+		}
+		defs = append(defs, d)
+	}
+	return defs, rows.Err()
+}
+
+func (repository *ProjectRepository) CreateDPDefinition(ctx context.Context, def project.DPDefinition, profileCodes []string) error {
+	tx, err := repository.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin create dp definition: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	_, err = tx.Exec(ctx, `
+		INSERT INTO dp_definitions (id, code, type, direction, spec, owner_account_id, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,NULLIF($5,'')::jsonb,NULLIF($6,'')::uuid,$7,$8)
+	`, def.ID, def.Code, def.Type, def.Direction, string(def.Spec), def.OwnerAccountID, def.CreatedAt, def.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("insert dp definition: %w", err)
+	}
+	for _, code := range profileCodes {
+		memberID, idErr := postgresUUID()
+		if idErr != nil {
+			return fmt.Errorf("generate dp member id: %w", idErr)
+		}
+		_, err = tx.Exec(ctx, `
+			INSERT INTO dp_profile_members (id, dp_profile_code, dp_definition_id, code, status, created_at, updated_at)
+			VALUES ($1,$2,$3,$4,'active',$5,$5)
+			ON CONFLICT DO NOTHING
+		`, memberID, code, def.ID, def.Code, def.CreatedAt)
+		if err != nil {
+			return fmt.Errorf("insert dp profile member for %s: %w", code, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit create dp definition: %w", err)
+	}
+	return nil
+}
+
+func (repository *ProjectRepository) DeleteDPDefinition(ctx context.Context, id, ownerAccountID string) error {
+	tx, err := repository.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin delete dp definition: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	_, err = tx.Exec(ctx, `DELETE FROM dp_profile_members WHERE dp_definition_id=$1::uuid`, id)
+	if err != nil {
+		return fmt.Errorf("delete dp profile members: %w", err)
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM dp_definitions WHERE id=$1::uuid AND owner_account_id=$2::uuid`, id, ownerAccountID)
+	if err != nil {
+		return fmt.Errorf("delete dp definition: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return project.ErrDPDefinitionNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit delete dp definition: %w", err)
+	}
+	return nil
+}
+
 func (repository *ProjectRepository) CreateProduct(ctx context.Context, product project.Product) error {
 	capabilities, err := encodeCapabilities(product.Capabilities)
 	if err != nil {

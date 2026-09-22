@@ -21,6 +21,8 @@ type MemoryRepository struct {
 	credentials    map[string]Credential
 	manufacturers  map[string]struct{}
 	dpProfiles     map[string]DPProfile
+	dpDefinitions  map[string]DPDefinition          // id -> definition
+	dpMembers      map[string]map[string]struct{}   // profileCode -> set of definitionIDs
 	portalAccounts map[string]portalaccount.Account
 	webhooks       map[string]Webhook
 }
@@ -34,6 +36,8 @@ func NewMemoryRepository() *MemoryRepository {
 		credentials:    map[string]Credential{},
 		manufacturers:  map[string]struct{}{},
 		dpProfiles:     map[string]DPProfile{},
+		dpDefinitions:  map[string]DPDefinition{},
+		dpMembers:      map[string]map[string]struct{}{},
 		portalAccounts: map[string]portalaccount.Account{},
 		webhooks:       map[string]Webhook{},
 	}
@@ -318,6 +322,54 @@ func (repository *MemoryRepository) ListActiveDPProfiles(_ context.Context) ([]D
 	}
 	sort.Slice(profiles, func(left, right int) bool { return profiles[left].Code < profiles[right].Code })
 	return profiles, nil
+}
+
+func (repository *MemoryRepository) ListDPDefinitionsForProfile(_ context.Context, profileCode, ownerAccountID string) ([]DPDefinition, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	memberIDs := repository.dpMembers[profileCode]
+	defs := make([]DPDefinition, 0, len(memberIDs))
+	for id := range memberIDs {
+		def, ok := repository.dpDefinitions[id]
+		if !ok {
+			continue
+		}
+		if def.OwnerAccountID == "" || def.OwnerAccountID == ownerAccountID {
+			defs = append(defs, def)
+		}
+	}
+	sort.Slice(defs, func(i, j int) bool { return defs[i].Code < defs[j].Code })
+	return defs, nil
+}
+
+func (repository *MemoryRepository) CreateDPDefinition(_ context.Context, def DPDefinition, profileCodes []string) error {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	repository.dpDefinitions[def.ID] = def
+	for _, code := range profileCodes {
+		if repository.dpMembers[code] == nil {
+			repository.dpMembers[code] = map[string]struct{}{}
+		}
+		repository.dpMembers[code][def.ID] = struct{}{}
+	}
+	return nil
+}
+
+func (repository *MemoryRepository) DeleteDPDefinition(_ context.Context, id, ownerAccountID string) error {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	def, ok := repository.dpDefinitions[id]
+	if !ok || def.OwnerAccountID != ownerAccountID {
+		return ErrDPDefinitionNotFound
+	}
+	delete(repository.dpDefinitions, id)
+	for code, members := range repository.dpMembers {
+		delete(members, id)
+		if len(members) == 0 {
+			delete(repository.dpMembers, code)
+		}
+	}
+	return nil
 }
 
 func (repository *MemoryRepository) CreateProduct(_ context.Context, product Product) error {

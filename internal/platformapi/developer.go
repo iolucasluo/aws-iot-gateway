@@ -2,6 +2,7 @@ package platformapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -118,6 +119,13 @@ func (server *Server) serveDeveloper(writer http.ResponseWriter, request *http.R
 		server.createProject(writer, request)
 	case path == "dp-profiles" && request.Method == http.MethodGet:
 		server.listDPProfiles(writer, request)
+	case strings.HasPrefix(path, "dp-profiles/") && strings.HasSuffix(path, "/definitions") && request.Method == http.MethodGet:
+		code := strings.TrimSuffix(strings.TrimPrefix(path, "dp-profiles/"), "/definitions")
+		server.listDPDefinitions(writer, request, code)
+	case path == "dp-definitions" && request.Method == http.MethodPost:
+		server.createDPDefinition(writer, request)
+	case strings.HasPrefix(path, "dp-definitions/") && request.Method == http.MethodDelete:
+		server.deleteDPDefinition(writer, request, strings.TrimPrefix(path, "dp-definitions/"))
 	case path == "products" && request.Method == http.MethodGet:
 		server.listProducts(writer, request)
 	case path == "products" && request.Method == http.MethodPost:
@@ -398,6 +406,70 @@ func (server *Server) listDPProfiles(writer http.ResponseWriter, request *http.R
 			items = append(items, map[string]string{"code": profile.Code, "name": profile.Name})
 		}
 		writeJSON(writer, http.StatusOK, map[string]any{"items": items})
+	})
+}
+
+func (server *Server) listDPDefinitions(writer http.ResponseWriter, request *http.Request, profileCode string) {
+	server.withDeveloperActor(writer, request, func(ctx context.Context, actor project.Actor) {
+		defs, err := server.projects().ListDPDefinitionsForProfile(ctx, actor, profileCode)
+		if err != nil {
+			writeProjectError(writer, err)
+			return
+		}
+		items := make([]map[string]any, 0, len(defs))
+		for _, d := range defs {
+			item := map[string]any{
+				"id": d.ID, "code": d.Code, "type": d.Type, "direction": d.Direction,
+				"owner_account_id": d.OwnerAccountID,
+				"created_at": d.CreatedAt.UTC().Format(timeLayout),
+			}
+			if len(d.Spec) > 0 {
+				var spec any
+				if json.Unmarshal(d.Spec, &spec) == nil {
+					item["spec"] = spec
+				}
+			}
+			items = append(items, item)
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"items": items})
+	})
+}
+
+func (server *Server) createDPDefinition(writer http.ResponseWriter, request *http.Request) {
+	server.withDeveloperActor(writer, request, func(ctx context.Context, actor project.Actor) {
+		var body struct {
+			Code           string   `json:"code"`
+			Type           string   `json:"type"`
+			Direction      string   `json:"direction"`
+			Spec           []byte   `json:"spec"`
+			DPProfileCodes []string `json:"dp_profile_codes"`
+		}
+		if !decodeBody(writer, request, &body) {
+			return
+		}
+		def, err := server.projects().CreateDPDefinition(ctx, actor, project.CreateDPDefinitionInput{
+			Code: body.Code, Type: body.Type, Direction: body.Direction,
+			Spec: body.Spec, DPProfileCodes: body.DPProfileCodes,
+		})
+		if err != nil {
+			writeProjectError(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusCreated, map[string]any{"dp_definition": map[string]any{
+			"id": def.ID, "code": def.Code, "type": def.Type, "direction": def.Direction,
+			"owner_account_id": def.OwnerAccountID,
+			"created_at": def.CreatedAt.UTC().Format(timeLayout),
+		}})
+	})
+}
+
+func (server *Server) deleteDPDefinition(writer http.ResponseWriter, request *http.Request, id string) {
+	server.withDeveloperActor(writer, request, func(ctx context.Context, actor project.Actor) {
+		if err := server.projects().DeleteDPDefinition(ctx, actor, id); err != nil {
+			writeProjectError(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]string{"status": "deleted"})
 	})
 }
 
