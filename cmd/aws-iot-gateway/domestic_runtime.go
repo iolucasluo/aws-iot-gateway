@@ -116,8 +116,13 @@ func runDomesticGateway(
 	if err != nil {
 		return err
 	}
-	deviceService := devicemodule.NewService(
+	dpProfileRepository, err := gatewaypostgres.NewDPProfileRepository(database)
+	if err != nil {
+		return err
+	}
+	deviceService := devicemodule.NewServiceWithDP(
 		devicePublisher, ackStore, commandRepository, config.DomesticMQTTTopicPrefix, nil,
+		dpProfileRepository,
 	)
 
 	// OTA is opt-in so existing domestic media-only compositions keep starting unchanged.
