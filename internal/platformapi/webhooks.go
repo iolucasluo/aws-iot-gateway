@@ -2,9 +2,11 @@ package platformapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/operations"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/portalaccount"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/project"
 )
@@ -107,3 +109,71 @@ func (server *Server) serveDeveloperWebhook(writer http.ResponseWriter, request 
 }
 
 var _ = portalaccount.AudienceDeveloper
+
+type webhookDeliveryResponse struct {
+	ID             string `json:"id"`
+	DeliveryID     string `json:"delivery_id"`
+	EventType      string `json:"event_type"`
+	DeliveryStatus string `json:"delivery_status"`
+	OutboxStatus   string `json:"outbox_status"`
+	Attempts       int    `json:"attempts"`
+	StatusCode     *int   `json:"status_code,omitempty"`
+	ErrorCode      string `json:"error_code,omitempty"`
+	CreatedAt      string `json:"created_at"`
+	LastAttemptAt  string `json:"last_attempt_at,omitempty"`
+}
+
+func newWebhookDeliveryResponse(value operations.WebhookDelivery) webhookDeliveryResponse {
+	response := webhookDeliveryResponse{
+		ID: value.ID, DeliveryID: value.DeliveryID, EventType: value.EventType,
+		DeliveryStatus: value.DeliveryStatus, OutboxStatus: value.OutboxStatus,
+		Attempts: value.Attempts, StatusCode: value.StatusCode, ErrorCode: value.ErrorCode,
+		CreatedAt: value.CreatedAt.UTC().Format(timeLayout),
+	}
+	if value.LastAttemptAt != nil {
+		response.LastAttemptAt = value.LastAttemptAt.UTC().Format(timeLayout)
+	}
+	return response
+}
+
+func (server *Server) listProjectWebhookDeliveries(writer http.ResponseWriter, request *http.Request, projectID string) {
+	if !server.requireOperations(writer) {
+		return
+	}
+	page, ok := parsePage(writer, request)
+	if !ok {
+		return
+	}
+	status := strings.TrimSpace(request.URL.Query().Get("status"))
+	if status != "" && status != "delivered" && status != "undelivered" {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "status must be delivered or undelivered")
+		return
+	}
+	server.withDeveloperActor(writer, request, func(ctx context.Context, actor project.Actor) {
+		// 先经项目域做 owner/scope 校验，再查询与项目主体绑定的 outbox。
+		if _, err := server.projects().ListWebhooks(ctx, actor, projectID); err != nil {
+			writeProjectError(writer, err)
+			return
+		}
+		values, err := server.operations().ListWebhookDeliveries(ctx, operations.WebhookDeliveryFilter{
+			ProjectID: projectID, Status: status, Page: page,
+		})
+		if err != nil {
+			if errors.Is(err, operations.ErrInvalidQuery) {
+				writeError(writer, http.StatusBadRequest, "invalid_request", "request is invalid")
+				return
+			}
+			writeOperationsError(writer, err)
+			return
+		}
+		items := make([]webhookDeliveryResponse, 0, len(values))
+		for _, value := range values {
+			items = append(items, newWebhookDeliveryResponse(value))
+		}
+		cursor := ""
+		if last := len(values) - 1; last >= 0 {
+			cursor = nextCursor(page.Limit, len(values), values[last].CreatedAt, values[last].ID)
+		}
+		writePage(writer, items, cursor)
+	})
+}

@@ -55,6 +55,42 @@ func seedOperationsFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 	`, opsAuditID); err != nil {
 		t.Fatalf("seed audit log: %v", err)
 	}
+	for _, fixture := range []struct {
+		eventID, outboxID, deliveryID, delivery string
+		status, errorCode                       string
+		statusCode                              *int
+		attempts                                int
+	}{
+		{eventID: "038f0000-0000-0000-0000-0000000000e1", outboxID: "018f0000-0000-0000-0000-0000000000e1", deliveryID: "delivery-ops-ok", delivery: "delivery-ops-ok", status: "delivered", statusCode: intPointer(200), attempts: 1},
+		{eventID: "038f0000-0000-0000-0000-0000000000e2", outboxID: "018f0000-0000-0000-0000-0000000000e2", deliveryID: "delivery-ops-dead", delivery: "delivery-ops-dead", status: "dead", statusCode: intPointer(503), errorCode: "http_status", attempts: 8},
+	} {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO device_events (id, device_registry_id, event_type, boot_id, event_seq, data)
+			VALUES ($1,$2,$3,$4,$5,'{}'::jsonb)
+		`, fixture.eventID, opsDeviceID, "feeding_done", "boot-ops", fixture.attempts); err != nil {
+			t.Fatalf("seed webhook event %s: %v", fixture.eventID, err)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO webhook_outbox (id, device_event_id, internal_app_id, delivery_id, event_type, payload, status, attempts)
+			VALUES ($1,$2,$3,$4,'feeding_done','{}'::jsonb,$5,$6)
+		`, fixture.outboxID, fixture.eventID, opsSubjectID, fixture.deliveryID, fixture.status, fixture.attempts); err != nil {
+			t.Fatalf("seed webhook outbox %s: %v", fixture.outboxID, err)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO webhook_deliveries (id, webhook_outbox_id, attempt, status_code, error_code)
+			VALUES ($1,$2,$3,$4,$5)
+		`, fixture.delivery, fixture.outboxID, fixture.attempts, fixture.statusCode, nullableString(fixture.errorCode)); err != nil {
+			t.Fatalf("seed webhook delivery %s: %v", fixture.delivery, err)
+		}
+	}
+}
+
+func intPointer(value int) *int { return &value }
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func TestOperationsRepositoryProjectsDeviceStateOwnershipAndAudit(t *testing.T) {
@@ -116,6 +152,19 @@ func TestOperationsRepositoryProjectsDeviceStateOwnershipAndAudit(t *testing.T) 
 	}
 	if other, err := service.ListBindings(ctx, operations.BindingFilter{ProjectID: "50000000-0000-0000-0000-0000000000ff"}); err != nil || len(other) != 0 {
 		t.Fatalf("ListBindings(other project) = %d, err = %v; want 0", len(other), err)
+	}
+	deliveries, err := service.ListWebhookDeliveries(ctx, operations.WebhookDeliveryFilter{ProjectID: opsSubjectID})
+	if err != nil || len(deliveries) != 2 {
+		t.Fatalf("ListWebhookDeliveries() = %d, err = %v; want 2", len(deliveries), err)
+	}
+	if deliveries[0].DeliveryStatus != "undelivered" || deliveries[0].OutboxStatus != "dead" || deliveries[0].StatusCode == nil || *deliveries[0].StatusCode != 503 {
+		t.Fatalf("undelivered projection = %+v", deliveries[0])
+	}
+	if delivered, err := service.ListWebhookDeliveries(ctx, operations.WebhookDeliveryFilter{ProjectID: opsSubjectID, Status: "delivered"}); err != nil || len(delivered) != 1 || delivered[0].DeliveryID != "delivery-ops-ok" {
+		t.Fatalf("ListWebhookDeliveries(delivered) = %+v, err = %v", delivered, err)
+	}
+	if undelivered, err := service.ListWebhookDeliveries(ctx, operations.WebhookDeliveryFilter{ProjectID: opsSubjectID, Status: "undelivered"}); err != nil || len(undelivered) != 1 || undelivered[0].DeliveryID != "delivery-ops-dead" {
+		t.Fatalf("ListWebhookDeliveries(undelivered) = %+v, err = %v", undelivered, err)
 	}
 
 	activations, err := service.ListActivations(ctx, operations.ActivationFilter{Status: "activated"})

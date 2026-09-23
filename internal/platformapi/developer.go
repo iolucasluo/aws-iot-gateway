@@ -237,6 +237,8 @@ func (server *Server) serveDeveloperProject(writer http.ResponseWriter, request 
 		server.listDeveloperProjectDevices(writer, request, projectID)
 	case sub == "webhooks" && request.Method == http.MethodGet:
 		server.listProjectWebhooks(writer, request, projectID)
+	case sub == "webhooks/deliveries" && request.Method == http.MethodGet:
+		server.listProjectWebhookDeliveries(writer, request, projectID)
 	case sub == "webhooks" && request.Method == http.MethodPost:
 		server.createProjectWebhook(writer, request, projectID)
 	case sub == "credentials" && request.Method == http.MethodGet:

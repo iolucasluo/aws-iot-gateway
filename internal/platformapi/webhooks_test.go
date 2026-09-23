@@ -4,6 +4,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/operations"
 )
 
 // 项目 webhook 的 HTTP 契约：secret 只在创建响应出现一次，列表绝不含它。
@@ -76,5 +79,61 @@ func TestDeveloperWebhookRoutesKeepTheSecretOutOfListings(t *testing.T) {
 	second := fixture.login(t, developerTwoEmail)
 	if recorder := fixture.call(t, http.MethodGet, "/api/v1/developer/projects/"+projectID+"/webhooks", "", second); recorder.Code != http.StatusNotFound {
 		t.Fatalf("cross-developer webhook list status = %d, want 404", recorder.Code)
+	}
+}
+
+func TestDeveloperWebhookDeliveryRoutesListAndFilterRecords(t *testing.T) {
+	t.Parallel()
+	fixture := newDeveloperFixture(t)
+	token := fixture.login(t, developerOneEmail)
+
+	created := fixture.call(t, http.MethodPost, "/api/v1/developer/projects",
+		`{"project_type":"cloud","name":"Delivery History"}`, token)
+	projectID := decodeJSON[struct {
+		Project struct {
+			ID string `json:"id"`
+		} `json:"project"`
+	}](t, created).Project.ID
+
+	deliveredStatusCode, deadStatusCode := 200, 503
+	fixture.ops.webhookDeliveries = []operations.WebhookDelivery{
+		{
+			ID: "outbox-delivered", DeliveryID: "delivery-ok", EventType: "feeding_done",
+			DeliveryStatus: "delivered", OutboxStatus: "delivered", Attempts: 1,
+			StatusCode: &deliveredStatusCode, CreatedAt: time.Date(2026, 9, 23, 1, 2, 3, 0, time.UTC),
+		},
+		{
+			ID: "outbox-dead", DeliveryID: "delivery-dead", EventType: "motion_detected",
+			DeliveryStatus: "undelivered", OutboxStatus: "dead", Attempts: 8,
+			StatusCode: &deadStatusCode, ErrorCode: "http_status",
+			CreatedAt: time.Date(2026, 9, 23, 1, 1, 3, 0, time.UTC),
+		},
+	}
+
+	listed := fixture.call(t, http.MethodGet,
+		"/api/v1/developer/projects/"+projectID+"/webhooks/deliveries?status=undelivered", "", token)
+	if listed.Code != http.StatusOK {
+		t.Fatalf("list webhook deliveries status = %d body = %s", listed.Code, listed.Body.String())
+	}
+	payload := decodeJSON[struct {
+		Items []struct {
+			DeliveryID     string `json:"delivery_id"`
+			DeliveryStatus string `json:"delivery_status"`
+			OutboxStatus   string `json:"outbox_status"`
+		} `json:"items"`
+	}](t, listed)
+	if len(payload.Items) != 1 || payload.Items[0].DeliveryID != "delivery-dead" ||
+		payload.Items[0].DeliveryStatus != "undelivered" || payload.Items[0].OutboxStatus != "dead" {
+		t.Fatalf("webhook delivery payload = %+v", payload.Items)
+	}
+	if fixture.ops.lastWebhookDelivery.ProjectID != projectID || fixture.ops.lastWebhookDelivery.Status != "undelivered" {
+		t.Fatalf("webhook delivery filter = %+v", fixture.ops.lastWebhookDelivery)
+	}
+	if invalid := fixture.call(t, http.MethodGet, "/api/v1/developer/projects/"+projectID+"/webhooks/deliveries?status=broken", "", token); invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid webhook delivery status = %d body = %s", invalid.Code, invalid.Body.String())
+	}
+	second := fixture.login(t, developerTwoEmail)
+	if forbidden := fixture.call(t, http.MethodGet, "/api/v1/developer/projects/"+projectID+"/webhooks/deliveries", "", second); forbidden.Code != http.StatusNotFound {
+		t.Fatalf("cross-developer webhook delivery list status = %d, want 404", forbidden.Code)
 	}
 }

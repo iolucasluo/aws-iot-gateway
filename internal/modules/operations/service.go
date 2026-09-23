@@ -17,6 +17,7 @@ type Repository interface {
 	ListCertificates(ctx context.Context, filter CertificateFilter) ([]Certificate, error)
 	ListFirmwareVersions(ctx context.Context, filter FirmwareVersionFilter) ([]FirmwareVersion, error)
 	ListOTADeployments(ctx context.Context, filter OTADeploymentFilter) ([]OTADeployment, error)
+	ListWebhookDeliveries(ctx context.Context, filter WebhookDeliveryFilter) ([]WebhookDelivery, error)
 }
 
 // QueryService 归一化查询参数并委托仓库。它不写任何状态。
@@ -59,6 +60,16 @@ func (service *QueryService) ListActivations(ctx context.Context, filter Activat
 	filter.Status = strings.TrimSpace(filter.Status)
 	filter.Page.Limit = normalizeLimit(filter.Page.Limit)
 	return service.repository.ListActivations(ctx, filter)
+}
+
+func (service *QueryService) ListWebhookDeliveries(ctx context.Context, filter WebhookDeliveryFilter) ([]WebhookDelivery, error) {
+	filter.ProjectID = strings.TrimSpace(filter.ProjectID)
+	filter.Status = strings.TrimSpace(filter.Status)
+	if filter.Status != "" && filter.Status != "delivered" && filter.Status != "undelivered" {
+		return nil, fmt.Errorf("%w: webhook delivery status is invalid", ErrInvalidQuery)
+	}
+	filter.Page.Limit = normalizeLimit(filter.Page.Limit)
+	return service.repository.ListWebhookDeliveries(ctx, filter)
 }
 
 func (service *QueryService) ListDeviceTokens(ctx context.Context, filter DeviceTokenFilter) ([]DeviceToken, error) {

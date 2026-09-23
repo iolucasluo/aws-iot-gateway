@@ -24,21 +24,23 @@ const (
 
 // stubOperationsRepository 让 admin 契约测试不依赖数据库。
 type stubOperationsRepository struct {
-	devices          []operations.Device
-	bindings         []operations.Binding
-	activations      []operations.Activation
-	auditLogs        []operations.AuditEntry
-	lastDevice       operations.DeviceFilter
-	lastAudit        operations.AuditFilter
-	lastToken        operations.DeviceTokenFilter
-	lastCertificate  operations.CertificateFilter
-	tokens           []operations.DeviceToken
-	certificates     []operations.Certificate
-	firmwareVersions []operations.FirmwareVersion
-	otaDeployments   []operations.OTADeployment
-	failDevices      bool
-	lastFirmware     operations.FirmwareVersionFilter
-	lastDeployment   operations.OTADeploymentFilter
+	devices             []operations.Device
+	bindings            []operations.Binding
+	activations         []operations.Activation
+	auditLogs           []operations.AuditEntry
+	lastDevice          operations.DeviceFilter
+	lastAudit           operations.AuditFilter
+	lastToken           operations.DeviceTokenFilter
+	lastCertificate     operations.CertificateFilter
+	tokens              []operations.DeviceToken
+	certificates        []operations.Certificate
+	firmwareVersions    []operations.FirmwareVersion
+	otaDeployments      []operations.OTADeployment
+	failDevices         bool
+	lastFirmware        operations.FirmwareVersionFilter
+	lastDeployment      operations.OTADeploymentFilter
+	webhookDeliveries   []operations.WebhookDelivery
+	lastWebhookDelivery operations.WebhookDeliveryFilter
 }
 
 func (stub *stubOperationsRepository) ListDevices(_ context.Context, filter operations.DeviceFilter) ([]operations.Device, error) {
@@ -100,6 +102,20 @@ func (stub *stubOperationsRepository) ListFirmwareVersions(_ context.Context, fi
 func (stub *stubOperationsRepository) ListOTADeployments(_ context.Context, filter operations.OTADeploymentFilter) ([]operations.OTADeployment, error) {
 	stub.lastDeployment = filter
 	return stub.otaDeployments, nil
+}
+
+func (stub *stubOperationsRepository) ListWebhookDeliveries(_ context.Context, filter operations.WebhookDeliveryFilter) ([]operations.WebhookDelivery, error) {
+	stub.lastWebhookDelivery = filter
+	if filter.Status == "" {
+		return stub.webhookDeliveries, nil
+	}
+	items := make([]operations.WebhookDelivery, 0, len(stub.webhookDeliveries))
+	for _, item := range stub.webhookDeliveries {
+		if item.DeliveryStatus == filter.Status {
+			items = append(items, item)
+		}
+	}
+	return items, nil
 }
 
 type adminFixture struct {

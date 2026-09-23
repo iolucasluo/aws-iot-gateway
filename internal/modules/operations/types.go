@@ -1,4 +1,4 @@
-// Package operations 提供平台面（staff）只读运维视图。
+// Package operations 提供平台面只读投影，包括 staff 运维视图与项目 Webhook 投递历史。
 //
 // 它不拥有任何设备域状态：所有投影都直接读 device_registry / device_bindings /
 // device_activations / audit_logs，不复制、不缓存、不写回。
@@ -161,6 +161,29 @@ type AuditEntry struct {
 	ErrorCode      string
 	Metadata       map[string]any
 	CreatedAt      time.Time
+}
+
+// WebhookDeliveryFilter 是项目 Webhook 投递记录的查询条件。
+// Status 为空表示全部；可选值为 delivered / undelivered。
+type WebhookDeliveryFilter struct {
+	ProjectID string
+	Status    string
+	Page      Page
+}
+
+// WebhookDelivery 是一条 Webhook 事件的最终投递投影。
+// DeliveryStatus 将 outbox 的内部状态收敛为门户可理解的 delivered / undelivered。
+type WebhookDelivery struct {
+	ID             string
+	DeliveryID     string
+	EventType      string
+	DeliveryStatus string
+	OutboxStatus   string
+	Attempts       int
+	StatusCode     *int
+	ErrorCode      string
+	CreatedAt      time.Time
+	LastAttemptAt  *time.Time
 }
 
 // DeviceTokenFilter 是设备令牌列表的过滤条件。

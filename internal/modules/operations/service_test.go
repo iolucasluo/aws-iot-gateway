@@ -10,15 +10,16 @@ import (
 const opsTestDeviceSN = "fdr-000000000000000000000000000000a1"
 
 type stubRepository struct {
-	deviceFilter      DeviceFilter
-	bindingFilter     BindingFilter
-	activationFilter  ActivationFilter
-	auditFilter       AuditFilter
-	tokenFilter       DeviceTokenFilter
-	certificateFilter CertificateFilter
-	firmwareFilter    FirmwareVersionFilter
-	deploymentFilter  OTADeploymentFilter
-	err               error
+	deviceFilter          DeviceFilter
+	bindingFilter         BindingFilter
+	activationFilter      ActivationFilter
+	auditFilter           AuditFilter
+	tokenFilter           DeviceTokenFilter
+	certificateFilter     CertificateFilter
+	firmwareFilter        FirmwareVersionFilter
+	deploymentFilter      OTADeploymentFilter
+	webhookDeliveryFilter WebhookDeliveryFilter
+	err                   error
 }
 
 func (stub *stubRepository) ListDevices(_ context.Context, filter DeviceFilter) ([]Device, error) {
@@ -57,6 +58,10 @@ func (stub *stubRepository) ListFirmwareVersions(_ context.Context, filter Firmw
 }
 func (stub *stubRepository) ListOTADeployments(_ context.Context, filter OTADeploymentFilter) ([]OTADeployment, error) {
 	stub.deploymentFilter = filter
+	return nil, stub.err
+}
+func (stub *stubRepository) ListWebhookDeliveries(_ context.Context, filter WebhookDeliveryFilter) ([]WebhookDelivery, error) {
+	stub.webhookDeliveryFilter = filter
 	return nil, stub.err
 }
 
@@ -160,6 +165,16 @@ func TestQueryServiceNormalizesFiltersAndLimits(t *testing.T) {
 	if repository.deploymentFilter.DeviceSN != opsTestDeviceSN || repository.deploymentFilter.State != "succeeded" ||
 		repository.deploymentFilter.Page.Limit != 50 {
 		t.Fatalf("deployment filter = %+v", repository.deploymentFilter)
+	}
+	if _, err := service.ListWebhookDeliveries(ctx, WebhookDeliveryFilter{ProjectID: " project-1 ", Status: " delivered "}); err != nil {
+		t.Fatalf("ListWebhookDeliveries() error = %v", err)
+	}
+	if repository.webhookDeliveryFilter.ProjectID != "project-1" || repository.webhookDeliveryFilter.Status != "delivered" ||
+		repository.webhookDeliveryFilter.Page.Limit != 50 {
+		t.Fatalf("webhook delivery filter = %+v", repository.webhookDeliveryFilter)
+	}
+	if _, err := service.ListWebhookDeliveries(ctx, WebhookDeliveryFilter{Status: "unknown"}); !errors.Is(err, ErrInvalidQuery) {
+		t.Fatalf("invalid webhook delivery status error = %v, want ErrInvalidQuery", err)
 	}
 	if _, err := service.FindDevice(ctx, "   "); !errors.Is(err, ErrInvalidQuery) {
 		t.Fatalf("FindDevice(blank) error = %v, want ErrInvalidQuery", err)

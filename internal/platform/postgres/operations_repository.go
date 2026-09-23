@@ -331,3 +331,53 @@ func (repository *OperationsRepository) ListOTADeployments(ctx context.Context, 
 	}
 	return deployments, nil
 }
+
+func (repository *OperationsRepository) ListWebhookDeliveries(ctx context.Context, filter operations.WebhookDeliveryFilter) ([]operations.WebhookDelivery, error) {
+	beforeAt, beforeID := keyset(filter.Page.Before)
+	rows, err := repository.pool.Query(ctx, `
+		SELECT o.id::text, o.delivery_id, o.event_type,
+		       CASE WHEN COALESCE(last_delivery.status_code BETWEEN 200 AND 299, false)
+		            THEN 'delivered' ELSE 'undelivered' END,
+		       o.status, o.attempts, last_delivery.status_code,
+		       CASE
+		         WHEN last_delivery.status_code IS NULL
+		              AND last_delivery.error_code IS NULL
+		              AND last_delivery.attempted_at IS NOT NULL THEN 'not_attempted'
+		         ELSE COALESCE(last_delivery.error_code, '')
+		       END,
+		       o.created_at, last_delivery.attempted_at
+		FROM webhook_outbox o
+		LEFT JOIN LATERAL (
+			SELECT d.status_code, d.error_code, d.attempted_at
+			FROM webhook_deliveries d
+			WHERE d.webhook_outbox_id = o.id
+			ORDER BY d.attempt DESC
+			LIMIT 1
+		) last_delivery ON true
+		WHERE o.internal_app_id = $1
+		  AND ($2 = ''
+		       OR ($2 = 'delivered' AND COALESCE(last_delivery.status_code BETWEEN 200 AND 299, false))
+		       OR ($2 = 'undelivered' AND NOT COALESCE(last_delivery.status_code BETWEEN 200 AND 299, false)))
+		  AND ($3::timestamptz IS NULL OR (o.created_at, o.id::text) < ($3::timestamptz, $4))
+		ORDER BY o.created_at DESC, o.id DESC
+		LIMIT $5
+	`, filter.ProjectID, filter.Status, beforeAt, beforeID, filter.Page.Limit)
+	if err != nil {
+		return nil, fmt.Errorf("list webhook deliveries: %w", err)
+	}
+	defer rows.Close()
+	deliveries := make([]operations.WebhookDelivery, 0, filter.Page.Limit)
+	for rows.Next() {
+		var delivery operations.WebhookDelivery
+		if err := rows.Scan(&delivery.ID, &delivery.DeliveryID, &delivery.EventType,
+			&delivery.DeliveryStatus, &delivery.OutboxStatus, &delivery.Attempts,
+			&delivery.StatusCode, &delivery.ErrorCode, &delivery.CreatedAt, &delivery.LastAttemptAt); err != nil {
+			return nil, fmt.Errorf("scan webhook delivery: %w", err)
+		}
+		deliveries = append(deliveries, delivery)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list webhook deliveries: %w", err)
+	}
+	return deliveries, nil
+}
