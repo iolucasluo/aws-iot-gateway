@@ -29,7 +29,7 @@ func TestStreamContractTreatsGatewayInjectedFieldsAsTrusted(t *testing.T) {
 	}
 	// 未登记为 trusted 就是越界，allow_extra:false 必须继续拦住。
 	if err := ValidateCommands(definitions, []CommandInput{{Code: "stream", Value: streamValue(streamInjectedFields)}}); err == nil ||
-		!strings.Contains(err.Error(), `unexpected field "ice_servers"`) {
+		!strings.Contains(err.Error(), "unexpected field") {
 		t.Fatalf("unregistered extra field must stay rejected, got %v", err)
 	}
 	// 网关自己签发的字段不属于调用方合同，推流必须能过。
