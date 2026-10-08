@@ -123,10 +123,24 @@ func (service *QueryService) List(ctx context.Context, deviceID, eventType strin
 	return items, next, nil
 }
 
+// PetPhotoWorkflow owns the private capture transaction. Internal ready messages
+// must never be persisted as user events; final events are checked against the
+// verified, device-bound image before the ordinary event repository sees them.
+type PetPhotoWorkflow interface {
+	CaptureReady(context.Context, Event) error
+	VerifyFinal(context.Context, Event) error
+}
+
 type IngestService struct {
 	namespace  string
 	ackSink    ACKSink
 	repository IngestRepository
+	petPhotos  PetPhotoWorkflow
+}
+
+// SetPetPhotoWorkflow is called at process startup before ingest workers run.
+func (service *IngestService) SetPetPhotoWorkflow(workflow PetPhotoWorkflow) {
+	service.petPhotos = workflow
 }
 
 func NewIngestService(namespace string, ackSink ACKSink, repository IngestRepository) (*IngestService, error) {
@@ -272,7 +286,56 @@ func (service *IngestService) handleMessage(ctx context.Context, message map[str
 	if err != nil {
 		return err
 	}
+	if event.EventType == "pet_photo_ready_v1" {
+		if !validPetPhotoReady(event.Data) || service.petPhotos == nil {
+			return fmt.Errorf("pet photo capture is not authorized")
+		}
+		return service.petPhotos.CaptureReady(ctx, event)
+	}
+	if event.EventType == "pet_detected" &&
+		(event.Data["schema"] != nil || event.Data["media_id"] != nil ||
+			event.Data["image_url"] != nil || event.Data["model_id"] == "0x0A00002C") {
+		if !validPetPhotoFinal(event.DeviceSN, event.Data) || service.petPhotos == nil {
+			return fmt.Errorf("pet photo final event is not authorized")
+		}
+		if err := service.petPhotos.VerifyFinal(ctx, event); err != nil {
+			return fmt.Errorf("verify pet photo before event storage: %w", err)
+		}
+	}
 	return service.repository.Store(ctx, event)
+}
+
+func validPetPhotoReady(data map[string]any) bool {
+	triggerID, _ := data["trigger_id"].(string)
+	hash, _ := data["sha256"].(string)
+	size, ok := integer(data["size_bytes"])
+	if !uuidPattern.MatchString(triggerID) || data["model_id"] != "0x0A00002C" ||
+		!ok || size <= 0 || size > 256*1024 || len(hash) != 64 {
+		return false
+	}
+	for _, digit := range hash {
+		if (digit < '0' || digit > '9') && (digit < 'a' || digit > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func validPetPhotoFinal(deviceSN string, data map[string]any) bool {
+	triggerID, _ := data["trigger_id"].(string)
+	mediaID, _ := data["media_id"].(string)
+	modelID, _ := data["model_id"].(string)
+	rawURL, _ := data["image_url"].(string)
+	if data["schema"] != "pet-detection.v1" ||
+		!uuidPattern.MatchString(triggerID) || !uuidPattern.MatchString(mediaID) ||
+		modelID != "0x0A00002C" || len(rawURL) > 1024 {
+		return false
+	}
+	parsed, err := url.Parse(rawURL)
+	expectedPath := "/api/v1/openapi/devices/" + deviceSN + "/pet-photos/" + mediaID
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" &&
+		parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == "" &&
+		parsed.EscapedPath() == expectedPath && parsed.Opaque == ""
 }
 
 func safeLocalMediaACKForStorage(message map[string]any, sessionID string) bool {

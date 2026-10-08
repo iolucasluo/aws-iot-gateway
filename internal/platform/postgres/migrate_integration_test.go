@@ -77,7 +77,7 @@ func TestMigrateCreatesRequiredTablesAndGlobalBindingConstraint(t *testing.T) {
 	for index, definition := range definitions {
 		codes[index] = definition.Code
 	}
-	wantCodes := []string{"audio_playback", "audio_reset", "audio_update", "clear_jam", "device_info", "factory_reset", "feed", "feed_done", "feed_error", "get_feed_log", "get_log", "get_schedule", "led", "local_media", "motion_det", "motion_track", "night_mode", "ota_install", "pet_det", "ptz", "query_status", "reboot", "recommission", "record_clip", "record_mode", "record_start", "record_stop", "sd_files", "sd_recordings_v1", "sd_thumbnail_v1", "sdcard", "sdcard_status", "set_schedule", "snapshot", "speaker_vol", "status", "stream", "two_way_audio", "video_res"}
+	wantCodes := []string{"audio_playback", "audio_reset", "audio_update", "clear_jam", "device_info", "factory_reset", "feed", "feed_done", "feed_error", "get_feed_log", "get_log", "get_schedule", "led", "local_media", "motion_det", "motion_track", "night_mode", "ota_install", "pet_det", "pet_detection_v1", "ptz", "query_status", "reboot", "recommission", "record_clip", "record_mode", "record_start", "record_stop", "sd_files", "sd_recordings_v1", "sd_thumbnail_v1", "sdcard", "sdcard_status", "set_schedule", "snapshot", "speaker_vol", "status", "stream", "two_way_audio", "video_res"}
 	if !slices.Equal(codes, wantCodes) {
 		t.Fatalf("feeder product DP codes = %v, want %v", codes, wantCodes)
 	}
@@ -188,8 +188,8 @@ func TestProductSeedIsExplicitAndIdempotent(t *testing.T) {
 	`).Scan(&minionDPCount); err != nil {
 		t.Fatalf("count minion product DPs: %v", err)
 	}
-	if dpCount != 95 || feederDPCount != 39 || minionDPCount != 28 {
-		t.Fatalf("seeded product DP counts = total %d/feeder %d/minion %d, want 95/39/28", dpCount, feederDPCount, minionDPCount)
+	if dpCount != 96 || feederDPCount != 40 || minionDPCount != 28 {
+		t.Fatalf("seeded product DP counts = total %d/feeder %d/minion %d, want 96/40/28", dpCount, feederDPCount, minionDPCount)
 	}
 	var minionDetailedCount int
 	if err := pool.QueryRow(ctx, `

@@ -134,6 +134,9 @@ for name in ("postgres", "redis"):
 for marker in ("CN_STAGING_MQTTS_PORT=8883", "CN_STAGING_TURN_RELAY_MIN_PORT=49360", "CN_CLOUD_PUBLIC_IP="):
     if marker not in stack_example:
         raise SystemExit(f"cloud stack example lacks {marker}")
+for marker in ("PET_PHOTO_PUBLIC_ORIGIN=https://api-staging.livpet.top",):
+    if marker not in gateway_example:
+        raise SystemExit(f"cloud Gateway example lacks {marker}")
 for marker in ("GATEWAY_OBJECT_PUBLIC_ENDPOINT=", "GATEWAY_OBJECT_BUCKET=", "GATEWAY_OBJECT_ACCESS_KEY_ID=", "GATEWAY_OBJECT_ACCESS_KEY_SECRET="):
     if marker not in gateway_example:
         raise SystemExit(f"cloud Gateway example lacks {marker}")

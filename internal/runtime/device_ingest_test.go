@@ -105,3 +105,38 @@ func TestStartDeviceIngestRejectsUnconfiguredRuntime(t *testing.T) {
 		t.Fatal("StartDeviceIngest(nil) succeeded")
 	}
 }
+
+type devicePetPhotoWorkflowStub struct{ ready int }
+
+func (stub *devicePetPhotoWorkflowStub) CaptureReady(context.Context, events.Event) error {
+	stub.ready++
+	return nil
+}
+func (stub *devicePetPhotoWorkflowStub) VerifyFinal(context.Context, events.Event) error { return nil }
+
+func TestDomesticDeviceIngestRoutesInternalPetPhotoReadyPrivately(t *testing.T) {
+	client := &deviceIngestMessagingStub{}
+	messaging := &MessagingRuntime{Client: client, TopicPrefix: "cn-staging"}
+	repository := &deviceIngestRepositoryStub{}
+	workflow := &devicePetPhotoWorkflowStub{}
+	subscriptions, err := StartDeviceIngest(context.Background(), messaging, &deviceIngestACKStub{}, repository, workflow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer subscriptions.Close()
+	for _, subscription := range client.subscriptions {
+		if subscription.TopicFilter != "dt/cn-staging/+/event" {
+			continue
+		}
+		err = subscription.Handler(context.Background(), provider.DeviceMessage{
+			Topic:   "dt/cn-staging/fdr-0001/event",
+			Payload: []byte(`{"event_id":"018f0000-0000-7000-8000-000000000011","event_type":"pet_photo_ready_v1","boot_id":"5ce0b7f2-1f0a-4ed7-9f06-bf6ce8393148","event_seq":11,"data":{"trigger_id":"018f0000-0000-7000-8000-000000000012","model_id":"0x0A00002C","size_bytes":100,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if workflow.ready != 1 || repository.event.ID != "" {
+		t.Fatalf("private ready leaked: workflow=%d event=%#v", workflow.ready, repository.event)
+	}
+}

@@ -84,7 +84,7 @@ App/backend 需使用 PID-only 创建请求；携带 dp_profile 会被拒绝。�
 
 台灯没有喂食电机、喂食计划/日志、提示音更新，
 不加入 feed、clear_jam、set_schedule、get_schedule、get_feed_log、audio_update、audio_reset。
-Anyka 的 led 是指示灯，没有亮度或色温参数；pet_det 是 motion_track 的旧别名，不是宠物分类。
+Anyka 的 led 是指示灯，没有亮度或色温参数；pet_det 是 motion_track 的旧别名，不是宠物分类。 新的 `pet_detection_v1` 是 feeder 独立 PET 模型 get/set 命令，旧固件对其返回不支持；App 必须以设备 ACK 能力判定展示。
 
 目录覆盖注册命令，不把遥测字段、诊断命令和旧文档中的 sd_playback 当作 Anyka DP。
 sd_recordings_v1、sd_thumbnail_v1、local_media、ota_install 记录为 disabled 普通命令成员，

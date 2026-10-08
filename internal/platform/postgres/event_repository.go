@@ -88,6 +88,11 @@ func (repository *EventRepository) Store(ctx context.Context, event events.Event
 	if commandTag.RowsAffected() == 0 {
 		return transaction.Commit(ctx)
 	}
+	if event.EventType == "pet_detected" && event.Data["schema"] == "pet-detection.v1" {
+		if err := finalizePetPhoto(ctx, transaction, event, deviceID); err != nil {
+			return err
+		}
+	}
 	if event.EventType == "recording_finalized" {
 		if err := projectLocalRecordingFinalized(ctx, transaction, deviceID, event); err != nil {
 			return err

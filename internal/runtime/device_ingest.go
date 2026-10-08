@@ -17,7 +17,11 @@ func StartDeviceIngest(
 	messaging *MessagingRuntime,
 	ackSink events.ACKSink,
 	repository events.IngestRepository,
+	petPhotos ...events.PetPhotoWorkflow,
 ) (*SubscriptionSet, error) {
+	if len(petPhotos) > 1 {
+		return nil, errors.New("device ingest accepts only one pet photo workflow")
+	}
 	if ctx == nil || messaging == nil || messaging.Client == nil {
 		return nil, errors.New("device ingest messaging runtime is not configured")
 	}
@@ -27,6 +31,9 @@ func StartDeviceIngest(
 	ingestService, err := events.NewIngestService(messaging.TopicPrefix, ackSink, repository)
 	if err != nil {
 		return nil, fmt.Errorf("configure device ingest: %w", err)
+	}
+	if len(petPhotos) == 1 && petPhotos[0] != nil {
+		ingestService.SetPetPhotoWorkflow(petPhotos[0])
 	}
 	subscriptions, err := messaging.SubscribeDeviceMessages(ctx, ingestService.HandleMQTT)
 	if err != nil {

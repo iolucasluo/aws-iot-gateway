@@ -60,6 +60,9 @@ func runDomesticGateway(
 			return err
 		}
 	}
+	if config.PetPhotoPublicOrigin != "" && objectStore == nil {
+		return fmt.Errorf("private pet photo requires a media object store")
+	}
 	realtimeInstance := composition.Bindings["realtime"]
 	if realtimeInstance == "" || composition.Instances[realtimeInstance].Driver != "explorex_signal" {
 		return fmt.Errorf("domestic composition realtime binding must use explorex_signal")
@@ -103,7 +106,11 @@ func runDomesticGateway(
 		return err
 	}
 	defer messaging.Close()
-	deviceSubscriptions, err := gatewayruntime.StartDeviceIngest(ctx, messaging, ackStore, eventRepository)
+	var petPhotoWorkflow events.PetPhotoWorkflow
+	if config.PetPhotoPublicOrigin != "" {
+		petPhotoWorkflow = eventRepository
+	}
+	deviceSubscriptions, err := gatewayruntime.StartDeviceIngest(ctx, messaging, ackStore, eventRepository, petPhotoWorkflow)
 	if err != nil {
 		return err
 	}
@@ -152,6 +159,7 @@ func runDomesticGateway(
 			nil, nil, time.Now, ota.WithDownloadProxy(proxy))
 	}
 	var assetService *media.AssetService
+	var petPhotoAccess *media.PetPhotoAccess
 	if objectStore != nil {
 		mediaRepository, err := gatewaypostgres.NewMediaRepository(database)
 		if err != nil {
@@ -164,6 +172,10 @@ func runDomesticGateway(
 		assetService = media.NewAssetService(
 			objectStore, deviceService, mediaRepository, config.Environment, snapshotConverter, nil,
 		)
+		petPhotoAccess, err = media.NewPetPhotoAccess(mediaRepository, objectStore)
+		if err != nil {
+			return fmt.Errorf("configure domestic private pet photo access: %w", err)
+		}
 		// The object store is what makes a device-local recording readable by the app, so
 		// the workers that use it belong to the same guard. The thumbnail worker fetches
 		// the poster frame from the device and uploads it; without it thumbnail_object_key
@@ -181,6 +193,16 @@ func runDomesticGateway(
 			return fmt.Errorf("configure local thumbnail worker: %w", err)
 		}
 		go runLocalThumbnailWorker(ctx, localThumbnailWorker)
+		if config.PetPhotoPublicOrigin != "" {
+			petPhotoWorker, err := worker.NewPetPhotoWorker(
+				mediaRepository, thumbnailStore, deviceService, config.Environment,
+				config.PetPhotoPublicOrigin,
+			)
+			if err != nil {
+				return fmt.Errorf("configure domestic pet photo worker: %w", err)
+			}
+			go runPetPhotoWorker(ctx, petPhotoWorker)
+		}
 		localReconciliationWorker, err := worker.NewLocalReconciliationWorker(
 			mediaRepository, deviceService,
 		)
@@ -214,7 +236,8 @@ func runDomesticGateway(
 	}
 	dependencies := httpapi.Dependencies{
 		Binding: bindingService, Media: streamService, Assets: assetService,
-		Device: deviceService, OTA: otaService,
+		PetPhotos: petPhotoAccess,
+		Device:    deviceService, OTA: otaService,
 		Events:        events.NewQueryService(eventRepository),
 		TimeBootstrap: timeService, TimeBootstrapLimiter: rateLimiter,
 		DeviceRuntime: httpapi.DeviceRuntimeConfig{

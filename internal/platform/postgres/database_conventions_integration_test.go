@@ -205,6 +205,7 @@ func TestApplyMigrationsRecordsOnlyCurrentInitialSchema(t *testing.T) {
 		"006_project_webhooks_single_active.sql", "007_platform_manufacturing.sql",
 		"008_drop_sn_source.sql", "009_dp_definitions_owner.sql",
 		"010_webhook_delivery_history_index.sql",
+		"011_device_pet_photos.sql",
 	}
 	if fmt.Sprint(appliedNames) != fmt.Sprint(want) {
 		t.Fatalf("applied migrations = %v, want %v", appliedNames, want)

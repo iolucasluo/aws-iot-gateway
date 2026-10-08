@@ -43,7 +43,7 @@ func TestDPProfilesArePublishedWithoutDevelopmentSeeds(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM products`).Scan(&products); err != nil {
 		t.Fatal(err)
 	}
-	if profiles != 3 || members != 95 || definitions >= members || products != 0 {
+	if profiles != 3 || members != 96 || definitions >= members || products != 0 {
 		t.Fatalf("published profiles/members/definitions/products = %d/%d/%d/%d", profiles, members, definitions, products)
 	}
 	if err := ApplyMigrations(ctx, pool); err != nil {
@@ -72,7 +72,7 @@ func TestDPProfileSelectionIsIndependentOfProduct(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(left) != 39 || !reflect.DeepEqual(left, right) {
+	if len(left) != 40 || !reflect.DeepEqual(left, right) {
 		t.Fatal("same profile must yield the same contract across products")
 	}
 	if err := device.ValidateCommands(left, []device.CommandInput{{Code: "speaker_vol", Value: json.RawMessage(`{"volume":200}`)}}); !errors.Is(err, device.ErrDPInvalidValue) {

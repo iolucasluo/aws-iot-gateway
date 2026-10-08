@@ -218,6 +218,9 @@ func main() {
 		if err != nil {
 			log.Fatalf("configure direct MQTT ACK ingest: %v", err)
 		}
+		if config.PetPhotoPublicOrigin != "" {
+			ingestService.SetPetPhotoWorkflow(eventRepository)
+		}
 		ackSubscriber, err := awsiot.NewDirectACKSubscriber(awsiot.DirectACKSubscriberConfig{
 			Endpoint: *dataEndpoint.EndpointAddress, Region: config.AWSRegion,
 			TopicPrefix: config.IoTTopicPrefix, Credentials: awsConfig.Credentials, Handler: ingestService,
@@ -254,6 +257,10 @@ func main() {
 		log.Fatalf("configure snapshot converter: %v", err)
 	}
 	assetService := media.NewAssetService(mediaStore, deviceService, mediaRepository, config.Environment, snapshotConverter, nil)
+	petPhotoAccess, err := media.NewPetPhotoAccess(mediaRepository, mediaStore)
+	if err != nil {
+		log.Fatalf("configure private pet photo access: %v", err)
+	}
 	localThumbnailWorker, err := worker.NewLocalThumbnailWorker(
 		mediaRepository, mediaStore, deviceService, config.Environment,
 	)
@@ -261,6 +268,15 @@ func main() {
 		log.Fatalf("configure local thumbnail worker: %v", err)
 	}
 	go runLocalThumbnailWorker(ctx, localThumbnailWorker)
+	if config.PetPhotoPublicOrigin != "" {
+		petPhotoWorker, err := worker.NewPetPhotoWorker(
+			mediaRepository, mediaStore, deviceService, config.Environment, config.PetPhotoPublicOrigin,
+		)
+		if err != nil {
+			log.Fatalf("configure private pet photo worker: %v", err)
+		}
+		go runPetPhotoWorker(ctx, petPhotoWorker)
+	}
 	localReconciliationWorker, err := worker.NewLocalReconciliationWorker(
 		mediaRepository, deviceService,
 	)
@@ -270,7 +286,8 @@ func main() {
 	go runLocalReconciliationWorker(ctx, localReconciliationWorker)
 	dependencies := httpapi.Dependencies{
 		Binding: bindingService, Device: deviceService, Events: events.NewQueryService(eventRepository),
-		Media: streamService, LocalMedia: localMediaService, Assets: assetService, OTA: otaService,
+		Media: streamService, LocalMedia: localMediaService, Assets: assetService,
+		PetPhotos: petPhotoAccess, OTA: otaService,
 		TimeBootstrap: timeService, TimeBootstrapLimiter: rateLimiter,
 		DeviceRuntime: httpapi.DeviceRuntimeConfig{
 			AWSRegion: config.AWSRegion, CredentialEndpoint: config.IoTCredentialEndpoint,
@@ -305,6 +322,21 @@ func runLocalReconciliationWorker(
 	for {
 		if err := reconciliationWorker.PollOnce(ctx); err != nil && ctx.Err() == nil {
 			log.Printf("local recording reconciliation failed: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func runPetPhotoWorker(ctx context.Context, photoWorker *worker.PetPhotoWorker) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		if err := photoWorker.PollOnce(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("private pet photo worker failed: %v", err)
 		}
 		select {
 		case <-ctx.Done():

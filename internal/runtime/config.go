@@ -50,6 +50,7 @@ type Config struct {
 	IngestQueueURL                     string
 	KVSChannelPrefix                   string
 	S3MediaBucket                      string
+	PetPhotoPublicOrigin               string
 	S3OTABucket                        string
 	OTADevArtifactAllowedOrigins       []string
 	TimeBootstrapKeyID                 string
@@ -103,6 +104,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		IngestQueueURL:                     strings.TrimSpace(getenv("AWS_IOT_INGEST_QUEUE_URL")),
 		KVSChannelPrefix:                   strings.TrimSpace(getenv("AWS_KVS_CHANNEL_PREFIX")),
 		S3MediaBucket:                      strings.TrimSpace(getenv("AWS_S3_MEDIA_BUCKET")),
+		PetPhotoPublicOrigin:               strings.TrimSpace(getenv("PET_PHOTO_PUBLIC_ORIGIN")),
 		S3OTABucket:                        strings.TrimSpace(getenv("AWS_S3_OTA_BUCKET")),
 		TimeBootstrapKeyID:                 strings.TrimSpace(getenv("TIME_BOOTSTRAP_KEY_ID")),
 		TimeBootstrapSigner:                valueOr(getenv("TIME_BOOTSTRAP_SIGNER"), "aws-kms"),
@@ -226,6 +228,13 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
 			(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
 			return Config{}, fmt.Errorf("OTA_DEVICE_DOWNLOAD_BASE_URL must be an HTTPS origin outside development")
+		}
+	}
+	if config.PetPhotoPublicOrigin != "" {
+		origin, err := url.Parse(config.PetPhotoPublicOrigin)
+		if err != nil || origin.Scheme != "https" || origin.Host == "" || origin.User != nil ||
+			origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" || origin.Opaque != "" {
+			return Config{}, fmt.Errorf("PET_PHOTO_PUBLIC_ORIGIN must be a trusted HTTPS origin")
 		}
 	}
 	if config.ProviderMode == "aws" && config.Environment == "development" && config.S3OTABucket == "" && len(config.OTADevArtifactAllowedOrigins) == 0 {

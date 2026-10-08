@@ -380,3 +380,18 @@ func TestLoadConfigAllowsDirectACKSubscriberOnlyInDevelopment(t *testing.T) {
 		t.Fatalf("LoadConfig() invalid boolean error = %v", err)
 	}
 }
+
+func TestPetPhotoPublicOriginIsOptionalButNeverUntrusted(t *testing.T) {
+	env := validEnvironmentMap()
+	for _, value := range []string{"http://gateway.example.test", "https://gateway.example.test/path", "https://user:pass@gateway.example.test", "https://gateway.example.test?token=secret"} {
+		env["PET_PHOTO_PUBLIC_ORIGIN"] = value
+		if _, err := LoadConfig(func(key string) string { return env[key] }); err == nil {
+			t.Fatalf("unsafe public origin accepted: %q", value)
+		}
+	}
+	env["PET_PHOTO_PUBLIC_ORIGIN"] = "https://gateway.example.test"
+	config, err := LoadConfig(func(key string) string { return env[key] })
+	if err != nil || config.PetPhotoPublicOrigin != env["PET_PHOTO_PUBLIC_ORIGIN"] {
+		t.Fatalf("origin=%q err=%v", config.PetPhotoPublicOrigin, err)
+	}
+}

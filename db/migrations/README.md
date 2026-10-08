@@ -47,6 +47,7 @@
 | `device_tokens` | binding-scoped token hash | `id` | `device_binding_id → device_bindings`（RESTRICT） |
 | `device_commands` | MQTT command/ACK 状态 | `id` | `device_registry_id → device_registry`（RESTRICT） |
 | `device_events` | append-only 设备事件 | `id` | `device_registry_id → device_registry`（RESTRICT） |
+| `device_pet_photos` | 宠物抓拍私有对象、原绑定与有界上传事务（011） | `id`=trigger UUID | registry/binding RESTRICT；未验证照片不成为用户事件 |
 | `ota_firmware_versions` | 下游发布的签名 app OTA 版本；不保存签名私钥 | `id` | `pid → products`（RESTRICT） |
 | `device_ota_deployments` | 单设备 OTA 执行记录与重启确认结果 | `id` | registry + firmware version（RESTRICT） |
 | `device_schedules` | 每设备一份已确认 schedule 投影 | `device_registry_id` | `device_registry_id → device_registry`（RESTRICT） |

@@ -131,3 +131,26 @@ func TestPublishedDPProfilesDefinesNightModeAutoThresholds(t *testing.T) {
 		}
 	}
 }
+
+func TestFeederPetDetectionIsIndependentOfLegacyMotionTracking(t *testing.T) {
+	content, err := Files.ReadFile("002_dp_profiles.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := string(content)
+	for _, fragment := range []string{
+		"'feeder-v1', 'pet_detection_v1'",
+		"'pet_detection_v1', 'object', 'downlink_request_ack'",
+		`"variants":{"field":"op","cases":{"get"`,
+		`"min_hits":{"type":"integer","minimum":1,"maximum":8}`,
+		`"cooldown_sec":{"type":"integer","minimum":1,"maximum":3600}`,
+		`"alias_of":"motion_track"`,
+	} {
+		if !strings.Contains(seed, fragment) {
+			t.Errorf("missing pet detection contract %q", fragment)
+		}
+	}
+	if strings.Contains(seed, "'lamp-v1', 'pet_detection_v1'") {
+		t.Fatal("pet detection must be feeder-only")
+	}
+}

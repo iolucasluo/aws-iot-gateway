@@ -29,6 +29,7 @@ type server struct {
 	media         *media.StreamService
 	localMedia    *media.LocalMediaService
 	assets        *media.AssetService
+	petPhotos     *media.PetPhotoAccess
 	ota           *ota.Service
 	verifier      *internalauth.Verifier
 	timeBootstrap TimeBootstrapService
@@ -49,6 +50,7 @@ type DeviceRuntimeConfig struct {
 }
 
 var sha256HexPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var petPhotoIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 // ProjectProductScope 提供 DB 凭证主体的产品可见集合。
 // 静态 INTERNAL_APPS_JSON 主体没有项目作用域，因此不受它约束。
@@ -63,6 +65,7 @@ type Dependencies struct {
 	Media                *media.StreamService
 	LocalMedia           *media.LocalMediaService
 	Assets               *media.AssetService
+	PetPhotos            *media.PetPhotoAccess
 	OTA                  *ota.Service
 	TimeBootstrap        TimeBootstrapService
 	TimeBootstrapLimiter TimeBootstrapLimiter
@@ -78,7 +81,7 @@ func NewInternalAPI(service *activation.Service, verifier *internalauth.Verifier
 	return server{
 		activation: service, binding: dependency.Binding, device: dependency.Device,
 		events: dependency.Events, media: dependency.Media, localMedia: dependency.LocalMedia,
-		assets: dependency.Assets, verifier: verifier,
+		assets: dependency.Assets, petPhotos: dependency.PetPhotos, verifier: verifier,
 		ota:           dependency.OTA,
 		timeBootstrap: dependency.TimeBootstrap, bootstrapRate: dependency.TimeBootstrapLimiter,
 		deviceRuntime: dependency.DeviceRuntime,
@@ -217,6 +220,7 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 			(request.Method == http.MethodPost || request.Method == http.MethodDelete)) ||
 		(operation == "snapshots" && len(parts) == 2 && request.Method == http.MethodPost) ||
 		(operation == "snapshots" && len(parts) == 3 && request.Method == http.MethodGet) ||
+		(operation == "pet-photos" && len(parts) == 3 && request.Method == http.MethodGet) ||
 		(operation == "recordings" && len(parts) == 2 && (request.Method == http.MethodPost || request.Method == http.MethodGet)) ||
 		(operation == "recordings" && len(parts) == 3 && request.Method == http.MethodGet) ||
 		(operation == "recordings" && len(parts) == 5 && parts[2] == "local" &&
@@ -505,6 +509,31 @@ func (s server) serveDeviceOperation(writer http.ResponseWriter, request *http.R
 			return true
 		}
 		writeJSON(writer, http.StatusCreated, result)
+		return true
+	case "pet-photos":
+		if s.petPhotos == nil {
+			writeError(writer, http.StatusServiceUnavailable, "pet_photo_unavailable", "pet photo service is unavailable")
+			return true
+		}
+		if !petPhotoIDPattern.MatchString(parts[2]) {
+			writeError(writer, http.StatusNotFound, "pet_photo_not_found", "pet photo was not found")
+			return true
+		}
+		payload, err := s.petPhotos.Read(request.Context(), ownedBinding.ID, ownedBinding.DeviceSN, parts[2])
+		if err != nil {
+			if errors.Is(err, media.ErrPetPhotoNotFound) {
+				writeError(writer, http.StatusNotFound, "pet_photo_not_found", "pet photo was not found")
+			} else {
+				writeError(writer, http.StatusServiceUnavailable, "pet_photo_unavailable", "pet photo is unavailable")
+			}
+			return true
+		}
+		writer.Header().Set("Content-Type", "image/jpeg")
+		writer.Header().Set("Cache-Control", "private, no-store")
+		writer.Header().Set("X-Content-Type-Options", "nosniff")
+		writer.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write(payload)
 		return true
 	case "snapshots":
 		if s.assets == nil {

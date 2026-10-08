@@ -65,6 +65,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure IoT ingest: %v", err)
 	}
+	if config.PetPhotoPublicOrigin != "" {
+		ingest.SetPetPhotoWorkflow(eventRepository)
+	}
 	awsConfig, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(config.AWSRegion))
 	if err != nil {
 		log.Fatalf("load AWS configuration: %v", err)

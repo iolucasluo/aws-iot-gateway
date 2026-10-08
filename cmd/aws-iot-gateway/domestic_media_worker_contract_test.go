@@ -36,3 +36,22 @@ func TestDomesticRuntimeStartsLocalRecordingWorkers(t *testing.T) {
 		}
 	}
 }
+
+func TestDomesticRuntimeReusesObjectStoreForPrivatePetPhotos(t *testing.T) {
+	source, err := os.ReadFile("domestic_runtime.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"config.PetPhotoPublicOrigin",
+		"worker.NewPetPhotoWorker(",
+		"runPetPhotoWorker(",
+		"media.NewPetPhotoAccess(",
+		"PetPhotos: petPhotoAccess",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("domestic private media missing %q", want)
+		}
+	}
+}
