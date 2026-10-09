@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/media"
 )
@@ -14,10 +15,20 @@ type petPhotoRepoStub struct {
 	task             media.PetPhotoTask
 	status           string
 	key, url, reason string
+	purgedBefore     time.Time
+	purgedLimit      int
 }
 
 func (repo *petPhotoRepoStub) ClaimPetPhoto(context.Context) (media.PetPhotoTask, error) {
+	if repo.task.ID == "" {
+		return media.PetPhotoTask{}, media.ErrPetPhotoTaskNotFound
+	}
 	return repo.task, nil
+}
+func (repo *petPhotoRepoStub) PurgePetPhotoTombstones(_ context.Context, before time.Time, limit int) (int, error) {
+	repo.purgedBefore = before
+	repo.purgedLimit = limit
+	return 0, nil
 }
 func (repo *petPhotoRepoStub) SetPetPhotoUploading(_ context.Context, _, key string) error {
 	repo.status = "uploading"
@@ -36,6 +47,10 @@ func (repo *petPhotoRepoStub) SetPetPhotoDead(_ context.Context, _ string) error
 }
 func (repo *petPhotoRepoStub) SetPetPhotoExpired(_ context.Context, _ string) error {
 	repo.status = "expired"
+	return nil
+}
+func (repo *petPhotoRepoStub) SetPetPhotoExpiring(_ context.Context, _ string) error {
+	repo.status = "expiring"
 	return nil
 }
 func (repo *petPhotoRepoStub) SetPetPhotoCleared(_ context.Context, _ string) error {
@@ -114,6 +129,19 @@ func TestPetPhotoWorkerReusesPrivateUploadAndOnlyCommitsVerifiedJPEG(t *testing.
 	if err := json.Unmarshal(commander.input.Value, &cancel); err != nil || cancel["op"] != "cancel" || repo.status != "dead" {
 		t.Fatalf("expired capture=%v status=%q err=%v", cancel, repo.status, err)
 	}
+	repo.task.Status = "expiring"
+	repo.task.Expired = true
+	repo.status = ""
+	if err := worker.PollOnce(context.Background()); err != nil || repo.status != "dead" {
+		t.Fatalf("rate-limited capture must cancel: err=%v status=%q", err, repo.status)
+	}
+	repo.task.Status = "finalized"
+	repo.task.Expired = true
+	repo.status = ""
+	store.deletedKey = ""
+	if err := worker.PollOnce(context.Background()); err != nil || repo.status != "expiring" || store.deletedKey != repo.key {
+		t.Fatalf("expired finalized photo must delete object before device cleanup: err=%v repo=%#v store=%#v", err, repo, store)
+	}
 	repo.task.Status = "cleared"
 	repo.task.ObjectKey = repo.key
 	if err := worker.PollOnce(context.Background()); err != nil || repo.status != "expired" || store.deletedKey != repo.key {
@@ -127,5 +155,24 @@ func TestPetPhotoWorkerReusesPrivateUploadAndOnlyCommitsVerifiedJPEG(t *testing.
 	store.deletedKey = ""
 	if err := worker.PollOnce(context.Background()); err != nil || repo.status != "dead" || store.deletedKey != repo.key {
 		t.Fatalf("revoked binding cleanup err=%v repo=%#v store=%#v", err, repo, store)
+	}
+}
+
+func TestPetPhotoIdleWorkerPurgesOnlySevenDayTombstones(t *testing.T) {
+	repo := &petPhotoRepoStub{}
+	store := &localThumbnailStoreStub{}
+	commander := &localThumbnailCommanderStub{}
+	worker, err := NewPetPhotoWorker(repo, store, commander, "staging", "https://gateway.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err := worker.PollOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cutoff := start.Add(-7 * 24 * time.Hour)
+	if repo.purgedLimit != 100 || repo.purgedBefore.Before(cutoff.Add(-time.Second)) ||
+		repo.purgedBefore.After(cutoff.Add(time.Second)) {
+		t.Fatalf("purge cutoff=%v limit=%d; want seven-day batch of 100", repo.purgedBefore, repo.purgedLimit)
 	}
 }

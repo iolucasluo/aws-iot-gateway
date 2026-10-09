@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 type petPhotoWorkflowStub struct {
@@ -29,8 +30,8 @@ func (workflow *petPhotoWorkflowStub) VerifyFinal(_ context.Context, event Event
 }
 
 func TestPetPhotoEventsFailClosedBeforeUserVisibleStorage(t *testing.T) {
-	const ready = `{"topic":"dt/aws-iot-gateway-staging/fdr-0001/event","event_id":"018f0000-0000-7000-8000-000000000011","event_type":"pet_photo_ready_v1","boot_id":"5ce0b7f2-1f0a-4ed7-9f06-bf6ce8393148","event_seq":11,"data":{"trigger_id":"018f0000-0000-7000-8000-000000000012","model_id":"0x0A00002C","size_bytes":100,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`
-	const final = `{"topic":"dt/aws-iot-gateway-staging/fdr-0001/event","event_id":"018f0000-0000-7000-8000-000000000013","event_type":"pet_detected","boot_id":"5ce0b7f2-1f0a-4ed7-9f06-bf6ce8393148","event_seq":12,"data":{"schema":"pet-detection.v1","trigger_id":"018f0000-0000-7000-8000-000000000012","media_id":"018f0000-0000-7000-8000-000000000014","model_id":"0x0A00002C","image_url":"https://gateway.example.test/api/v1/openapi/devices/fdr-0001/pet-photos/018f0000-0000-7000-8000-000000000014"}}`
+	const ready = `{"topic":"dt/aws-iot-gateway-staging/fdr-0001/event","event_id":"018f0000-0000-7000-8000-000000000011","event_type":"pet_photo_ready_v1","boot_id":"5ce0b7f2-1f0a-4ed7-9f06-bf6ce8393148","event_seq":11,"data":{"trigger_id":"018f0000-0000-7000-8000-000000000012","model_id":"0x0A00002C","size_bytes":100,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","captured_at_unix_ms":1718000000000}}`
+	const final = `{"topic":"dt/aws-iot-gateway-staging/fdr-0001/event","event_id":"018f0000-0000-7000-8000-000000000013","event_type":"pet_detected","boot_id":"5ce0b7f2-1f0a-4ed7-9f06-bf6ce8393148","event_seq":12,"data":{"schema":"pet-detection.v1","trigger_id":"018f0000-0000-7000-8000-000000000012","media_id":"018f0000-0000-7000-8000-000000000014","model_id":"0x0A00002C","image_url":"https://gateway.example.test/api/v1/openapi/devices/fdr-0001/pet-photos/018f0000-0000-7000-8000-000000000014","captured_at_unix_ms":1718000000000}}`
 	const legacy = `{"topic":"dt/aws-iot-gateway-staging/fdr-0001/event","event_id":"018f0000-0000-7000-8000-000000000015","event_type":"pet_detected","boot_id":"5ce0b7f2-1f0a-4ed7-9f06-bf6ce8393148","event_seq":13,"data":{"score":99}}`
 	oversizedReady := strings.Replace(ready, `"size_bytes":100`, `"size_bytes":262145`, 1)
 	oversizedRepo := &eventRepositoryStub{}
@@ -79,6 +80,10 @@ func TestPetPhotoEventsFailClosedBeforeUserVisibleStorage(t *testing.T) {
 	}
 	if workflow.final != 1 || repo.event.EventType != "pet_detected" {
 		t.Fatalf("final event not verified/stored: %#v", repo.event)
+	}
+	wantCaptured := time.UnixMilli(1718000000000).UTC()
+	if repo.event.OccurredAt == nil || !repo.event.OccurredAt.Equal(wantCaptured) {
+		t.Fatalf("captured time not promoted to event occurred_at: got=%v want=%v", repo.event.OccurredAt, wantCaptured)
 	}
 	for _, badURL := range []string{
 		"https://gateway.example.test/api/v1/openapi/devices/other-device/pet-photos/018f0000-0000-7000-8000-000000000014",

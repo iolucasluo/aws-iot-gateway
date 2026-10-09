@@ -3,6 +3,7 @@ package media
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 var ErrPetPhotoTaskNotFound = errors.New("pet photo task not found")
@@ -26,7 +27,9 @@ type PetPhotoRepository interface {
 	SetPetPhotoCleared(context.Context, string) error
 	SetPetPhotoDead(context.Context, string) error
 	SetPetPhotoExpired(context.Context, string) error
+	SetPetPhotoExpiring(context.Context, string) error
 	RetryPetPhoto(context.Context, string, string) error
+	PurgePetPhotoTombstones(context.Context, time.Time, int) (int, error)
 }
 
 var (

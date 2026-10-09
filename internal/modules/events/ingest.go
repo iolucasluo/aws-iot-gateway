@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -18,6 +19,8 @@ const (
 	ackRetention       = 30 * time.Second
 	maxJSONSafeInteger = int64(9007199254740991)
 )
+
+var ErrPetPhotoRateLimited = errors.New("pet photo rate limited")
 
 var (
 	namespacePattern             = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$`)
@@ -290,7 +293,11 @@ func (service *IngestService) handleMessage(ctx context.Context, message map[str
 		if !validPetPhotoReady(event.Data) || service.petPhotos == nil {
 			return fmt.Errorf("pet photo capture is not authorized")
 		}
-		return service.petPhotos.CaptureReady(ctx, event)
+		if err := service.petPhotos.CaptureReady(ctx, event); errors.Is(err, ErrPetPhotoRateLimited) {
+			return nil
+		} else {
+			return err
+		}
 	}
 	if event.EventType == "pet_detected" &&
 		(event.Data["schema"] != nil || event.Data["media_id"] != nil ||
@@ -301,6 +308,11 @@ func (service *IngestService) handleMessage(ctx context.Context, message map[str
 		if err := service.petPhotos.VerifyFinal(ctx, event); err != nil {
 			return fmt.Errorf("verify pet photo before event storage: %w", err)
 		}
+		if value, found := event.Data["captured_at_unix_ms"]; found {
+			capturedMS, _ := integer(value) // validPetPhotoFinal already checked the type.
+			captured := time.UnixMilli(capturedMS).UTC()
+			event.OccurredAt = &captured
+		}
 	}
 	return service.repository.Store(ctx, event)
 }
@@ -309,6 +321,13 @@ func validPetPhotoReady(data map[string]any) bool {
 	triggerID, _ := data["trigger_id"].(string)
 	hash, _ := data["sha256"].(string)
 	size, ok := integer(data["size_bytes"])
+	capturedAt, capturedOK := data["captured_at_unix_ms"]
+	if capturedOK {
+		captured, ok := integer(capturedAt)
+		if !ok || captured <= 0 {
+			return false
+		}
+	}
 	if !uuidPattern.MatchString(triggerID) || data["model_id"] != "0x0A00002C" ||
 		!ok || size <= 0 || size > 256*1024 || len(hash) != 64 {
 		return false
@@ -326,6 +345,13 @@ func validPetPhotoFinal(deviceSN string, data map[string]any) bool {
 	mediaID, _ := data["media_id"].(string)
 	modelID, _ := data["model_id"].(string)
 	rawURL, _ := data["image_url"].(string)
+	capturedAt, capturedOK := data["captured_at_unix_ms"]
+	if capturedOK {
+		captured, ok := integer(capturedAt)
+		if !ok || captured <= 0 {
+			return false
+		}
+	}
 	if data["schema"] != "pet-detection.v1" ||
 		!uuidPattern.MatchString(triggerID) || !uuidPattern.MatchString(mediaID) ||
 		modelID != "0x0A00002C" || len(rawURL) > 1024 {

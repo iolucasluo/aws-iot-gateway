@@ -40,7 +40,9 @@ func (worker *PetPhotoWorker) PollOnce(ctx context.Context) error {
 	}
 	task, err := worker.repository.ClaimPetPhoto(ctx)
 	if errors.Is(err, media.ErrPetPhotoTaskNotFound) {
-		return nil
+		_, err = worker.repository.PurgePetPhotoTombstones(
+			ctx, time.Now().UTC().Add(-7*24*time.Hour), 100)
+		return err
 	}
 	if err != nil {
 		return err
@@ -60,10 +62,15 @@ func (worker *PetPhotoWorker) PollOnce(ctx context.Context) error {
 		}
 		return worker.repository.SetPetPhotoDead(ctx, task.ID)
 	}
-	if task.Expired {
+	if task.Expired || task.Status == "expiring" {
 		switch task.Status {
 		case "finalized":
-			return worker.acknowledge(ctx, task)
+			if task.ObjectKey != "" {
+				if err := worker.store.Delete(ctx, task.ObjectKey); err != nil {
+					return worker.retry(ctx, task.ID, "expired pet photo object cleanup failed")
+				}
+			}
+			return worker.repository.SetPetPhotoExpiring(ctx, task.ID)
 		case "cleared":
 			if task.ObjectKey != "" {
 				if err := worker.store.Delete(ctx, task.ObjectKey); err != nil {
@@ -72,6 +79,13 @@ func (worker *PetPhotoWorker) PollOnce(ctx context.Context) error {
 			}
 			return worker.repository.SetPetPhotoExpired(ctx, task.ID)
 		default:
+			// Expiry is a privacy boundary even when the device is offline: remove
+			// the private object before retrying the idempotent local cancel.
+			if task.ObjectKey != "" {
+				if err := worker.store.Delete(ctx, task.ObjectKey); err != nil {
+					return worker.retry(ctx, task.ID, "pet photo cancellation cleanup failed")
+				}
+			}
 			value, err := json.Marshal(map[string]any{
 				"contract": "pet-photo.v1", "op": "cancel", "trigger_id": task.ID,
 				"media_id": task.ID,
@@ -81,11 +95,6 @@ func (worker *PetPhotoWorker) PollOnce(ctx context.Context) error {
 			}
 			if err := worker.send(ctx, task, device.CommandInput{Code: "pet_photo_v1", Value: value}); err != nil {
 				return worker.retry(ctx, task.ID, "pet photo cancellation failed")
-			}
-			if task.ObjectKey != "" {
-				if err := worker.store.Delete(ctx, task.ObjectKey); err != nil {
-					return worker.retry(ctx, task.ID, "pet photo cancellation cleanup failed")
-				}
 			}
 			return worker.repository.SetPetPhotoDead(ctx, task.ID)
 		}

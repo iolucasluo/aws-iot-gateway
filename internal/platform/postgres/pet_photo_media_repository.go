@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"gitlab.explorex-ai.com/hardware/aws-iot-gateway/internal/modules/media"
@@ -136,6 +137,41 @@ func (repository *MediaRepository) SetPetPhotoExpired(ctx context.Context, id st
 	}
 	if result.RowsAffected() != 1 {
 		return fmt.Errorf("cleared pet photo transaction not found")
+	}
+	return nil
+}
+
+// PurgePetPhotoTombstones removes only old, fully terminal records. The caller
+// must have already verified that the corresponding private object was removed.
+func (repository *MediaRepository) PurgePetPhotoTombstones(ctx context.Context, before time.Time, limit int) (int, error) {
+	if repository == nil || repository.pool == nil || before.IsZero() || limit <= 0 || limit > 100 {
+		return 0, fmt.Errorf("invalid pet photo tombstone purge")
+	}
+	result, err := repository.pool.Exec(ctx, `
+        WITH due AS (
+            SELECT id FROM device_pet_photos
+            WHERE status IN ('expired','dead') AND updated_at < $1
+            ORDER BY updated_at,id FOR UPDATE SKIP LOCKED LIMIT $2
+        )
+        DELETE FROM device_pet_photos p USING due WHERE p.id=due.id
+    `, before, limit)
+	if err != nil {
+		return 0, fmt.Errorf("purge pet photo tombstones: %w", err)
+	}
+	return int(result.RowsAffected()), nil
+}
+
+// A finalized event cannot keep its private object beyond the 24-hour TTL
+// merely because the device is offline. The next worker pass cancels the local slot.
+func (repository *MediaRepository) SetPetPhotoExpiring(ctx context.Context, id string) error {
+	result, err := repository.pool.Exec(ctx, `UPDATE device_pet_photos
+        SET status='expiring',next_attempt_at=now()
+        WHERE id=$1::uuid AND status='finalized' AND expires_at<=now()`, id)
+	if err != nil {
+		return fmt.Errorf("expire finalized pet photo: %w", err)
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("finalized pet photo not found")
 	}
 	return nil
 }
